@@ -1,0 +1,39 @@
+version = 1
+artifact_dir = ".parity-pandas-versions"
+fail_fast = false
+
+[[cases]]
+name = "categorical-groupby-observed-default"
+fixture = "fixtures/observed.json"
+tags = ["cross-version", "finding", "pandas", "version-drift"]
+
+[cases.reference]
+target = "pandas_version_parity:categorical_total"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/reference/.venv/bin/python"
+record_distributions = ["numpy", "pandas", "pyarrow"]
+
+[cases.candidate]
+target = "pandas_version_parity:categorical_total"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/candidate/.venv/bin/python"
+record_distributions = ["numpy", "pandas", "pyarrow"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+max_findings = 1
+stability_repeats = 2
+seed = 20260814
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false

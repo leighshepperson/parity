@@ -91,7 +91,7 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
-| `target` | string | required | Import target `package.module:function`. |
+| `target` | string | required | Import target `package.module:function`; each dotted component must be a Python identifier. |
 | `adapter` | enum | `auto` | `auto`, `pandas`, `polars` or `arrow`. |
 | `pandas_input` | `arrow` / `native` | `arrow` | Pandas input materialization; ignored when the resolved adapter is not pandas. |
 | `python` | path | current Python | Interpreter for isolated execution. |
@@ -99,7 +99,10 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 | `environment` | string table | `{}` | Literal environment overrides for the worker. |
 | `record_distributions` | string array | `[]` | Additional distribution versions to record inside this worker. |
 
-Paths may be relative. Do not commit secrets in `environment`.
+Paths may be relative. A configured `python` path is anchored to the configuration directory
+without dereferencing its final virtual-environment symlink; two venv entry points that share one
+base Python therefore remain distinct execution environments. Other project paths retain their
+normal resolved semantics. Do not commit secrets in `environment`.
 
 Parity always records its own version plus Python, platform, Hypothesis, NumPy, pandas, Polars and
 PyArrow provenance. `record_distributions` adds up to 64 explicitly named Python distributions,
@@ -269,4 +272,7 @@ Runtime and memory ratios are evidence from the current host, not portable guara
 ## Complete generated template
 
 Run `parity init`, or call `parity.templates.render_config_template()`, for a versioned and
-validated example containing every policy field.
+validated example containing every policy field. To generate one minimal fixture-backed case for
+existing code, supply `--reference`, `--candidate` and `--fixture` together or call
+`parity.templates.render_project_config()`. The project form omits default-valued tables and does
+not create an implementation module.

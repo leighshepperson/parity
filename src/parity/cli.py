@@ -12,7 +12,7 @@ from rich.table import Table
 
 from parity import __version__
 from parity.config import ConfigError, load_config
-from parity.doctor import diagnose
+from parity.doctor import ConfigDoctorReport, WorkerRuntimeReport, diagnose, diagnose_config
 from parity.models import Status
 
 app = typer.Typer(
@@ -41,15 +41,99 @@ def version_command() -> None:
 def init(
     path: Annotated[Path, typer.Argument(help="Configuration path")] = Path("parity.toml"),
     force: Annotated[bool, typer.Option("--force", help="Replace an existing file")] = False,
+    reference: Annotated[
+        str | None,
+        typer.Option("--reference", help="Reference import target for project setup"),
+    ] = None,
+    candidate: Annotated[
+        str | None,
+        typer.Option("--candidate", help="Candidate import target for project setup"),
+    ] = None,
+    fixture: Annotated[
+        Path | None,
+        typer.Option("--fixture", help="Fixture for the generated project case"),
+    ] = None,
+    case_name: Annotated[
+        str | None,
+        typer.Option("--case-name", help="Name for the generated project case"),
+    ] = None,
+    reference_adapter: Annotated[
+        str,
+        typer.Option("--reference-adapter", help="auto, pandas, polars or arrow"),
+    ] = "auto",
+    candidate_adapter: Annotated[
+        str,
+        typer.Option("--candidate-adapter", help="auto, pandas, polars or arrow"),
+    ] = "auto",
+    reference_python: Annotated[
+        Path | None,
+        typer.Option("--reference-python", help="Python executable for the reference worker"),
+    ] = None,
+    candidate_python: Annotated[
+        Path | None,
+        typer.Option("--candidate-python", help="Python executable for the candidate worker"),
+    ] = None,
+    record_distribution: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--record-distribution",
+            help="Distribution version to inspect in both workers; repeatable",
+        ),
+    ] = None,
+    row_key: Annotated[
+        list[str] | None,
+        typer.Option("--row-key", help="Unique output key column; repeatable"),
+    ] = None,
 ) -> None:
-    """Create a documented starter configuration and example transformations."""
+    """Create a starter or one fixture-backed project configuration."""
 
-    from parity.templates import write_starter
+    from parity.templates import write_project_config, write_starter
+
+    required = (reference, candidate, fixture)
+    supplied = sum(value is not None for value in required)
+    project_options = any(
+        (
+            case_name is not None,
+            reference_adapter != "auto",
+            candidate_adapter != "auto",
+            reference_python is not None,
+            candidate_python is not None,
+            bool(record_distribution),
+            bool(row_key),
+        )
+    )
+    if supplied not in {0, 3}:
+        _fail("--reference, --candidate and --fixture must be provided together")
+    if supplied == 0 and project_options:
+        _fail("project setup options require --reference, --candidate and --fixture")
 
     try:
-        created = write_starter(path, force=force)
+        if supplied == 0:
+            created = write_starter(path, force=force)
+        else:
+            assert reference is not None
+            assert candidate is not None
+            assert fixture is not None
+            created = [
+                write_project_config(
+                    path,
+                    reference=reference,
+                    candidate=candidate,
+                    fixture=fixture,
+                    case_name=case_name or "migration",
+                    reference_adapter=reference_adapter,
+                    candidate_adapter=candidate_adapter,
+                    reference_python=reference_python,
+                    candidate_python=candidate_python,
+                    record_distributions=record_distribution or (),
+                    row_keys=row_key or (),
+                    force=force,
+                )
+            ]
     except FileExistsError:
         _fail(f"{path} already exists; pass --force to replace it")
+    except Exception as exc:
+        _fail(str(exc))
     for item in created:
         console.print(f"[green]created[/green] {item}")
 
@@ -192,8 +276,33 @@ def replay(
 @app.command()
 def doctor(
     as_json: Annotated[bool, typer.Option("--json", help="Emit machine-readable output")] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Inspect workers from this parity.toml"),
+    ] = None,
+    case: Annotated[
+        str | None,
+        typer.Option("--case", help="Inspect only one configured case"),
+    ] = None,
 ) -> None:
-    """Check local dependencies without exposing secrets or source code."""
+    """Check local dependencies or configured worker environments."""
+
+    if case is not None and config_path is None:
+        _fail("--case requires --config")
+    if config_path is not None:
+        try:
+            config_report = diagnose_config(load_config(config_path), case_name=case)
+        except ConfigError:
+            _fail("configuration could not be loaded or validated")
+        except ValueError as exc:
+            _fail(str(exc))
+        if as_json:
+            console.print_json(json.dumps(config_report.to_dict()))
+        else:
+            _render_config_doctor(config_report)
+        if not config_report.healthy:
+            raise typer.Exit(2)
+        return
 
     report = diagnose()
     if as_json:
@@ -210,6 +319,48 @@ def doctor(
         console.print(table)
     if not report.healthy:
         raise typer.Exit(2)
+
+
+def _runtime_label(worker: WorkerRuntimeReport, field: str) -> str:
+    if worker.status != "ready":
+        return worker.status.replace("_", " ")
+    if field == "python":
+        return f"{worker.python_implementation} {worker.python_version}"
+    if field == "parity":
+        return worker.parity_version or "unavailable"
+    distributions = {item.name: item for item in worker.distributions}
+    item = distributions.get(field)
+    if item is None:
+        return "not requested"
+    return item.version if item.status == "installed" and item.version is not None else item.status
+
+
+def _render_config_doctor(report: ConfigDoctorReport) -> None:
+    table = Table("Case", "Runtime", "Reference", "Candidate")
+    for case_report in report.cases:
+        fields = ["python", "parity"]
+        fields.extend(
+            sorted(
+                {
+                    item.name
+                    for worker in (case_report.reference, case_report.candidate)
+                    for item in worker.distributions
+                }
+            )
+        )
+        for field in fields:
+            label = "Python" if field == "python" else "Parity" if field == "parity" else field
+            table.add_row(
+                case_report.name,
+                label,
+                _runtime_label(case_report.reference, field),
+                _runtime_label(case_report.candidate, field),
+            )
+    console.print(table)
+    if report.healthy:
+        console.print("[green]configured workers ready[/green]")
+    else:
+        console.print("[red]configured workers not ready[/red]")
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -130,6 +130,56 @@ restricted access because a counterexample derived from a fixture may contain fi
 Targets use `package.module:function` syntax. The callable receives the input frame as its first
 positional argument, followed by `static_args` and `static_kwargs` from the case.
 
+For an existing migration, `parity init` can write a minimal fixture-backed case directly. The
+three project inputs are all-or-none, and the command validates the target syntax, adapters and
+fixture before atomically writing the configuration:
+
+```bash
+parity init migrations/parity.toml \
+  --reference legacy.orders:transform \
+  --candidate rewrite.orders:transform \
+  --fixture tests/fixtures/orders.parquet \
+  --case-name orders \
+  --reference-adapter pandas \
+  --candidate-adapter polars \
+  --record-distribution orders-lib \
+  --row-key order_id
+```
+
+Repeat `--record-distribution` or `--row-key` for additional names. Distribution names are recorded
+on both sides, while adapters and Python executables are configured per side. With no project
+options, `parity init` retains the editable starter behaviour and creates `parity_example.py`.
+
+### Comparing dependency versions
+
+The same import target can run in two prepared environments. For example, this compares one Polars
+wrapper under two releases without teaching Parity how to create or mutate virtual environments:
+
+```bash
+python -m venv .venv-polars-old
+python -m venv .venv-polars-new
+.venv-polars-old/bin/python -m pip install parity-check==0.8.0 polars==1.0.0
+.venv-polars-new/bin/python -m pip install parity-check==0.8.0 polars==1.41.1
+
+parity init parity.toml \
+  --reference project.polars_transform:run \
+  --candidate project.polars_transform:run \
+  --fixture tests/fixtures/input.parquet \
+  --reference-adapter polars --candidate-adapter polars \
+  --reference-python .venv-polars-old/bin/python \
+  --candidate-python .venv-polars-new/bin/python \
+  --record-distribution polars
+
+parity doctor --config parity.toml
+parity check --config parity.toml
+```
+
+`doctor --config` asks each worker only for bounded runtime provenance; it does not import or invoke
+the configured target. Its terminal and JSON output place reference and candidate Python, Parity
+and explicitly requested distribution versions side by side without executable paths, working
+directories or environment values. A worker failure or missing requested distribution returns exit
+code 2. Use `--case NAME` to inspect one case in a multi-case file.
+
 ```toml
 [cases.reference]
 target = "legacy.orders:transform"
@@ -263,6 +313,11 @@ can leave materially different downstream state.
 
 ```text
 parity init [PATH] [--force]                  create a runnable starter
+  --reference TARGET --candidate TARGET       scaffold an existing project pair
+  --fixture FILE [--case-name NAME]
+  [--reference-adapter NAME] [--candidate-adapter NAME]
+  [--reference-python PATH] [--candidate-python PATH]
+  [--record-distribution NAME] [--row-key COLUMN]
 parity inspect FIXTURE [--output PATH]        infer a portable schema
 parity check [--config PATH] [--case NAME]    run campaigns
              [--tag TAG] [--max-examples N]
@@ -272,6 +327,8 @@ parity check [--config PATH] [--case NAME]    run campaigns
              [--json PATH] [--junit PATH] [--markdown PATH]
 parity replay ARTIFACT                        reproduce a counterexample
 parity doctor [--json]                        report runtime readiness
+parity doctor --config PATH [--case NAME]     inspect configured workers
+              [--json]
 parity version                                print the installed version
 ```
 

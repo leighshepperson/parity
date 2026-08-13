@@ -1,0 +1,160 @@
+{
+  "cases": [
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [
+        {
+          "code": "datetime",
+          "confidence": "high",
+          "documentation_url": null,
+          "evidence": [
+            "A datetime-like column or value differs."
+          ],
+          "explanation": "Check time units, timezone localization/conversion, daylight-saving boundaries and whether the transformation returns an instant or a wall-clock value.",
+          "title": "Datetime representation or timezone semantics differ"
+        }
+      ],
+      "elapsed_seconds": 1.4821919599999092,
+      "examples_run": 1,
+      "failures": [
+        {
+          "artifact": ".parity-polars-versions/group-by-dynamic-default-offset/20260813T233434.008601Z-364de4eac4ba",
+          "candidate_metrics": {
+            "duration_seconds": 0.0228622529994027,
+            "iterations": 1,
+            "peak_rss_bytes": 189153280
+          },
+          "finding_signature": "ms1:ba791dbdb30b756ba35aa8333139335a314abfc8b90dbeb111ef12f882047cef",
+          "mismatch_counts": {
+            "shape": 1,
+            "value": 4
+          },
+          "reference_metrics": {
+            "duration_seconds": 0.020288771998821176,
+            "iterations": 1,
+            "peak_rss_bytes": 196919296
+          },
+          "source": "fixture",
+          "status": "failed"
+        }
+      ],
+      "findings_discovered": 1,
+      "generated_examples": 0,
+      "name": "group-by-dynamic-default-offset",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.3.5"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "2.3.3"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.41.1"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "23.0.1"
+            }
+          ],
+          "parity_version": "0.8.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.3.5"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "2.3.3"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "0.20.31"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "23.0.1"
+            }
+          ],
+          "parity_version": "0.8.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "failed"
+    }
+  ],
+  "elapsed_seconds": 1.540927885000201,
+  "parity_version": "0.8.0",
+  "provenance": {
+    "config_sha256": "4840c1e7773999a2b394c6f756c64456fd65f9c0bce38a58704686ade4971dda",
+    "orchestrator": {
+      "distributions": [
+        {
+          "name": "hypothesis",
+          "status": "installed",
+          "version": "6.165.5"
+        },
+        {
+          "name": "numpy",
+          "status": "installed",
+          "version": "2.3.5"
+        },
+        {
+          "name": "pandas",
+          "status": "installed",
+          "version": "2.3.3"
+        },
+        {
+          "name": "polars",
+          "status": "installed",
+          "version": "1.41.1"
+        },
+        {
+          "name": "pyarrow",
+          "status": "installed",
+          "version": "23.0.1"
+        }
+      ],
+      "parity_version": "0.8.0",
+      "platform_machine": "x86_64",
+      "platform_system": "Linux",
+      "python_implementation": "CPython",
+      "python_version": "3.12.13"
+    }
+  },
+  "schema_version": 3,
+  "status": "failed"
+}

@@ -1,0 +1,35 @@
+{
+  "finite": {
+    "pandas": {
+      "columns": [
+        "row_id",
+        "ema"
+      ],
+      "outcome": "returned",
+      "row_count": 5
+    },
+    "polars": {
+      "columns": [
+        "row_id",
+        "ema"
+      ],
+      "outcome": "returned",
+      "row_count": 5
+    }
+  },
+  "nullable": {
+    "pandas": {
+      "columns": [
+        "row_id",
+        "ema"
+      ],
+      "outcome": "returned",
+      "row_count": 5
+    },
+    "polars": {
+      "exception_module": "builtins",
+      "exception_type": "TypeError",
+      "outcome": "raised"
+    }
+  }
+}

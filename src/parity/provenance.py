@@ -12,6 +12,7 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import os
 import platform
 import re
 from collections.abc import Iterable, Mapping, Sequence
@@ -219,12 +220,21 @@ def diff_runtime(expected: RuntimeProvenance, actual: RuntimeProvenance) -> tupl
     return tuple(differences)
 
 
-def _canonical_path(path: Path, base_directory: Path | None) -> dict[str, str]:
+def _canonical_path(
+    path: Path,
+    base_directory: Path | None,
+    *,
+    dereference: bool = True,
+) -> dict[str, str]:
     if not path.is_absolute():
         return {"$path": path.as_posix()}
     if base_directory is not None:
         try:
-            relative = path.resolve().relative_to(base_directory.resolve())
+            normalized = path.resolve() if dereference else Path(os.path.abspath(path))
+            normalized_base = (
+                base_directory.resolve() if dereference else Path(os.path.abspath(base_directory))
+            )
+            relative = normalized.relative_to(normalized_base)
         except (OSError, ValueError):
             pass
         else:
@@ -232,6 +242,26 @@ def _canonical_path(path: Path, base_directory: Path | None) -> dict[str, str]:
     # External absolute locations are execution details and can contain user
     # names or workspace identifiers.  Their values are intentionally neither
     # retained nor hashed.
+    return {"$path": "<external>"}
+
+
+def _canonical_python_path(
+    python: Path,
+    *,
+    base_directory: Path | None,
+    workdir: object,
+) -> dict[str, str]:
+    """Normalize a launch path against config base, then its callable workdir."""
+
+    bases = [base_directory]
+    if isinstance(workdir, Path):
+        bases.append(workdir)
+    for base in bases:
+        if base is None:
+            continue
+        canonical = _canonical_path(python, base, dereference=False)
+        if canonical["$path"] != "<external>":
+            return canonical
     return {"$path": "<external>"}
 
 
@@ -251,7 +281,7 @@ def _canonical_value(
     if key and _SECRET_KEY.search(key):
         return "<redacted>"
     if isinstance(value, Path):
-        return _canonical_path(value, base_directory)
+        return _canonical_path(value, base_directory, dereference=key != "python")
     if isinstance(value, Mapping):
         # Input declaration order is part of a positional bundle's callable
         # contract. Preserve only the actual case-level input-bundle mapping;
@@ -273,12 +303,20 @@ def _canonical_value(
         canonical: dict[str, Any] = {}
         for item_key in sorted(value, key=str):
             item_name = str(item_key)
-            item = _canonical_value(
-                value[item_key],
-                key=item_name,
-                base_directory=base_directory,
-                path=(*path, item_name),
-            )
+            item_value = value[item_key]
+            if item_name == "python" and isinstance(item_value, Path):
+                item = _canonical_python_path(
+                    item_value,
+                    base_directory=base_directory,
+                    workdir=value.get("workdir"),
+                )
+            else:
+                item = _canonical_value(
+                    item_value,
+                    key=item_name,
+                    base_directory=base_directory,
+                    path=(*path, item_name),
+                )
             if item is not _OMIT:
                 canonical[item_name] = item
         return canonical
@@ -342,7 +380,7 @@ def effective_config_sha256(
             if isinstance(case, Mapping) and case.get("name") in selected_cases
         ]
 
-    base = Path(base_directory) if base_directory is not None else None
+    base = Path(base_directory) if base_directory is not None else _common_config_base(raw)
     canonical = _canonical_value(raw, base_directory=base)
     encoded = json.dumps(
         canonical,
@@ -352,6 +390,29 @@ def effective_config_sha256(
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _common_config_base(raw: Mapping[str, Any]) -> Path | None:
+    """Infer a shared configured workdir without retaining any absolute path."""
+
+    cases = raw.get("cases")
+    if not isinstance(cases, list):
+        return None
+    workdirs: set[Path] = set()
+    for case in cases:
+        if not isinstance(case, Mapping):
+            continue
+        for side in ("reference", "candidate"):
+            spec = case.get(side)
+            if not isinstance(spec, Mapping):
+                continue
+            workdir = spec.get("workdir")
+            if not isinstance(workdir, Path) or not workdir.is_absolute():
+                continue
+            workdirs.add(workdir.resolve())
+    if len(workdirs) == 1:
+        return next(iter(workdirs))
+    return None
 
 
 __all__ = [

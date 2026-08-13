@@ -1,0 +1,9 @@
+{
+  "columns": [
+    "ts",
+    "value"
+  ],
+  "outcome": "returned",
+  "polars_version": "0.20.31",
+  "row_count": 3
+}

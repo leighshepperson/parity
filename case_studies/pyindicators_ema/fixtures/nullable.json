@@ -1,0 +1,7 @@
+[
+  {"row_id": 0, "price": 10.0},
+  {"row_id": 1, "price": null},
+  {"row_id": 2, "price": 11.0},
+  {"row_id": 3, "price": 15.0},
+  {"row_id": 4, "price": 14.0}
+]

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -13,12 +15,19 @@ import pytest
 
 import parity.engine as engine
 from parity.artifacts import ArtifactStore
+from parity.config import load_config
 from parity.engine import replay_artifact, run_live
-from parity.execution import ExceptionInfo, ExecutionOutcome, Observation
+from parity.execution import (
+    ExceptionInfo,
+    ExecutionOutcome,
+    IsolatedExecutionSession,
+    Observation,
+)
 from parity.models import (
     CallableSpec,
     CaseConfig,
     CaseProvenance,
+    CaseResult,
     ColumnSchema,
     ComparisonPolicy,
     ExampleResult,
@@ -1766,6 +1775,211 @@ def test_replay_rejects_python_path_escape(tmp_path: Path) -> None:
 
     with pytest.raises(engine.ReplayError, match="python paths must stay inside"):
         engine._resolve_replay_paths(case_data, tmp_path)
+
+
+def test_replay_preserves_project_venv_symlink_to_system_python(tmp_path: Path) -> None:
+    interpreter = tmp_path / ".venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(sys.executable)
+    case_data = {
+        "reference": {"workdir": None, "python": ".venv/bin/python"},
+        "candidate": {"workdir": None, "python": ".venv/bin/python"},
+    }
+
+    engine._resolve_replay_paths(case_data, tmp_path)
+
+    assert case_data["reference"]["python"] == interpreter
+    assert case_data["candidate"]["python"] == interpreter
+    assert case_data["reference"]["python"].resolve() == Path(sys.executable).resolve()
+
+
+def test_replay_rejects_missing_project_python_path(tmp_path: Path) -> None:
+    case_data = {
+        "reference": {"workdir": None, "python": ".venv/bin/python"},
+        "candidate": {"workdir": None, "python": None},
+    }
+
+    with pytest.raises(engine.ReplayError, match="python path must be an existing file"):
+        engine._resolve_replay_paths(case_data, tmp_path)
+
+
+def test_replay_rejects_python_parent_directory_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-venv"
+    interpreter = outside / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(sys.executable)
+    (tmp_path / ".venv").symlink_to(outside, target_is_directory=True)
+    case_data = {
+        "reference": {"workdir": None, "python": ".venv/bin/python"},
+        "candidate": {"workdir": None, "python": None},
+    }
+
+    with pytest.raises(engine.ReplayError, match="parent directories must stay inside"):
+        engine._resolve_replay_paths(case_data, tmp_path)
+
+
+def test_artifact_replay_runs_through_project_virtualenv_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    virtualenv = tmp_path / ".venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(virtualenv)],
+        check=True,
+    )
+    interpreter = virtualenv / "bin" / "python"
+    assert interpreter.is_symlink()
+    source_site_packages = (
+        Path(sys.executable).parent.parent
+        / "lib"
+        / (f"python{sys.version_info.major}.{sys.version_info.minor}")
+        / "site-packages"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(source_site_packages))
+    (tmp_path / "replay_transform.py").write_text(
+        "def identity(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="replay_transform:identity",
+        adapter="arrow",
+        python=interpreter,
+        workdir=tmp_path,
+        environment={"PYTHONPATH": str(source_site_packages)},
+    )
+    with IsolatedExecutionSession(spec) as session:
+        runtime_observation = session.inspect_runtime()
+    assert runtime_observation.outcome is ExecutionOutcome.RETURNED
+    assert runtime_observation.runtime is not None
+    runtime = runtime_observation.runtime
+    case = CaseConfig(
+        name="venv-replay",
+        reference=spec,
+        candidate=spec.model_copy(deep=True),
+        fixture=tmp_path / "unused.arrow",
+        performance=PerformanceConfig(enabled=False),
+    )
+    monkeypatch.chdir(tmp_path)
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        case,
+        pa.table({"id": [1, 2]}),
+        ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="e" * 64,
+    )
+
+    result = replay_artifact(artifact)
+
+    assert result.status is Status.PASSED
+
+
+def test_configured_artifact_fingerprint_distinguishes_virtualenv_entrypoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "fingerprint_transform.py").write_text(
+        "def reference(frame):\n    return frame\n"
+        "def candidate(frame):\n    return frame.append_column('extra', frame.column(0))\n",
+        encoding="utf-8",
+    )
+    for name in (".venv-old", ".venv-new"):
+        interpreter = tmp_path / name / "bin" / "python"
+        interpreter.parent.mkdir(parents=True)
+        interpreter.symlink_to(sys.executable)
+    source_site_packages = (
+        Path(sys.executable).parent.parent
+        / "lib"
+        / (f"python{sys.version_info.major}.{sys.version_info.minor}")
+        / "site-packages"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(source_site_packages))
+    fixture = tmp_path / "fixture.arrow"
+    table = pa.table({"id": [1]})
+    with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    monkeypatch.chdir(tmp_path)
+
+    def run(reference_python: Path, candidate_python: Path) -> tuple[str, Path]:
+        case = CaseConfig(
+            name="versions",
+            reference=CallableSpec(
+                target="fingerprint_transform:reference",
+                adapter="arrow",
+                python=reference_python,
+                workdir=tmp_path,
+                environment={"PYTHONPATH": str(source_site_packages)},
+            ),
+            candidate=CallableSpec(
+                target="fingerprint_transform:candidate",
+                adapter="arrow",
+                python=candidate_python,
+                workdir=tmp_path,
+                environment={"PYTHONPATH": str(source_site_packages)},
+            ),
+            fixture=fixture,
+            generation=GenerationConfig(
+                max_examples=1, adversarial_examples=False, stability_repeats=1
+            ),
+            performance=PerformanceConfig(enabled=False),
+        )
+        result = engine.run_suite(ParityConfig(artifact_dir=tmp_path / ".parity", cases=[case]))
+        artifact = result.cases[0].failures[0].artifact
+        assert artifact is not None
+        replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+        return replay["config_sha256"], artifact
+
+    old = tmp_path / ".venv-old" / "bin" / "python"
+    new = tmp_path / ".venv-new" / "bin" / "python"
+    distinct_hash, artifact = run(old, new)
+    same_hash, _ = run(old, old)
+
+    assert distinct_hash != same_hash
+    replayed = replay_artifact(artifact)
+    assert replayed.provenance is not None
+    assert replayed.provenance.config_sha256 == distinct_hash
+
+
+def test_run_suite_hash_uses_loaded_config_base_for_virtualenv_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("old", "new"):
+        interpreter = tmp_path / name / "bin" / "python"
+        interpreter.parent.mkdir(parents=True)
+        interpreter.symlink_to(sys.executable)
+    config_path = tmp_path / "parity.toml"
+    config_path.write_text(
+        """
+version = 1
+
+[[cases]]
+name = "versions"
+fixture = "fixture.arrow"
+
+[cases.reference]
+target = "project:reference"
+python = "old/bin/python"
+
+[cases.candidate]
+target = "project:candidate"
+python = "new/bin/python"
+""",
+        encoding="utf-8",
+    )
+    captured: list[str] = []
+
+    def configured_case(_case: CaseConfig, _store: ArtifactStore, **kwargs: Any) -> CaseResult:
+        captured.append(kwargs["config_sha256"])
+        return CaseResult(name="versions", status=Status.PASSED)
+
+    monkeypatch.setattr(engine, "_configured_case", configured_case)
+    config = load_config(config_path)
+    first = engine.run_suite(config)
+    config.cases[0].candidate.python = config.cases[0].reference.python
+    second = engine.run_suite(config)
+
+    assert captured[0] != captured[1]
+    assert first.provenance is not None
+    assert second.provenance is not None
+    assert first.provenance.config_sha256 == captured[0]
+    assert second.provenance.config_sha256 == captured[1]
 
 
 def test_replay_manifest_must_bind_every_consumed_file(tmp_path: Path) -> None:

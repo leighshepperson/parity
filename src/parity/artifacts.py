@@ -100,7 +100,13 @@ def _spec_for_replay(
     python: str | None = None
     if spec.python is not None:
         try:
-            python = str(spec.python.resolve().relative_to(invocation_directory.resolve()))
+            # Preserve the configured virtual-environment entry point rather
+            # than dereferencing it to a shared base Python executable.
+            python = str(
+                Path(os.path.abspath(spec.python)).relative_to(
+                    Path(os.path.abspath(invocation_directory))
+                )
+            )
         except ValueError:
             # As with import roots, substituting the current interpreter could
             # silently change dependency semantics. External interpreters make

@@ -176,6 +176,10 @@ def test_import_callable_validates_target(transform_module: Path) -> None:
     with pytest.raises(ExecutionError, match="not callable"):
         import_callable("parity_test_transforms:not_callable")
 
+    for malformed in ("pkg..module:run", "pkg.:run", "pkg:attr..child"):
+        with pytest.raises(ExecutionError, match=r"module\.path:function\.path"):
+            import_callable(malformed)
+
 
 @pytest.mark.parametrize(
     ("target", "adapter"),

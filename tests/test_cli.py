@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import tomllib
 from pathlib import Path
 
 import pyarrow as pa
@@ -48,7 +50,7 @@ def _suite(status: Status) -> SuiteResult:
 def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     version = runner.invoke(cli.app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.7.0"
+    assert version.stdout.strip() == "0.8.0"
 
     config_path = tmp_path / "nested" / "parity.toml"
     created = runner.invoke(cli.app, ["init", str(config_path)])
@@ -59,6 +61,192 @@ def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     refused = runner.invoke(cli.app, ["init", str(config_path)])
     assert refused.exit_code == 2
     assert "already exists" in refused.stderr
+
+
+def test_init_project_mode_writes_only_a_runnable_config(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixtures" / "input.parquet"
+    fixture.parent.mkdir()
+    pq.write_table(pa.table({"id": [1, 2]}), fixture)
+    config_path = tmp_path / "config" / "parity.toml"
+    result = runner.invoke(
+        cli.app,
+        [
+            "init",
+            str(config_path),
+            "--reference",
+            "project.transform:run",
+            "--candidate",
+            "project.transform:run",
+            "--fixture",
+            str(fixture),
+            "--case-name",
+            "polars-versions",
+            "--reference-adapter",
+            "polars",
+            "--candidate-adapter",
+            "polars",
+            "--reference-python",
+            sys.executable,
+            "--candidate-python",
+            sys.executable,
+            "--record-distribution",
+            "polars",
+            "--row-key",
+            "id",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert not (config_path.parent / "parity_example.py").exists()
+    raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert raw["cases"][0]["reference"]["target"] == raw["cases"][0]["candidate"]["target"]
+    assert raw["cases"][0]["comparison"] == {"row_order": "keyed", "row_keys": ["id"]}
+    configured = cli.load_config(config_path)
+    assert configured.cases[0].fixture == fixture.resolve()
+
+
+def test_init_project_mode_requires_the_target_and_fixture_trio(tmp_path: Path) -> None:
+    result = runner.invoke(
+        cli.app,
+        ["init", str(tmp_path / "parity.toml"), "--reference", "project.old:run"],
+    )
+    assert result.exit_code == 2
+    assert "must be provided together" in result.stderr
+    assert not (tmp_path / "parity.toml").exists()
+
+    option_without_trio = runner.invoke(
+        cli.app,
+        ["init", str(tmp_path / "parity.toml"), "--row-key", "id"],
+    )
+    assert option_without_trio.exit_code == 2
+    assert "require --reference" in option_without_trio.stderr
+
+
+def test_init_project_mode_rejects_bad_adapter_and_fixture(tmp_path: Path) -> None:
+    fixture = tmp_path / "input.parquet"
+    pq.write_table(pa.table({"id": [1]}), fixture)
+    common = [
+        "init",
+        str(tmp_path / "parity.toml"),
+        "--reference",
+        "project.old:run",
+        "--candidate",
+        "project.new:run",
+        "--fixture",
+        str(fixture),
+    ]
+    adapter = runner.invoke(cli.app, [*common, "--reference-adapter", "spark"])
+    assert adapter.exit_code == 2
+    assert "reference_adapter must be one of" in adapter.stderr
+
+    for target in ("pkg..module:run", "pkg:run²", "pkg:run¼"):
+        malformed = runner.invoke(cli.app, [*common, "--reference", target])
+        assert malformed.exit_code == 2
+        assert "reference must be an import target" in malformed.stderr
+
+    fixture.unlink()
+    missing = runner.invoke(cli.app, common)
+    assert missing.exit_code == 2
+    assert "fixture not found" in missing.stderr
+    assert not (tmp_path / "parity.toml").exists()
+
+
+def test_init_project_mode_output_runs_without_generated_demo(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "project_transform.py").write_text(
+        "def transform(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
+    fixture = project / "input.parquet"
+    pq.write_table(pa.table({"id": [1, 2]}), fixture)
+    config_path = project / "parity.toml"
+    monkeypatch.chdir(project)
+    initialized = runner.invoke(
+        cli.app,
+        [
+            "init",
+            str(config_path),
+            "--reference",
+            "project_transform:transform",
+            "--candidate",
+            "project_transform:transform",
+            "--fixture",
+            str(fixture),
+            "--reference-adapter",
+            "arrow",
+            "--candidate-adapter",
+            "arrow",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+
+    checked = runner.invoke(
+        cli.app,
+        [
+            "check",
+            "--config",
+            str(config_path),
+            "--max-examples",
+            "2",
+            "--stability-repeats",
+            "1",
+            "--no-performance",
+        ],
+    )
+    assert checked.exit_code == 0, checked.output
+
+
+def test_init_nested_project_config_runs_targets_from_invocation_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = tmp_path / "project"
+    migrations = project / "migrations"
+    migrations.mkdir(parents=True)
+    (project / "project_transform.py").write_text(
+        "def transform(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
+    fixture = project / "input.parquet"
+    pq.write_table(pa.table({"id": [1, 2]}), fixture)
+    config_path = migrations / "parity.toml"
+    monkeypatch.chdir(project)
+
+    initialized = runner.invoke(
+        cli.app,
+        [
+            "init",
+            str(config_path),
+            "--reference",
+            "project_transform:transform",
+            "--candidate",
+            "project_transform:transform",
+            "--fixture",
+            str(fixture),
+            "--reference-adapter",
+            "arrow",
+            "--candidate-adapter",
+            "arrow",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+    raw = tomllib.loads(config_path.read_text(encoding="utf-8"))["cases"][0]
+    assert raw["reference"]["workdir"] == ".."
+    assert raw["candidate"]["workdir"] == ".."
+
+    checked = runner.invoke(
+        cli.app,
+        [
+            "check",
+            "--config",
+            str(config_path),
+            "--max-examples",
+            "2",
+            "--stability-repeats",
+            "1",
+            "--no-performance",
+        ],
+    )
+    assert checked.exit_code == 0, checked.output
 
 
 def test_inspect_and_doctor_commands(tmp_path: Path) -> None:
@@ -74,6 +262,107 @@ def test_inspect_and_doctor_commands(tmp_path: Path) -> None:
     doctor = runner.invoke(cli.app, ["doctor", "--json"])
     assert doctor.exit_code == 0
     assert all(item["installed"] for item in json.loads(doctor.stdout)["dependencies"])
+
+
+def test_doctor_config_reports_workers_side_by_side_and_filters_case(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = ParityConfig(
+        cases=[
+            CaseConfig(
+                name=name,
+                reference=CallableSpec(
+                    target="missing.reference:run",
+                    python=Path(sys.executable),
+                    workdir=tmp_path,
+                    record_distributions=["pytest"],
+                ),
+                candidate=CallableSpec(
+                    target="missing.candidate:run",
+                    python=Path(sys.executable),
+                    workdir=tmp_path,
+                    record_distributions=["pytest"],
+                ),
+                fixture=tmp_path / "unused.json",
+            )
+            for name in ("orders", "customers")
+        ]
+    )
+    monkeypatch.setattr(cli, "load_config", lambda _path: config)
+    result = runner.invoke(
+        cli.app,
+        ["doctor", "--config", str(tmp_path / "parity.toml"), "--case", "orders", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["healthy"] is True
+    assert [case["name"] for case in payload["cases"]] == ["orders"]
+    assert payload["cases"][0]["reference"]["distributions"][0]["name"] == "pytest"
+    assert str(tmp_path) not in result.stdout
+    assert sys.executable not in result.stdout
+    assert "missing.reference" not in result.stdout
+
+    terminal = runner.invoke(
+        cli.app,
+        ["doctor", "--config", str(tmp_path / "parity.toml"), "--case", "orders"],
+    )
+    assert terminal.exit_code == 0
+    assert "Reference" in terminal.stdout
+    assert "Candidate" in terminal.stdout
+    assert "Python" in terminal.stdout
+    assert "Parity" in terminal.stdout
+
+
+def test_doctor_config_uses_exit_two_for_missing_distribution(tmp_path: Path, monkeypatch) -> None:
+    spec = CallableSpec(
+        target="missing.target:run",
+        python=Path(sys.executable),
+        workdir=tmp_path,
+        record_distributions=["parity-package-does-not-exist"],
+    )
+    config = ParityConfig(
+        cases=[
+            CaseConfig(
+                name="orders",
+                reference=spec,
+                candidate=spec.model_copy(deep=True),
+                fixture=tmp_path / "unused.json",
+            )
+        ]
+    )
+    monkeypatch.setattr(cli, "load_config", lambda _path: config)
+    result = runner.invoke(cli.app, ["doctor", "--config", str(tmp_path / "parity.toml"), "--json"])
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["healthy"] is False
+    assert payload["cases"][0]["reference"]["distributions"][0]["status"] == "missing"
+
+
+def test_doctor_case_requires_config() -> None:
+    result = runner.invoke(cli.app, ["doctor", "--case", "orders"])
+    assert result.exit_code == 2
+    assert "--case requires --config" in result.stderr
+
+
+def test_doctor_config_load_error_does_not_echo_paths_or_values(
+    tmp_path: Path, monkeypatch
+) -> None:
+    secret_path = tmp_path / "private" / "python"
+    monkeypatch.setattr(
+        cli,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(
+            cli.ConfigError(f"invalid python={secret_path} environment=PRIVATE_TOKEN=secret")
+        ),
+    )
+    result = runner.invoke(
+        cli.app, ["doctor", "--config", str(tmp_path / "private" / "parity.toml"), "--json"]
+    )
+    assert result.exit_code == 2
+    assert "could not be loaded or validated" in result.stderr
+    assert str(tmp_path) not in result.stderr
+    assert "PRIVATE_TOKEN" not in result.stderr
+    assert "secret" not in result.stderr
 
 
 def test_check_applies_filters_overrides_and_writes_safe_outputs(

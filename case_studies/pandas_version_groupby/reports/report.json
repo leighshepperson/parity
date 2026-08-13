@@ -1,0 +1,159 @@
+{
+  "cases": [
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [
+        {
+          "code": "semantic-difference",
+          "confidence": "low",
+          "documentation_url": null,
+          "evidence": [
+            "Parity recorded 1 structured mismatch(es)."
+          ],
+          "explanation": "The candidate does not satisfy the configured equivalence policy for this input. The preserved counterexample is the authoritative reproduction.",
+          "title": "Observable behaviour differs"
+        }
+      ],
+      "elapsed_seconds": 1.4629105129988602,
+      "examples_run": 1,
+      "failures": [
+        {
+          "artifact": ".parity-pandas-versions/categorical-groupby-observed-default/20260813T233434.035684Z-a4306389d093",
+          "candidate_metrics": {
+            "duration_seconds": 0.020715636001114035,
+            "iterations": 1,
+            "peak_rss_bytes": 208351232
+          },
+          "finding_signature": "ms1:ba791dbdb30b756ba35aa8333139335a314abfc8b90dbeb111ef12f882047cef",
+          "mismatch_counts": {
+            "shape": 1
+          },
+          "reference_metrics": {
+            "duration_seconds": 0.016078552000180935,
+            "iterations": 1,
+            "peak_rss_bytes": 208351232
+          },
+          "source": "fixture",
+          "status": "failed"
+        }
+      ],
+      "findings_discovered": 1,
+      "generated_examples": 0,
+      "name": "categorical-groupby-observed-default",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.3.5"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.41.1"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "23.0.1"
+            }
+          ],
+          "parity_version": "0.8.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.3.5"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "2.3.3"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.41.1"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "23.0.1"
+            }
+          ],
+          "parity_version": "0.8.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "failed"
+    }
+  ],
+  "elapsed_seconds": 1.5507849989990063,
+  "parity_version": "0.8.0",
+  "provenance": {
+    "config_sha256": "80fbde60a969f2095cd850f926ef4ffb76b8abfe879fe8624afe99bf617e227d",
+    "orchestrator": {
+      "distributions": [
+        {
+          "name": "hypothesis",
+          "status": "installed",
+          "version": "6.165.5"
+        },
+        {
+          "name": "numpy",
+          "status": "installed",
+          "version": "2.3.5"
+        },
+        {
+          "name": "pandas",
+          "status": "installed",
+          "version": "3.0.5"
+        },
+        {
+          "name": "polars",
+          "status": "installed",
+          "version": "1.41.1"
+        },
+        {
+          "name": "pyarrow",
+          "status": "installed",
+          "version": "23.0.1"
+        }
+      ],
+      "parity_version": "0.8.0",
+      "platform_machine": "x86_64",
+      "platform_system": "Linux",
+      "python_implementation": "CPython",
+      "python_version": "3.12.13"
+    }
+  },
+  "schema_version": 3,
+  "status": "failed"
+}

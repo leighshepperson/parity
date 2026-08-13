@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
 from parity.config import ConfigError, load_config
+from parity.provenance import effective_config_sha256
 
 VALID = """
 version = 1
@@ -127,3 +129,42 @@ fixture = "fixtures/alpha.csv"
     assert list(bundle.inputs) == ["zebra", "alpha"]
     assert bundle.inputs["zebra"].fixture == (tmp_path / "fixtures/zebra.csv").resolve()
     assert bundle.inputs["alpha"].fixture == (tmp_path / "fixtures/alpha.csv").resolve()
+
+
+def test_load_config_preserves_distinct_virtualenv_python_symlink_paths(tmp_path: Path) -> None:
+    config_path = tmp_path / "parity.toml"
+    for name in ("old", "new"):
+        executable = tmp_path / name / "bin" / "python"
+        executable.parent.mkdir(parents=True)
+        executable.symlink_to(sys.executable)
+    config_path.write_text(
+        """
+version = 1
+
+[[cases]]
+name = "versions"
+fixture = "fixture.json"
+
+[cases.reference]
+target = "transform:run"
+python = "old/bin/python"
+
+[cases.candidate]
+target = "transform:run"
+python = "new/bin/python"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    case = config.cases[0]
+
+    assert case.reference.python == tmp_path / "old" / "bin" / "python"
+    assert case.candidate.python == tmp_path / "new" / "bin" / "python"
+    assert case.reference.python != case.candidate.python
+    assert case.reference.python.resolve() == case.candidate.python.resolve()
+
+    distinct_hash = effective_config_sha256(config, base_directory=tmp_path)
+    case.candidate.python = case.reference.python
+    same_hash = effective_config_sha256(config, base_directory=tmp_path)
+    assert distinct_hash != same_hash

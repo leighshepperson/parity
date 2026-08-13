@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import sys
+import threading
 import tomllib
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
+from parity import templates
 from parity.config import load_config
 from parity.templates import (
     render_config_template,
     render_example_module,
+    render_project_config,
     write_config_template,
+    write_project_config,
     write_starter,
 )
 
@@ -84,3 +91,249 @@ def test_starter_force_replaces_both_files(tmp_path: Path) -> None:
     write_starter(config, force=True)
     assert "version = 1" in config.read_text(encoding="utf-8")
     assert "def candidate" in example.read_text(encoding="utf-8")
+
+
+def test_project_template_is_minimal_fixture_backed_and_allows_same_target() -> None:
+    rendered = render_project_config(
+        reference="project.transform:run",
+        candidate="project.transform:run",
+        fixture="fixtures/input.json",
+        case_name="polars-versions",
+        reference_adapter="polars",
+        candidate_adapter="polars",
+        reference_python=".venv-old/bin/python",
+        candidate_python=".venv-new/bin/python",
+        record_distributions=["Polars"],
+        row_keys=["account_id", "period"],
+    )
+    raw = tomllib.loads(rendered)
+    case = raw["cases"][0]
+    assert case["fixture"] == "fixtures/input.json"
+    assert case["reference"]["target"] == case["candidate"]["target"]
+    assert case["reference"]["record_distributions"] == ["polars"]
+    assert case["comparison"] == {
+        "row_order": "keyed",
+        "row_keys": ["account_id", "period"],
+    }
+    assert "schema" not in case
+    assert "generation" not in case
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"reference": "not a target"}, "reference must be"),
+        ({"reference": "pkg..module:run"}, "reference must be"),
+        ({"candidate": "pkg.:run"}, "candidate must be"),
+        ({"candidate": "pkg:attr..child"}, "candidate must be"),
+        ({"reference": "pkg:run²"}, "reference must be"),
+        ({"candidate": "pkg:run¼"}, "candidate must be"),
+        ({"candidate_adapter": "spark"}, "candidate_adapter must be"),
+        ({"case_name": "bad name"}, "case_name may contain"),
+        ({"row_keys": ["id", "id"]}, "row keys must be unique"),
+        ({"record_distributions": ["bad/name"]}, "distribution names"),
+    ],
+)
+def test_project_template_rejects_invalid_options(kwargs: dict[str, object], message: str) -> None:
+    options: dict[str, object] = {
+        "reference": "project.old:run",
+        "candidate": "project.new:run",
+        "fixture": "fixture.json",
+    }
+    options.update(kwargs)
+    with pytest.raises((TypeError, ValueError), match=message):
+        render_project_config(**options)  # type: ignore[arg-type]
+
+
+def test_project_writer_validates_fixture_and_preserves_relative_paths(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixtures" / "input.parquet"
+    fixture.parent.mkdir()
+    pq.write_table(pa.table({"id": [1, 2]}), fixture)
+    config_path = tmp_path / "config" / "parity.toml"
+
+    written = write_project_config(
+        config_path,
+        reference="project.old:run",
+        candidate="project.new:run",
+        fixture=fixture,
+        reference_python=sys.executable,
+        candidate_python=sys.executable,
+    )
+    assert written == config_path
+    config = load_config(written)
+    assert config.cases[0].fixture == fixture.resolve()
+    assert config.cases[0].reference.python == Path(sys.executable)
+    assert not (config_path.parent / "parity_example.py").exists()
+
+
+def test_project_writer_preserves_distinct_virtualenv_python_symlinks(tmp_path: Path) -> None:
+    fixture = tmp_path / "input.parquet"
+    pq.write_table(pa.table({"id": [1]}), fixture)
+    interpreters: list[Path] = []
+    for name in ("old", "new"):
+        interpreter = tmp_path / name / "bin" / "python"
+        interpreter.parent.mkdir(parents=True)
+        interpreter.symlink_to(sys.executable)
+        interpreters.append(interpreter)
+
+    config_path = tmp_path / "config" / "parity.toml"
+    write_project_config(
+        config_path,
+        reference="project.transform:run",
+        candidate="project.transform:run",
+        fixture=fixture,
+        reference_python=interpreters[0],
+        candidate_python=interpreters[1],
+    )
+
+    raw = tomllib.loads(config_path.read_text(encoding="utf-8"))["cases"][0]
+    assert raw["reference"]["python"] != raw["candidate"]["python"]
+    case = load_config(config_path).cases[0]
+    assert case.reference.python == interpreters[0]
+    assert case.candidate.python == interpreters[1]
+    assert case.reference.python != case.candidate.python
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable-bit contract")
+@pytest.mark.parametrize("side", ["reference", "candidate"])
+def test_project_writer_rejects_non_executable_python_paths(tmp_path: Path, side: str) -> None:
+    fixture = tmp_path / "input.parquet"
+    pq.write_table(pa.table({"id": [1]}), fixture)
+    python_path = tmp_path / f"{side}-python"
+    python_path.write_text("not an executable", encoding="utf-8")
+    python_path.chmod(0o600)
+    kwargs = {f"{side}_python": python_path}
+
+    with pytest.raises(ValueError, match=rf"{side} Python executable is not executable"):
+        write_project_config(
+            tmp_path / "parity.toml",
+            reference="project.old:run",
+            candidate="project.new:run",
+            fixture=fixture,
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    assert not (tmp_path / "parity.toml").exists()
+
+
+def test_project_writer_validates_before_replacing_existing_file(tmp_path: Path) -> None:
+    destination = tmp_path / "parity.toml"
+    destination.write_text("user work", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        write_project_config(
+            destination,
+            reference="project.old:run",
+            candidate="project.new:run",
+            fixture=tmp_path / "missing.json",
+        )
+    assert destination.read_text(encoding="utf-8") == "user work"
+
+
+def test_project_writer_rejects_invalid_fixture_without_partial_file(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixture.txt"
+    fixture.write_text("not supported", encoding="utf-8")
+    destination = tmp_path / "nested" / "parity.toml"
+    with pytest.raises(ValueError, match="unsupported fixture extension"):
+        write_project_config(
+            destination,
+            reference="project.old:run",
+            candidate="project.new:run",
+            fixture=fixture,
+        )
+    assert not destination.exists()
+
+
+def test_atomic_writer_leaves_existing_file_intact_when_replace_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    destination = tmp_path / "parity.toml"
+    destination.write_text("user work", encoding="utf-8")
+
+    def reject_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(templates.os, "replace", reject_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        write_config_template(destination, force=True)
+    assert destination.read_text(encoding="utf-8") == "user work"
+    assert list(tmp_path.glob(".parity.toml.*.tmp")) == []
+
+
+def test_no_overwrite_publication_is_atomic_between_concurrent_writers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "parity.toml"
+    barrier = threading.Barrier(2)
+    real_link = templates.os.link
+
+    def synchronized_link(source: Path, target: Path) -> None:
+        barrier.wait(timeout=5)
+        real_link(source, target)
+
+    monkeypatch.setattr(templates.os, "link", synchronized_link)
+    outcomes: list[str] = []
+
+    def write(reference: str) -> None:
+        try:
+            write_config_template(
+                destination,
+                reference=reference,
+                candidate="project:candidate",
+            )
+        except FileExistsError:
+            outcomes.append("refused")
+        else:
+            outcomes.append("created")
+
+    threads = [
+        threading.Thread(target=write, args=("first:reference",)),
+        threading.Thread(target=write, args=("second:reference",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert sorted(outcomes) == ["created", "refused"]
+    reference = tomllib.loads(destination.read_text(encoding="utf-8"))["cases"][0]["reference"][
+        "target"
+    ]
+    assert reference in {"first:reference", "second:reference"}
+    assert list(tmp_path.glob(".parity.toml.*.tmp")) == []
+
+
+@pytest.mark.parametrize("name", ["parity.toml", "parity_example.py"])
+def test_starter_refuses_dangling_destination_symlinks(tmp_path: Path, name: str) -> None:
+    dangling = tmp_path / name
+    dangling.symlink_to(tmp_path / "missing-target")
+
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        write_starter(tmp_path / "parity.toml")
+
+    assert dangling.is_symlink()
+    assert not dangling.exists()
+
+
+def test_config_writer_force_replaces_dangling_destination_symlink(tmp_path: Path) -> None:
+    destination = tmp_path / "parity.toml"
+    destination.symlink_to(tmp_path / "missing-target")
+
+    write_config_template(destination, force=True)
+
+    assert destination.is_file()
+    assert not destination.is_symlink()
+    assert "version = 1" in destination.read_text(encoding="utf-8")
+
+
+def test_starter_force_prevalidates_both_destinations_before_replacing(tmp_path: Path) -> None:
+    config = tmp_path / "parity.toml"
+    config.write_text("user config", encoding="utf-8")
+    example = tmp_path / "parity_example.py"
+    example.mkdir()
+
+    with pytest.raises(ValueError, match="not a replaceable file or symlink"):
+        write_starter(config, force=True)
+
+    assert config.read_text(encoding="utf-8") == "user config"
+    assert example.is_dir()

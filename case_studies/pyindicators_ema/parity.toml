@@ -1,0 +1,74 @@
+version = 1
+artifact_dir = ".parity-pyindicators"
+fail_fast = false
+
+[[cases]]
+name = "ema-finite-control"
+fixture = "fixtures/finite.json"
+tags = ["control", "external", "pandas", "polars", "public-project"]
+
+[cases.reference]
+target = "pyindicators_parity:pandas_ema"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["pyindicators", "numpy", "pandas", "polars", "pyarrow", "scipy", "scikit-learn"]
+
+[cases.candidate]
+target = "pyindicators_parity:polars_ema"
+adapter = "polars"
+record_distributions = ["pyindicators", "numpy", "pandas", "polars", "pyarrow", "scipy", "scikit-learn"]
+
+[cases.comparison]
+row_order = "keyed"
+row_keys = ["row_id"]
+column_order = "strict"
+dtype = "compatible"
+rtol = 1e-12
+atol = 1e-12
+
+[cases.generation]
+max_examples = 1
+max_findings = 1
+stability_repeats = 2
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false
+[[cases]]
+name = "ema-nullable-backend-divergence"
+fixture = "fixtures/nullable.json"
+tags = ["external", "finding", "null", "pandas", "polars", "public-project"]
+
+[cases.reference]
+target = "pyindicators_parity:pandas_ema"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["pyindicators", "numpy", "pandas", "polars", "pyarrow", "scipy", "scikit-learn"]
+
+[cases.candidate]
+target = "pyindicators_parity:polars_ema"
+adapter = "polars"
+record_distributions = ["pyindicators", "numpy", "pandas", "polars", "pyarrow", "scipy", "scikit-learn"]
+
+[cases.comparison]
+row_order = "keyed"
+row_keys = ["row_id"]
+column_order = "strict"
+dtype = "compatible"
+rtol = 1e-12
+atol = 1e-12
+
+[cases.generation]
+max_examples = 1
+max_findings = 1
+stability_repeats = 2
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false
