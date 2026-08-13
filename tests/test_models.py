@@ -49,6 +49,30 @@ def test_case_requires_fixture_or_schema() -> None:
         )
 
 
+def test_callable_pandas_input_defaults_to_arrow_and_rejects_unknown_modes() -> None:
+    assert CallableSpec(target="example:reference").pandas_input == "arrow"
+    assert CallableSpec(target="example:reference", pandas_input="native").pandas_input == "native"
+    with pytest.raises(ValidationError, match="pandas_input"):
+        CallableSpec.model_validate(
+            {"target": "example:reference", "pandas_input": "numpy_nullable"}
+        )
+
+
+def test_callable_record_distributions_are_explicit_normalized_and_unique() -> None:
+    spec = CallableSpec(
+        target="example:reference",
+        record_distributions=["skrub", "Scikit_Learn"],
+    )
+    assert spec.record_distributions == ["scikit-learn", "skrub"]
+    with pytest.raises(ValidationError, match="duplicate distribution"):
+        CallableSpec(
+            target="example:reference",
+            record_distributions=["Scikit-Learn", "scikit_learn"],
+        )
+    with pytest.raises(ValidationError, match="ASCII"):
+        CallableSpec(target="example:reference", record_distributions=["private/package"])
+
+
 def test_case_accepts_schema_alias_and_serializes_it() -> None:
     case = CaseConfig.model_validate(
         {

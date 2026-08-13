@@ -27,7 +27,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast, get_type_hints
+from typing import Any, Literal, cast, get_type_hints
 
 import numpy as np
 import pyarrow as pa
@@ -35,7 +35,10 @@ import pyarrow.ipc as ipc
 
 from parity.adapters import from_arrow as adapter_from_arrow
 from parity.adapters import to_arrow as adapter_to_arrow
-from parity.models import CallableSpec, JsonValue, RunMetrics
+from parity.models import CallableSpec, JsonValue, PandasInput, RunMetrics
+from parity.provenance import RuntimeProvenance, collect_runtime_provenance, diff_runtime
+
+_WORKER_PROTOCOL_VERSION = 2
 
 
 class ExecutionOutcome(StrEnum):
@@ -92,6 +95,7 @@ class Observation:
     exception: ExceptionInfo | None = None
     mutated_input: bool = False
     return_type: str | None = None
+    runtime: RuntimeProvenance | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -108,6 +112,7 @@ class Observation:
             "exception": self.exception.to_dict() if self.exception else None,
             "mutated_input": self.mutated_input,
             "return_type": self.return_type,
+            "runtime": self.runtime.model_dump(mode="json") if self.runtime else None,
         }
 
 
@@ -207,11 +212,13 @@ def _resolve_adapter(requested: str, function: Callable[..., Any]) -> str:
     return _annotation_adapter(function) or "pandas"
 
 
-def _fresh_argument(table: pa.Table, adapter: str) -> Any:
+def _fresh_argument(table: pa.Table, adapter: str, *, pandas_input: PandasInput = "arrow") -> Any:
     # Round-tripping creates a fresh Arrow object and prevents implementations
     # from sharing Python wrapper state even when they both use the Arrow adapter.
     fresh = ipc.open_stream(pa.py_buffer(_arrow_bytes(table))).read_all()
     try:
+        if adapter == "pandas" and pandas_input == "native":
+            return fresh.to_pandas()
         return adapter_from_arrow(fresh, adapter)
     except (TypeError, ValueError) as error:
         raise ExecutionError(f"unsupported adapter: {adapter}") from error
@@ -385,12 +392,37 @@ def _process_context(spec: CallableSpec) -> Iterator[None]:
             os.chdir(old_directory)
 
 
+def _runtime_drift_observation(
+    expected: RuntimeProvenance | None,
+    actual: RuntimeProvenance,
+    *,
+    started: float,
+    peak_rss_bytes: int | None,
+) -> Observation | None:
+    if expected is None or not (differences := diff_runtime(expected, actual)):
+        return None
+    return Observation(
+        outcome=ExecutionOutcome.CRASHED,
+        exception=ExceptionInfo(
+            module="parity.execution",
+            type="RuntimeDriftError",
+            message="runtime provenance differs for: " + ", ".join(differences),
+        ),
+        metrics=RunMetrics(
+            duration_seconds=time.perf_counter() - started,
+            peak_rss_bytes=peak_rss_bytes,
+        ),
+        runtime=actual,
+    )
+
+
 def execute_current(
     spec: CallableSpec,
     input_table: pa.Table,
     *,
     static_args: Sequence[JsonValue] = (),
     static_kwargs: Mapping[str, JsonValue] | None = None,
+    expected_runtime: RuntimeProvenance | None = None,
 ) -> Observation:
     """Execute a callable in this interpreter and capture its observation.
 
@@ -403,12 +435,21 @@ def execute_current(
     if spec.python is not None and Path(spec.python).resolve() != Path(sys.executable).resolve():
         raise ExecutionError("a different Python executable requires isolated execution")
     started = time.perf_counter()
+    runtime: RuntimeProvenance | None = None
     with _MemorySampler() as memory:
         try:
             with _process_context(spec):
+                runtime = collect_runtime_provenance(spec.record_distributions)
+                if drift := _runtime_drift_observation(
+                    expected_runtime,
+                    runtime,
+                    started=started,
+                    peak_rss_bytes=memory.peak or None,
+                ):
+                    return drift
                 function = import_callable(spec.target)
                 adapter = _resolve_adapter(spec.adapter, function)
-                argument = _fresh_argument(input_table, adapter)
+                argument = _fresh_argument(input_table, adapter, pandas_input=spec.pandas_input)
                 before = _fingerprint(argument, adapter)
                 try:
                     returned = function(argument, *static_args, **dict(static_kwargs or {}))
@@ -422,6 +463,7 @@ def execute_current(
                             duration_seconds=time.perf_counter() - started,
                             peak_rss_bytes=memory.peak or None,
                         ),
+                        runtime=runtime,
                     )
                 after = _fingerprint(argument, adapter)
                 table = _return_to_arrow(returned)
@@ -435,6 +477,7 @@ def execute_current(
                             duration_seconds=time.perf_counter() - started,
                             peak_rss_bytes=memory.peak or None,
                         ),
+                        runtime=runtime,
                     )
                 serializable, value = _json_value(returned)
                 if not serializable:
@@ -451,6 +494,7 @@ def execute_current(
                             duration_seconds=time.perf_counter() - started,
                             peak_rss_bytes=memory.peak or None,
                         ),
+                        runtime=runtime,
                     )
                 return Observation(
                     outcome=ExecutionOutcome.RETURNED,
@@ -462,6 +506,7 @@ def execute_current(
                         duration_seconds=time.perf_counter() - started,
                         peak_rss_bytes=memory.peak or None,
                     ),
+                    runtime=runtime,
                 )
         except BaseException as error:
             return Observation(
@@ -471,6 +516,7 @@ def execute_current(
                     duration_seconds=time.perf_counter() - started,
                     peak_rss_bytes=memory.peak or None,
                 ),
+                runtime=runtime,
             )
 
 
@@ -479,6 +525,8 @@ def execute_callable_current(
     input_table: pa.Table,
     *,
     adapter: str = "auto",
+    pandas_input: PandasInput = "arrow",
+    record_distributions: Sequence[str] = (),
     static_args: Sequence[JsonValue] = (),
     static_kwargs: Mapping[str, JsonValue] | None = None,
 ) -> Observation:
@@ -493,11 +541,15 @@ def execute_callable_current(
         raise TypeError("function must be callable")
     if adapter not in {"auto", "pandas", "polars", "arrow"}:
         raise ValueError(f"unsupported adapter: {adapter}")
+    if pandas_input not in {"arrow", "native"}:
+        raise ValueError(f"unsupported pandas input: {pandas_input}")
     started = time.perf_counter()
+    runtime: RuntimeProvenance | None = None
     with _MemorySampler() as memory:
         try:
+            runtime = collect_runtime_provenance(record_distributions)
             resolved = _resolve_adapter(adapter, function)
-            argument = _fresh_argument(input_table, resolved)
+            argument = _fresh_argument(input_table, resolved, pandas_input=pandas_input)
             before = _fingerprint(argument, resolved)
             try:
                 returned = function(argument, *static_args, **dict(static_kwargs or {}))
@@ -510,6 +562,7 @@ def execute_callable_current(
                         duration_seconds=time.perf_counter() - started,
                         peak_rss_bytes=memory.peak or None,
                     ),
+                    runtime=runtime,
                 )
             mutated = before != _fingerprint(argument, resolved)
             return_type = f"{type(returned).__module__}.{type(returned).__qualname__}"
@@ -524,6 +577,7 @@ def execute_callable_current(
                         duration_seconds=time.perf_counter() - started,
                         peak_rss_bytes=memory.peak or None,
                     ),
+                    runtime=runtime,
                 )
             serializable, value = _json_value(returned)
             if not serializable:
@@ -539,6 +593,7 @@ def execute_callable_current(
                         duration_seconds=time.perf_counter() - started,
                         peak_rss_bytes=memory.peak or None,
                     ),
+                    runtime=runtime,
                 )
             return Observation(
                 outcome=ExecutionOutcome.RETURNED,
@@ -550,6 +605,7 @@ def execute_callable_current(
                     duration_seconds=time.perf_counter() - started,
                     peak_rss_bytes=memory.peak or None,
                 ),
+                runtime=runtime,
             )
         except BaseException as error:
             return Observation(
@@ -559,6 +615,7 @@ def execute_callable_current(
                     duration_seconds=time.perf_counter() - started,
                     peak_rss_bytes=memory.peak or None,
                 ),
+                runtime=runtime,
             )
 
 
@@ -628,6 +685,7 @@ def execute_isolated(
     static_args: Sequence[JsonValue] = (),
     static_kwargs: Mapping[str, JsonValue] | None = None,
     timeout_seconds: float = 30.0,
+    expected_runtime: RuntimeProvenance | None = None,
 ) -> Observation:
     """Execute in a disposable worker using the configured Python and workdir."""
 
@@ -645,9 +703,12 @@ def execute_isolated(
         output_json = root / "output.json"
         _write_arrow(input_table, input_path)
         request = {
+            "protocol_version": _WORKER_PROTOCOL_VERSION,
             "spec": {
                 "target": spec.target,
                 "adapter": spec.adapter,
+                "pandas_input": spec.pandas_input,
+                "record_distributions": spec.record_distributions,
                 # Popen already applies the workdir. Sending a relative path to
                 # the worker would apply it a second time (e.g. tests/tests).
                 "workdir": None,
@@ -657,6 +718,9 @@ def execute_isolated(
             "output_json": str(output_json),
             "static_args": list(static_args),
             "static_kwargs": dict(static_kwargs or {}),
+            "expected_runtime": (
+                expected_runtime.model_dump(mode="json") if expected_runtime else None
+            ),
         }
         request_path.write_text(json.dumps(request), encoding="utf-8")
         command = [executable, "-m", "parity.worker", str(request_path), str(response_path)]
@@ -737,9 +801,12 @@ def execute_isolated(
 def _observation_from_worker(
     response: Mapping[str, Any], output_arrow: Path, output_json: Path
 ) -> Observation:
+    if response.get("protocol_version") != _WORKER_PROTOCOL_VERSION:
+        raise ValueError("unsupported worker protocol")
     outcome = ExecutionOutcome(str(response["outcome"]))
     metrics = RunMetrics.model_validate(response["metrics"])
     exception_raw = response.get("exception")
+    runtime = RuntimeProvenance.model_validate(response["runtime"])
     observation = Observation(
         outcome=outcome,
         metrics=metrics,
@@ -747,6 +814,7 @@ def _observation_from_worker(
         mutated_input=bool(response.get("mutated_input", False)),
         return_type=str(response["return_type"]) if response.get("return_type") else None,
         has_value=bool(response.get("has_value", False)),
+        runtime=runtime,
     )
     if response.get("has_table"):
         observation.table = _read_arrow(output_arrow)
@@ -772,11 +840,18 @@ class IsolatedExecutionSession:
     and all descendants and remove protocol files.
     """
 
-    def __init__(self, spec: CallableSpec, *, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        spec: CallableSpec,
+        *,
+        timeout_seconds: float = 30.0,
+        expected_runtime: RuntimeProvenance | None = None,
+    ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self.spec = spec
         self.timeout_seconds = timeout_seconds
+        self.expected_runtime = expected_runtime
         self._temporary = tempfile.TemporaryDirectory(prefix="parity-session-")
         self._root = Path(self._temporary.name)
         self._process: subprocess.Popen[bytes] | None = None
@@ -850,6 +925,7 @@ class IsolatedExecutionSession:
         static_args: Sequence[JsonValue] = (),
         static_kwargs: Mapping[str, JsonValue] | None = None,
         timeout_seconds: float | None = None,
+        _operation: Literal["execute", "provenance"] = "execute",
     ) -> Observation:
         """Execute one call, preserving worker state but never the input object."""
 
@@ -882,9 +958,13 @@ class IsolatedExecutionSession:
             try:
                 _write_arrow(input_table, input_path)
                 request = {
+                    "protocol_version": _WORKER_PROTOCOL_VERSION,
+                    "operation": _operation,
                     "spec": {
                         "target": self.spec.target,
                         "adapter": self.spec.adapter,
+                        "pandas_input": self.spec.pandas_input,
+                        "record_distributions": self.spec.record_distributions,
                         # The parent applies environment overrides at process
                         # creation and applies cwd once. Never persist secret
                         # values or ask the child to chdir a second time.
@@ -895,6 +975,11 @@ class IsolatedExecutionSession:
                     "output_json": str(output_json),
                     "static_args": list(static_args),
                     "static_kwargs": dict(static_kwargs or {}),
+                    "expected_runtime": (
+                        self.expected_runtime.model_dump(mode="json")
+                        if self.expected_runtime and _operation == "execute"
+                        else None
+                    ),
                 }
                 request_path.write_text(json.dumps(request), encoding="utf-8")
 
@@ -980,6 +1065,15 @@ class IsolatedExecutionSession:
                 # each response instead of retaining a campaign-sized corpus.
                 shutil.rmtree(call_root, ignore_errors=True)
 
+    def inspect_runtime(self, *, timeout_seconds: float | None = None) -> Observation:
+        """Collect worker provenance without importing or invoking the target."""
+
+        return self.execute(
+            pa.table({}),
+            timeout_seconds=timeout_seconds,
+            _operation="provenance",
+        )
+
     def close(self) -> None:
         """Terminate this worker and descendants and remove all protocol files."""
 
@@ -999,6 +1093,7 @@ def execute(
     static_kwargs: Mapping[str, JsonValue] | None = None,
     isolated: bool | None = None,
     timeout_seconds: float = 30.0,
+    expected_runtime: RuntimeProvenance | None = None,
 ) -> Observation:
     """Execute using current or isolated mode.
 
@@ -1014,12 +1109,14 @@ def execute(
             static_args=static_args,
             static_kwargs=static_kwargs,
             timeout_seconds=timeout_seconds,
+            expected_runtime=expected_runtime,
         )
     return execute_current(
         spec,
         input_table,
         static_args=static_args,
         static_kwargs=static_kwargs,
+        expected_runtime=expected_runtime,
     )
 
 

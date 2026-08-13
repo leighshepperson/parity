@@ -60,6 +60,7 @@ def _case_payload(case: CaseResult) -> dict[str, Any]:
             for diagnosis in case.diagnoses
         ],
         "performance": case.performance.model_dump(mode="json") if case.performance else None,
+        "provenance": case.provenance.model_dump(mode="json") if case.provenance else None,
         "elapsed_seconds": case.elapsed_seconds,
     }
 
@@ -68,12 +69,23 @@ def report_payload(result: SuiteResult) -> dict[str, Any]:
     """Return the stable, data-eliding JSON report contract."""
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": result.status.value,
         "cases": [_case_payload(case) for case in result.cases],
         "elapsed_seconds": result.elapsed_seconds,
         "parity_version": result.parity_version,
+        "provenance": result.provenance.model_dump(mode="json") if result.provenance else None,
     }
+
+
+def _provenance_warning(case: CaseResult) -> str | None:
+    if case.provenance is None:
+        return None
+    if case.provenance.verification == "unverified":
+        return "legacy replay has no recorded runtime provenance; this run is not exact"
+    if case.provenance.verification == "drifted":
+        return "runtime provenance drifted; callable execution was blocked"
+    return None
 
 
 def render_json(result: SuiteResult, *, pretty: bool = True) -> str:
@@ -121,6 +133,15 @@ def render_markdown(result: SuiteResult) -> str:
             )
             + " |"
         )
+    warnings = [
+        (case.name, warning)
+        for case in result.cases
+        if (warning := _provenance_warning(case)) is not None
+    ]
+    if warnings:
+        lines.extend(["", "## Provenance warnings", ""])
+        for name, warning in warnings:
+            lines.append(f"- **{name}**: {warning}")
     failed_cases = [case for case in result.cases if case.status is not Status.PASSED]
     if failed_cases:
         lines.extend(["", "## Findings", ""])
@@ -184,6 +205,8 @@ def render_terminal(result: SuiteResult, *, color: bool = False, console: Any | 
         if case.performance and case.performance.speed_ratio is not None:
             line += f", runtime {case.performance.speed_ratio:.2f}x"
         lines.append(line)
+        if warning := _provenance_warning(case):
+            lines.append(f"             warning: {warning}")
         kinds = Counter(
             mismatch.kind.value for failure in case.failures for mismatch in failure.mismatches
         )

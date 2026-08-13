@@ -1,0 +1,235 @@
+version = 1
+artifact_dir = ".parity-skrub"
+fail_fast = false
+
+[[cases]]
+name = "aggregate-numeric-control"
+fixture = "fixtures/baseline_numeric.json"
+tags = ["control", "low-level", "native", "matrix"]
+
+[cases.reference]
+target = "skrub_parity:pandas_aggregate_numeric"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.candidate]
+target = "skrub_parity:polars_aggregate_numeric"
+adapter = "polars"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "aggjoiner-numeric-control"
+fixture = "fixtures/baseline_numeric.json"
+tags = ["control", "public-api", "native", "matrix"]
+
+[cases.reference]
+target = "skrub_parity:pandas_aggjoiner_numeric"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.candidate]
+target = "skrub_parity:polars_aggjoiner_numeric"
+adapter = "polars"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "aggregate-unique-mode-control"
+fixture = "fixtures/unique_mode.json"
+tags = ["control", "low-level", "mode", "native", "matrix"]
+
+[cases.reference]
+target = "skrub_parity:pandas_aggregate_mode"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.candidate]
+target = "skrub_parity:polars_aggregate_mode"
+adapter = "polars"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "aggregate-arrow-null-control"
+fixture = "fixtures/arrow_null.arrow"
+tags = ["control", "low-level", "arrow", "null", "matrix"]
+
+[cases.reference]
+target = "skrub_parity:pandas_aggregate_basic"
+adapter = "pandas"
+pandas_input = "arrow"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.candidate]
+target = "skrub_parity:polars_aggregate_basic"
+adapter = "polars"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "aggregate-null-key-finding"
+fixture = "fixtures/null_group_key.json"
+tags = ["finding", "durable", "low-level", "native", "null", "matrix"]
+
+[cases.reference]
+target = "skrub_parity:pandas_aggregate_basic"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.candidate]
+target = "skrub_parity:polars_aggregate_basic"
+adapter = "polars"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "aggjoiner-tied-mode-finding"
+fixture = "fixtures/tied_mode.json"
+tags = ["finding", "durable", "public-api", "native", "mode", "matrix"]
+
+[cases.reference]
+target = "skrub_parity:pandas_aggjoiner_mode"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.candidate]
+target = "skrub_parity:polars_aggjoiner_mode"
+adapter = "polars"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "aggjoiner-ieee-nan-finding"
+fixture = "fixtures/ieee_nan.arrow"
+tags = ["finding", "version-sensitive", "public-api", "native", "nan", "matrix"]
+
+[cases.reference]
+target = "skrub_parity:pandas_aggjoiner_numeric"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.candidate]
+target = "skrub_parity:polars_aggjoiner_numeric"
+adapter = "polars"
+record_distributions = ["skrub", "scikit-learn"]
+environment = { SKB_DATA_DIRECTORY = "/tmp/parity-skrub-data", MPLCONFIGDIR = "/tmp/parity-mpl-cache" }
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = false
+
+[cases.generation]
+max_examples = 1
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false

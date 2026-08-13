@@ -5,14 +5,17 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from parity.models import (
+    CaseProvenance,
     CaseResult,
     Diagnosis,
     ExampleResult,
     Mismatch,
     MismatchKind,
     Status,
+    SuiteProvenance,
     SuiteResult,
 )
+from parity.provenance import DistributionProvenance, RuntimeProvenance
 from parity.reporting import (
     render_github_summary,
     render_json,
@@ -26,6 +29,16 @@ from parity.reporting import (
 
 
 def _suite(tmp_path: Path) -> SuiteResult:
+    runtime = RuntimeProvenance(
+        python_implementation="CPython",
+        python_version="3.12.7",
+        platform_system="Linux",
+        platform_machine="x86_64",
+        parity_version="0.1.0",
+        distributions=(
+            DistributionProvenance(name="skrub", status="installed", version="0.11.dev0"),
+        ),
+    )
     failure = ExampleResult(
         source="fixture /private/customer/orders.parquet",
         status=Status.FAILED,
@@ -58,23 +71,43 @@ def _suite(tmp_path: Path) -> SuiteResult:
                         evidence=["A minimized null differs."],
                     )
                 ],
+                provenance=CaseProvenance(reference=runtime, candidate=runtime),
                 elapsed_seconds=0.25,
             ),
             CaseResult(name="customers", status=Status.PASSED, examples_run=5, elapsed_seconds=0.1),
         ],
         elapsed_seconds=0.35,
+        provenance=SuiteProvenance(orchestrator=runtime, config_sha256="a" * 64),
     )
 
 
 def test_json_report_is_machine_readable_and_elides_values(tmp_path: Path) -> None:
     rendered = render_json(_suite(tmp_path))
     payload = json.loads(rendered)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["status"] == "failed"
     assert payload["cases"][0]["failures"][0]["mismatch_counts"] == {"value": 1}
+    assert payload["provenance"]["config_sha256"] == "a" * 64
+    assert payload["cases"][0]["provenance"]["reference"]["distributions"][0] == {
+        "name": "skrub",
+        "status": "installed",
+        "version": "0.11.dev0",
+    }
     assert "secret@example.test" not in rendered
     assert "/private/customer" not in rendered
     assert str(tmp_path) not in rendered
+
+
+def test_legacy_replay_provenance_is_visibly_unverified(tmp_path: Path) -> None:
+    suite = _suite(tmp_path)
+    assert suite.cases[0].provenance is not None
+    suite.cases[0].provenance.verification = "unverified"
+
+    markdown = render_markdown(suite)
+    terminal = render_terminal(suite)
+
+    assert "not exact" in markdown
+    assert "not exact" in terminal
 
 
 def test_human_reports_show_counts_not_compared_data(tmp_path: Path) -> None:

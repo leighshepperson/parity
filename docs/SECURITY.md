@@ -41,6 +41,12 @@ Parity does not scrape environment variables into reports. Python code executed 
 same effective access as its worker process and can read inherited credentials. Isolation is not a
 permission boundary.
 
+Runtime provenance is allowlisted rather than discovered broadly. Reports may contain Python,
+platform and installed-version strings for Parity's core dependencies plus distributions explicitly
+named in `record_distributions`. They never contain environment values, executable paths, cwd,
+hostnames, command lines or a complete installed-package inventory. Distribution metadata that
+cannot be represented by the bounded safe contract is reported only as unavailable.
+
 ## Supply chain
 
 Releases are built in GitHub Actions, checked with `twine`, attested and published through PyPI

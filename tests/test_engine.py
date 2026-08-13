@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from parity.execution import ExecutionOutcome, Observation
 from parity.models import (
     CallableSpec,
     CaseConfig,
+    CaseProvenance,
     ColumnSchema,
     ComparisonPolicy,
     ExampleResult,
@@ -23,11 +26,14 @@ from parity.models import (
     GenerationConfig,
     Mismatch,
     MismatchKind,
+    PandasInput,
     ParityConfig,
     PerformanceConfig,
     RunMetrics,
     Status,
 )
+from parity.provenance import collect_runtime_provenance
+from parity.reporting import render_terminal
 
 
 def identity(frame: pd.DataFrame) -> pd.DataFrame:
@@ -142,6 +148,65 @@ def test_live_engine_accepts_explicit_cross_engine_adapters(tmp_path: Path) -> N
     assert result.status is Status.PASSED
 
 
+def test_live_engine_rejects_invalid_distribution_names_before_execution(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="distribution names"):
+        run_live(
+            identity,
+            identity,
+            fixture=pd.DataFrame({"x": [1]}),
+            schema=None,
+            comparison=ComparisonPolicy(),
+            generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+            performance=PerformanceConfig(enabled=False),
+            artifact_dir=tmp_path,
+            reference_distributions=["bad/name"],
+            candidate_distributions=["bad/name"],
+        )
+
+
+def test_live_engine_propagates_independent_pandas_input_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[str, PandasInput]] = []
+
+    def execute(
+        function: Any,
+        _table: Any,
+        *,
+        adapter: str = "auto",
+        pandas_input: PandasInput = "arrow",
+        record_distributions: Sequence[str] = (),
+    ) -> Observation:
+        assert adapter == "pandas"
+        seen.append((function.__name__, pandas_input))
+        assert not record_distributions
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            metrics=RunMetrics(duration_seconds=0),
+            value={"same": True},
+            has_value=True,
+        )
+
+    monkeypatch.setattr(engine, "execute_callable_current", execute)
+    result = run_live(
+        identity,
+        corrupt_everything,
+        fixture=pd.DataFrame({"x": [1, 2]}),
+        schema=None,
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+        performance=PerformanceConfig(enabled=False),
+        artifact_dir=tmp_path,
+        reference_adapter="pandas",
+        candidate_adapter="pandas",
+        reference_pandas_input="arrow",
+        candidate_pandas_input="native",
+    )
+
+    assert result.status is Status.PASSED
+    assert set(seen) == {("identity", "arrow"), ("corrupt_everything", "native")}
+
+
 def test_live_arrow_fixture_chunk_layout_matches_replay(tmp_path: Path) -> None:
     chunked = pa.Table.from_batches([pa.record_batch({"x": [1]}), pa.record_batch({"x": [2]})])
     assert chunked.column(0).num_chunks == 2
@@ -176,15 +241,26 @@ def test_live_importable_failure_preserves_contract_for_replay(tmp_path: Path) -
         artifact_dir=tmp_path,
         reference_adapter="pandas",
         candidate_adapter="pandas",
+        reference_pandas_input="arrow",
+        candidate_pandas_input="native",
     )
     artifact = result.cases[0].failures[0].artifact
 
     assert artifact is not None
-    replay_contract = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))["case"]
+    replay_payload = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    replay_contract = replay_payload["case"]
+    assert replay_payload["version"] == 2
+    assert replay_payload["expected_runtime"]["reference"]["python_version"]
+    assert len(replay_payload["config_sha256"]) == 64
     assert replay_contract["reference"]["adapter"] == "pandas"
     assert replay_contract["candidate"]["adapter"] == "pandas"
+    assert replay_contract["reference"]["pandas_input"] == "arrow"
+    assert replay_contract["candidate"]["pandas_input"] == "native"
     assert replay_contract["comparison"]["dtype"] == "strict"
-    assert replay_artifact(artifact).status is Status.FAILED
+    replayed = replay_artifact(artifact)
+    assert replayed.status is Status.FAILED
+    assert replayed.cases[0].provenance is not None
+    assert replayed.cases[0].provenance.verification == "verified"
 
 
 def test_live_bound_instance_method_is_not_claimed_as_replayable(tmp_path: Path) -> None:
@@ -238,9 +314,18 @@ def test_generated_infrastructure_error_stops_without_shrinking(
 ) -> None:
     calls = 0
 
-    def execute(function: Any, _table: Any, *, adapter: str = "auto") -> Observation:
+    def execute(
+        function: Any,
+        _table: Any,
+        *,
+        adapter: str = "auto",
+        pandas_input: PandasInput = "arrow",
+        record_distributions: Sequence[str] = (),
+    ) -> Observation:
         nonlocal calls
         assert adapter == "auto"
+        assert pandas_input == "arrow"
+        assert not record_distributions
         calls += 1
         return Observation(
             outcome=(
@@ -358,6 +443,63 @@ def record_process(frame, log_path):
     assert all(len(counts) >= 3 for counts in by_process.values())
 
 
+def test_configured_campaign_records_each_worker_distribution_version(tmp_path: Path) -> None:
+    (tmp_path / "provenance_transform.py").write_text(
+        "def identity(frame):\n    return frame.copy()\n", encoding="utf-8"
+    )
+    environments: list[Path] = []
+    for side, version in (("reference", "1.0"), ("candidate", "2.0")):
+        root = tmp_path / side
+        metadata = root / f"demo_target-{version}.dist-info"
+        metadata.mkdir(parents=True)
+        (metadata / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: demo-target\nVersion: {version}\n",
+            encoding="utf-8",
+        )
+        environments.append(root)
+    reference_root, candidate_root = environments
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="separate-runtime-provenance",
+                reference=CallableSpec(
+                    target="provenance_transform:identity",
+                    adapter="pandas",
+                    workdir=tmp_path,
+                    environment={"PYTHONPATH": str(reference_root)},
+                    record_distributions=["demo-target"],
+                ),
+                candidate=CallableSpec(
+                    target="provenance_transform:identity",
+                    adapter="pandas",
+                    workdir=tmp_path,
+                    environment={"PYTHONPATH": str(candidate_root)},
+                    record_distributions=["demo-target"],
+                ),
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+                    min_rows=1,
+                    max_rows=1,
+                ),
+                generation=GenerationConfig(adversarial_examples=False, max_examples=1),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    provenance = result.cases[0].provenance
+    assert provenance is not None
+    assert provenance.reference is not None
+    assert provenance.candidate is not None
+    reference_versions = {item.name: item.version for item in provenance.reference.distributions}
+    candidate_versions = {item.name: item.version for item in provenance.candidate.distributions}
+    assert reference_versions["demo-target"] == "1.0"
+    assert candidate_versions["demo-target"] == "2.0"
+
+
 def test_artifact_replay_resolves_import_root_from_invocation_cwd(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -388,7 +530,102 @@ def test_artifact_replay_resolves_import_root_from_invocation_cwd(
     result = replay_artifact(artifact)
 
     assert result.status is Status.PASSED
+    assert result.cases[0].provenance is not None
+    assert result.cases[0].provenance.verification == "unverified"
+    assert "not exact" in render_terminal(result)
     assert not (artifact / "replay-output").exists()
+
+
+def test_v2_replay_runtime_drift_blocks_both_callables_before_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "invoked.txt"
+    module = tmp_path / "drift_transform.py"
+    module.write_text(
+        "from pathlib import Path\n"
+        f"MARKER = Path({str(marker)!r})\n"
+        "MARKER.write_text('imported', encoding='utf-8')\n"
+        "def touch(frame):\n"
+        "    MARKER.write_text('invoked', encoding='utf-8')\n"
+        "    return frame.copy()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    runtime = collect_runtime_provenance()
+    case = CaseConfig(
+        name="runtime-drift",
+        reference=CallableSpec(target="drift_transform:touch", adapter="pandas", workdir=tmp_path),
+        candidate=CallableSpec(target="drift_transform:touch", adapter="pandas", workdir=tmp_path),
+        fixture=tmp_path / "unused.arrow",
+        generation=GenerationConfig(adversarial_examples=False, max_examples=1),
+        performance=PerformanceConfig(enabled=False),
+    )
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        case,
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="b" * 64,
+    )
+    replay_path = artifact / "replay.json"
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    replay["expected_runtime"]["reference"]["python_version"] = "0.0.0"
+    replay_path.write_text(json.dumps(replay, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    replay_content = replay_path.read_bytes()
+    manifest_path = artifact / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["replay.json"] = {
+        "sha256": hashlib.sha256(replay_content).hexdigest(),
+        "bytes": len(replay_content),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    result = replay_artifact(artifact)
+
+    assert result.status is Status.ERROR
+    assert result.cases[0].provenance is not None
+    assert result.cases[0].provenance.verification == "drifted"
+    assert result.cases[0].failures[0].source == "replay:provenance"
+    assert not marker.exists()
+
+
+def test_v2_replay_keeps_verified_provenance_when_callable_crashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "crash_transform.py").write_text(
+        "import os\n"
+        "def identity(frame):\n    return frame.copy()\n"
+        "def crash(_frame):\n    os._exit(9)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    runtime = collect_runtime_provenance()
+    case = CaseConfig(
+        name="verified-crash",
+        reference=CallableSpec(
+            target="crash_transform:identity", adapter="pandas", workdir=tmp_path
+        ),
+        candidate=CallableSpec(target="crash_transform:crash", adapter="pandas", workdir=tmp_path),
+        fixture=tmp_path / "unused.arrow",
+        generation=GenerationConfig(adversarial_examples=False, max_examples=1),
+        performance=PerformanceConfig(enabled=False),
+    )
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        case,
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.ERROR),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="c" * 64,
+    )
+
+    result = replay_artifact(artifact)
+
+    assert result.status is Status.ERROR
+    assert result.cases[0].provenance is not None
+    assert result.cases[0].provenance.verification == "verified"
+    assert "runtime provenance drifted" not in render_terminal(result)
 
 
 @pytest.mark.parametrize("unsafe", ["../outside", "nested/../../outside"])

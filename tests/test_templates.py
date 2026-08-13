@@ -23,6 +23,8 @@ def test_generated_config_parses_and_validates(tmp_path: Path) -> None:
     raw = tomllib.loads(rendered)
     assert raw["version"] == 1
     assert raw["cases"][0]["schema"]["columns"][0]["name"] == "quantity"
+    assert raw["cases"][0]["reference"]["record_distributions"] == []
+    assert raw["cases"][0]["candidate"]["pandas_input"] == "arrow"
 
     path = tmp_path / "nested" / "parity.toml"
     path.parent.mkdir()

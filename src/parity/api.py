@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,7 @@ from parity.models import (
     ComparisonPolicy,
     FrameSchema,
     GenerationConfig,
+    PandasInput,
     PerformanceConfig,
     SuiteResult,
 )
@@ -38,11 +39,19 @@ def verify(
     artifact_dir: str | Path = ".parity",
     reference_adapter: AdapterName = "auto",
     candidate_adapter: AdapterName = "auto",
+    reference_pandas_input: PandasInput = "arrow",
+    candidate_pandas_input: PandasInput = "arrow",
+    reference_distributions: Sequence[str] = (),
+    candidate_distributions: Sequence[str] = (),
 ) -> SuiteResult:
     """Verify two live callables without requiring a configuration file.
 
     Explicit adapters are recommended when the functions are unannotated or
-    accept different dataframe implementations.
+    accept different dataframe implementations. Pandas inputs use Arrow-backed
+    extension dtypes by default; select ``native`` materialization only when a
+    callable depends on pandas' conventional NumPy/object dtype behavior.
+    ``reference_distributions`` and ``candidate_distributions`` add explicitly
+    named target-library versions to each side's runtime provenance.
     """
 
     from parity.engine import run_live
@@ -58,6 +67,10 @@ def verify(
         artifact_dir=Path(artifact_dir),
         reference_adapter=reference_adapter,
         candidate_adapter=candidate_adapter,
+        reference_pandas_input=reference_pandas_input,
+        candidate_pandas_input=candidate_pandas_input,
+        reference_distributions=reference_distributions,
+        candidate_distributions=candidate_distributions,
     )
 
 

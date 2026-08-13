@@ -42,11 +42,27 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 |---|---:|---:|---|
 | `target` | string | required | Import target `package.module:function`. |
 | `adapter` | enum | `auto` | `auto`, `pandas`, `polars` or `arrow`. |
+| `pandas_input` | `arrow` / `native` | `arrow` | Pandas input materialization; ignored when the resolved adapter is not pandas. |
 | `python` | path | current Python | Interpreter for isolated execution. |
 | `workdir` | path | config directory | Working directory and import root. |
 | `environment` | string table | `{}` | Literal environment overrides for the worker. |
+| `record_distributions` | string array | `[]` | Additional distribution versions to record inside this worker. |
 
 Paths may be relative. Do not commit secrets in `environment`.
+
+Parity always records its own version plus Python, platform, Hypothesis, NumPy, pandas, Polars and
+PyArrow provenance. `record_distributions` adds up to 64 explicitly named Python distributions,
+using distribution names rather than import names (for example `scikit-learn`, not `sklearn`).
+Names are normalized and duplicates are errors. This field only reads installed metadata; it never
+installs or imports the named distribution.
+
+`pandas_input = "arrow"` converts the canonical input to pandas with Arrow extension dtypes. It
+preserves distinctions such as nullable integers and Arrow null versus a valid IEEE NaN, and is the
+stable default. `pandas_input = "native"` uses PyArrow's default pandas conversion for legacy code
+that expects conventional NumPy/object dtypes. Native conversion is pandas-version-dependent and
+can widen nullable integers or collapse null and NaN into the same missing value. This setting
+changes only the callable's input; returned pandas objects still use Parity's normal Arrow
+canonicalization.
 
 ## Frame schema
 
@@ -90,6 +106,7 @@ materialising Arrow inputs. Bounds must be representable by the chosen type.
 | `names` | `strict` / `case_insensitive` | `strict` | Column-name comparison. |
 | `null_equal` | boolean | `true` | Treat nulls at matching positions as equal. |
 | `nan_equal` | boolean | `true` | Treat IEEE NaNs at matching positions as equal. |
+| `null_nan_equal` | boolean | `false` | Treat a null and an IEEE NaN at matching positions as equal. |
 | `signed_zero_equal` | boolean | `true` | Treat `-0.0` and `0.0` as equal. |
 | `check_exceptions` | boolean | `true` | Compare returned/raised state and exception contract. |
 | `check_input_mutation` | boolean | `true` | Detect changes to callable input. |

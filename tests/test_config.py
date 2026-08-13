@@ -16,6 +16,8 @@ fixture = "fixtures/orders.csv"
 
 [cases.reference]
 target = "transforms:legacy"
+pandas_input = "native"
+record_distributions = ["Scikit_Learn", "skrub"]
 
 [cases.candidate]
 target = "transforms:rewritten"
@@ -33,6 +35,9 @@ def test_load_config_resolves_paths_from_config_directory(tmp_path: Path) -> Non
     assert config.artifact_dir == (config_path.parent / "artifacts").resolve()
     assert config.cases[0].fixture == (config_path.parent / "fixtures/orders.csv").resolve()
     assert config.cases[0].reference.workdir == config_path.parent.resolve()
+    assert config.cases[0].reference.pandas_input == "native"
+    assert config.cases[0].reference.record_distributions == ["scikit-learn", "skrub"]
+    assert config.cases[0].candidate.pandas_input == "arrow"
 
 
 def test_load_config_reports_toml_error(tmp_path: Path) -> None:

@@ -15,9 +15,16 @@ def test_diagnoses_missing_value_dtype_difference() -> None:
     assert [item.code for item in diagnoses] == ["missing-values", "dtype-resolution"]
 
 
-def test_diagnoses_row_order() -> None:
+def test_diagnoses_unmatched_row_content_without_claiming_order() -> None:
     diagnoses = diagnose([Mismatch(kind=MismatchKind.ROW, message="row 0 differs", path="[0]")])
-    assert diagnoses[0].code == "row-order"
+    assert [item.code for item in diagnoses] == ["row-content"]
+
+
+def test_diagnoses_explicit_row_order_evidence() -> None:
+    diagnoses = diagnose(
+        [Mismatch(kind=MismatchKind.VALUE, message="row order differs", path="$result")]
+    )
+    assert [item.code for item in diagnoses] == ["row-order"]
 
 
 def test_falls_back_to_generic_diagnosis() -> None:

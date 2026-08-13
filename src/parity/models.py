@@ -9,7 +9,15 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic import JsonValue as JsonValue
 
+from parity._version import __version__
+from parity.provenance import (
+    MAX_RECORDED_DISTRIBUTIONS,
+    RuntimeProvenance,
+    normalize_distribution_names,
+)
+
 AdapterName = Literal["auto", "pandas", "polars", "arrow"]
+PandasInput = Literal["arrow", "native"]
 
 
 class StrictModel(BaseModel):
@@ -91,9 +99,21 @@ class CallableSpec(StrictModel):
 
     target: str = Field(pattern=r"^[A-Za-z_][\w.]*:[A-Za-z_][\w.]*$")
     adapter: AdapterName = "auto"
+    pandas_input: PandasInput = "arrow"
     python: Path | None = None
     workdir: Path | None = None
     environment: dict[str, str] = Field(default_factory=dict)
+    record_distributions: list[str] = Field(
+        default_factory=list, max_length=MAX_RECORDED_DISTRIBUTIONS
+    )
+
+    @field_validator("record_distributions")
+    @classmethod
+    def normalize_recorded_distributions(cls, names: list[str]) -> list[str]:
+        try:
+            return list(normalize_distribution_names(names))
+        except (TypeError, ValueError) as error:
+            raise ValueError(str(error)) from error
 
 
 class ComparisonPolicy(StrictModel):
@@ -105,6 +125,7 @@ class ComparisonPolicy(StrictModel):
     names: Literal["strict", "case_insensitive"] = "strict"
     null_equal: bool = True
     nan_equal: bool = True
+    null_nan_equal: bool = False
     signed_zero_equal: bool = True
     check_exceptions: bool = True
     check_input_mutation: bool = True
@@ -226,6 +247,14 @@ class ExampleResult(StrictModel):
     candidate_metrics: RunMetrics | None = None
 
 
+class CaseProvenance(StrictModel):
+    """Runtime identities observed on the two sides of one campaign."""
+
+    reference: RuntimeProvenance | None = None
+    candidate: RuntimeProvenance | None = None
+    verification: Literal["captured", "verified", "unverified", "drifted"] = "captured"
+
+
 class CaseResult(StrictModel):
     name: str
     status: Status
@@ -235,14 +264,23 @@ class CaseResult(StrictModel):
     failures: list[ExampleResult] = Field(default_factory=list)
     diagnoses: list[Diagnosis] = Field(default_factory=list)
     performance: PerformanceResult | None = None
+    provenance: CaseProvenance | None = None
     elapsed_seconds: float = Field(default=0, ge=0)
+
+
+class SuiteProvenance(StrictModel):
+    """Orchestrator runtime and data-safe effective-configuration fingerprint."""
+
+    orchestrator: RuntimeProvenance
+    config_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class SuiteResult(StrictModel):
     status: Status
     cases: list[CaseResult]
     elapsed_seconds: float = Field(default=0, ge=0)
-    parity_version: str = "0.1.0"
+    parity_version: str = Field(default_factory=lambda: __version__)
+    provenance: SuiteProvenance | None = None
 
     @property
     def passed(self) -> bool:

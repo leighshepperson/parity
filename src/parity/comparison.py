@@ -116,6 +116,12 @@ def _value_mismatches(
 
     reference_null = is_null(reference)
     candidate_null = is_null(candidate)
+    reference_nan = is_nan(reference)
+    candidate_nan = is_nan(candidate)
+    if policy.null_nan_equal and (
+        (reference_null and candidate_nan) or (reference_nan and candidate_null)
+    ):
+        return []
     if reference_null or candidate_null:
         if reference_null and candidate_null and policy.null_equal:
             return []
@@ -389,7 +395,7 @@ def _dtype_mismatch(
     else:
         families = {reference.family, candidate.family}
         values_are_all_null = all(
-            is_null(value)
+            is_null(value) or (policy.null_nan_equal and is_nan(value))
             for value in (*getattr(reference, "values", ()), *getattr(candidate, "values", ()))
         )
         equal = (

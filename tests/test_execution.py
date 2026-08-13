@@ -19,7 +19,7 @@ from parity.execution import (
     import_callable,
     redact_text,
 )
-from parity.models import CallableSpec
+from parity.models import CallableSpec, PandasInput
 
 
 @pytest.fixture
@@ -52,6 +52,16 @@ def arrow_identity(frame: pa.Table):
 
 def scalar(frame):
     return {'rows': len(frame), 'ok': True}
+
+def pandas_input_profile(frame):
+    return {
+        'integer_dtype': str(frame['integer'].dtype),
+        'floating_dtype': str(frame['floating'].dtype),
+        'floating_isna': [bool(value) for value in frame['floating'].isna().tolist()],
+        'string_dtype': str(frame['text'].dtype),
+        'boolean_dtype': str(frame['flag'].dtype),
+        'timestamp_dtype': str(frame['when'].dtype),
+    }
 
 def explode(frame):
     raise ValueError('/private/customer/input.csv API_TOKEN=abc')
@@ -97,12 +107,30 @@ def _table() -> pa.Table:
     return pa.table({"x": [1, 2], "name": ["a", "b"]})
 
 
-def _isolated_spec(directory: Path, target: str, adapter: str = "auto") -> CallableSpec:
+def _pandas_edge_table() -> pa.Table:
+    return pa.table(
+        {
+            "integer": pa.array([1, None], type=pa.int64()),
+            "floating": pa.array([None, float("nan")], type=pa.float64(), from_pandas=False),
+            "text": pa.array(["a", None], type=pa.string()),
+            "flag": pa.array([True, None], type=pa.bool_()),
+            "when": pa.array([0, None], type=pa.timestamp("us")),
+        }
+    )
+
+
+def _isolated_spec(
+    directory: Path,
+    target: str,
+    adapter: str = "auto",
+    pandas_input: PandasInput = "arrow",
+) -> CallableSpec:
     source = Path(__file__).parents[1] / "src"
     pythonpath = os.pathsep.join([str(directory), str(source), os.environ.get("PYTHONPATH", "")])
     return CallableSpec(
         target=target,
         adapter=adapter,
+        pandas_input=pandas_input,
         python=Path(sys.executable),
         workdir=directory,
         environment={"PYTHONPATH": pythonpath},
@@ -191,6 +219,68 @@ def test_pandas_output_preserves_nan_distinct_from_null() -> None:
     assert column[2].as_py() == 1
 
 
+def test_pandas_input_materialization_is_explicit_and_defaults_to_arrow(
+    transform_module: Path,
+) -> None:
+    target = "parity_test_transforms:pandas_input_profile"
+    arrow = execute_current(CallableSpec(target=target, adapter="pandas"), _pandas_edge_table())
+    native = execute_current(
+        CallableSpec(target=target, adapter="pandas", pandas_input="native"),
+        _pandas_edge_table(),
+    )
+
+    assert arrow.succeeded
+    assert native.succeeded
+    assert not arrow.mutated_input
+    assert not native.mutated_input
+    assert arrow.value == {
+        "integer_dtype": "int64[pyarrow]",
+        "floating_dtype": "double[pyarrow]",
+        "floating_isna": [True, False],
+        "string_dtype": "string[pyarrow]",
+        "boolean_dtype": "bool[pyarrow]",
+        "timestamp_dtype": "timestamp[us][pyarrow]",
+    }
+    assert native.value is not None
+    assert native.value["integer_dtype"] == "float64"
+    assert native.value["floating_dtype"] == "float64"
+    assert native.value["floating_isna"] == [True, True]
+    assert "pyarrow" not in native.value["string_dtype"]
+    assert native.value["boolean_dtype"] == "object"
+    assert native.value["timestamp_dtype"].startswith("datetime64[")
+
+    live = execute_callable_current(
+        lambda frame: str(frame["integer"].dtype),
+        _pandas_edge_table(),
+        adapter="pandas",
+        pandas_input="native",
+    )
+    assert live.succeeded
+    assert live.value == "float64"
+
+
+def test_native_pandas_input_propagates_to_disposable_and_session_workers(
+    transform_module: Path,
+) -> None:
+    spec = _isolated_spec(
+        transform_module,
+        "parity_test_transforms:pandas_input_profile",
+        adapter="pandas",
+        pandas_input="native",
+    )
+
+    disposable = execute_isolated(spec, _pandas_edge_table(), timeout_seconds=5)
+    with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        persistent = session.execute(_pandas_edge_table())
+
+    assert disposable.succeeded
+    assert persistent.succeeded
+    assert disposable.value == persistent.value
+    assert disposable.value is not None
+    assert disposable.value["integer_dtype"] == "float64"
+    assert disposable.value["floating_isna"] == [True, True]
+
+
 def test_mutation_exception_and_json_return_are_observed(transform_module: Path) -> None:
     mutated = execute_current(
         CallableSpec(target="parity_test_transforms:pandas_mutate", adapter="pandas"), _table()
@@ -218,8 +308,10 @@ def test_mutation_exception_and_json_return_are_observed(transform_module: Path)
 
 
 def test_execute_isolated_round_trips_and_honours_workdir(transform_module: Path) -> None:
+    spec = _isolated_spec(transform_module, "parity_test_transforms:polars_add", adapter="polars")
+    spec.record_distributions = ["definitely-not-installed-parity-probe"]
     observation = execute_isolated(
-        _isolated_spec(transform_module, "parity_test_transforms:polars_add", adapter="polars"),
+        spec,
         _table(),
         static_args=[7],
         timeout_seconds=5,
@@ -228,6 +320,10 @@ def test_execute_isolated_round_trips_and_honours_workdir(transform_module: Path
     assert observation.table is not None
     assert observation.table.column("x").to_pylist() == [8, 9]
     assert observation.metrics.peak_rss_bytes is None or observation.metrics.peak_rss_bytes > 0
+    assert observation.runtime is not None
+    recorded = {item.name: item for item in observation.runtime.distributions}
+    assert recorded["definitely-not-installed-parity-probe"].status == "missing"
+    assert {"numpy", "pandas", "polars", "pyarrow"}.issubset(recorded)
 
 
 def test_isolated_workers_apply_relative_workdir_once(
@@ -332,6 +428,31 @@ def test_isolated_session_malformed_response_fails_closed(
     assert malformed_response.outcome is ExecutionOutcome.CRASHED
     assert malformed_response.exception is not None
     assert malformed_response.exception.type == "WorkerProtocolError"
+    assert unavailable.outcome is ExecutionOutcome.CRASHED
+    assert unavailable.exception is not None
+    assert unavailable.exception.type == "WorkerSessionUnavailableError"
+
+
+def test_isolated_session_malformed_runtime_fails_closed(
+    transform_module: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_loads = __import__("parity.execution", fromlist=["json"]).json.loads
+
+    def malformed_runtime(payload: str):
+        parsed = original_loads(payload)
+        if isinstance(parsed, dict) and "outcome" in parsed:
+            parsed["runtime"] = {"python_version": "/private/unsafe"}
+        return parsed
+
+    monkeypatch.setattr("parity.execution.json.loads", malformed_runtime)
+    spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
+    with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        malformed = session.execute(_table())
+        unavailable = session.execute(_table())
+
+    assert malformed.outcome is ExecutionOutcome.CRASHED
+    assert malformed.exception is not None
+    assert malformed.exception.type == "WorkerProtocolError"
     assert unavailable.outcome is ExecutionOutcome.CRASHED
     assert unavailable.exception is not None
     assert unavailable.exception.type == "WorkerSessionUnavailableError"

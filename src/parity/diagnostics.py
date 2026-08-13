@@ -85,7 +85,7 @@ def diagnose(mismatches: list[Mismatch]) -> list[Diagnosis]:
             "high",
             "The outputs have different dtype families or concrete dtypes.",
         )
-    if MismatchKind.ROW in kinds or re.search(r"\b(?:order|ordering|row)\b", text):
+    if re.search(r"\b(?:row order|ordering differs|different row positions)\b", text):
         add(
             "row-order",
             "Row ordering differs",
@@ -94,6 +94,15 @@ def diagnose(mismatches: list[Mismatch]) -> list[Diagnosis]:
             "order-insensitive comparison with stable keys.",
             "medium",
             "The same or similar values occur at different row positions.",
+        )
+    if MismatchKind.ROW in kinds:
+        add(
+            "row-content",
+            "Row content or multiplicity differs",
+            "One output contains a row for which the other has no equivalent. Check filtering, "
+            "grouping-key treatment, join cardinality and duplicate preservation.",
+            "high",
+            "An order-insensitive comparison found an unmatched row.",
         )
     if MismatchKind.COLUMN in kinds or MismatchKind.SCHEMA in kinds:
         add(

@@ -22,7 +22,7 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 
 from parity.execution import Observation, _write_arrow, redact_text
-from parity.models import CallableSpec, CaseConfig, ExampleResult
+from parity.models import CallableSpec, CaseConfig, CaseProvenance, ExampleResult
 
 _SECRET_KEY = re.compile(
     r"(?i)(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|credential)"
@@ -85,6 +85,8 @@ def _spec_for_replay(
     return {
         "target": spec.target,
         "adapter": spec.adapter,
+        "pandas_input": spec.pandas_input,
+        "record_distributions": spec.record_distributions,
         # Replays inherit environment from the caller.  Recording even innocent
         # values makes accidental credential persistence much more likely.
         "python": python,
@@ -144,8 +146,13 @@ class ArtifactStore:
         candidate: CallableSpec | None = None,
         source: str | None = None,
         seed: int | None = None,
+        runtime_provenance: CaseProvenance | None = None,
+        config_sha256: str | None = None,
     ) -> Path:
         """Persist one minimal failing input and return its campaign directory."""
+
+        if config_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", config_sha256):
+            raise ValueError("config_sha256 must be a lowercase SHA-256 digest")
 
         case = case_name
         name = case.name if isinstance(case, CaseConfig) else case
@@ -172,8 +179,14 @@ class ArtifactStore:
                 + "\n",
                 encoding="utf-8",
             )
-            replay = {
-                "version": 1,
+            complete_runtime = bool(
+                runtime_provenance is not None
+                and runtime_provenance.reference is not None
+                and runtime_provenance.candidate is not None
+                and config_sha256 is not None
+            )
+            replay: dict[str, Any] = {
+                "version": 2 if complete_runtime else 1,
                 "command": ["parity", "replay", "<artifact-path>"],
                 "working_directory": "original invocation directory",
                 "input": "input.arrow",
@@ -186,6 +199,13 @@ class ArtifactStore:
                 ),
                 "environment": "inherited; values are never stored in artifacts",
             }
+            if complete_runtime:
+                replay["expected_runtime"] = (
+                    runtime_provenance.model_dump(mode="json")
+                    if runtime_provenance is not None
+                    else None
+                )
+                replay["config_sha256"] = config_sha256
             replay_path.write_text(
                 json.dumps(replay, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )

@@ -23,6 +23,34 @@ class PandasAdapter(DataFrameAdapter):
             value = value.to_frame(name=name)
         if not isinstance(value, pd.DataFrame):
             raise AdapterError(f"pandas adapter cannot handle {type(value).__name__}")
+        # Some pandas reductions legitimately place an ExtensionArray in a
+        # single object cell (for example ``Series.mode`` when several values
+        # tie).  Arrow understands the corresponding Python list, but cannot
+        # infer a nested type directly from pandas' ExtensionArray scalar.
+        # Normalize only those nested scalars; ordinary extension-typed
+        # columns still use pandas' public Arrow conversion unchanged.
+        nested_columns: list[tuple[int, list[Any]]] = []
+        for position in range(value.shape[1]):
+            source = value.iloc[:, position]
+            if source.dtype != object:
+                continue
+            normalized: list[Any] = []
+            changed = False
+            for item in source.tolist():
+                if isinstance(item, pd.api.extensions.ExtensionArray):
+                    normalized.append(item.tolist())
+                    changed = True
+                else:
+                    normalized.append(item)
+            if changed:
+                nested_columns.append((position, normalized))
+        if nested_columns:
+            value = value.copy()
+            for position, normalized in nested_columns:
+                value.isetitem(
+                    position,
+                    pd.Series(normalized, index=value.index, dtype=object),
+                )
         # Indexes are intentionally not implicit data in a cross-engine check.
         table = pa.Table.from_pandas(value, preserve_index=False).combine_chunks()
         # Arrow's pandas conversion normally treats IEEE NaN as a null marker.

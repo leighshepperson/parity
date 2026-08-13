@@ -1,0 +1,861 @@
+{
+  "cases": [
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [],
+      "elapsed_seconds": 2.260150871996302,
+      "examples_run": 2,
+      "failures": [],
+      "generated_examples": 1,
+      "name": "aggregate-numeric-control",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "passed"
+    },
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [],
+      "elapsed_seconds": 2.1780429759965045,
+      "examples_run": 2,
+      "failures": [],
+      "generated_examples": 1,
+      "name": "aggjoiner-numeric-control",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "passed"
+    },
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [],
+      "elapsed_seconds": 2.1512345139999525,
+      "examples_run": 2,
+      "failures": [],
+      "generated_examples": 1,
+      "name": "aggregate-unique-mode-control",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "passed"
+    },
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [],
+      "elapsed_seconds": 2.3435716390013113,
+      "examples_run": 2,
+      "failures": [],
+      "generated_examples": 1,
+      "name": "aggregate-arrow-null-control",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "passed"
+    },
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [
+        {
+          "code": "missing-values",
+          "confidence": "high",
+          "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+          "evidence": [
+            "The minimized difference contains a missing value."
+          ],
+          "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+          "title": "Missing-value semantics differ"
+        },
+        {
+          "code": "row-content",
+          "confidence": "high",
+          "documentation_url": null,
+          "evidence": [
+            "An order-insensitive comparison found an unmatched row."
+          ],
+          "explanation": "One output contains a row for which the other has no equivalent. Check filtering, grouping-key treatment, join cardinality and duplicate preservation.",
+          "title": "Row content or multiplicity differs"
+        }
+      ],
+      "elapsed_seconds": 2.3287933009996777,
+      "examples_run": 1,
+      "failures": [
+        {
+          "artifact": ".parity-skrub/aggregate-null-key-finding/20260813T170959.258450Z-f40637763a85",
+          "candidate_metrics": {
+            "duration_seconds": 1.6847347340008128,
+            "iterations": 1,
+            "peak_rss_bytes": 219537408
+          },
+          "mismatch_counts": {
+            "row": 1,
+            "shape": 1
+          },
+          "reference_metrics": {
+            "duration_seconds": 1.5268021810043138,
+            "iterations": 1,
+            "peak_rss_bytes": 219537408
+          },
+          "source": "adversarial:fixture",
+          "status": "failed"
+        }
+      ],
+      "generated_examples": 0,
+      "name": "aggregate-null-key-finding",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "failed"
+    },
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [
+        {
+          "code": "dtype-resolution",
+          "confidence": "high",
+          "documentation_url": null,
+          "evidence": [
+            "The outputs have different dtype families or concrete dtypes."
+          ],
+          "explanation": "One implementation inferred or promoted a different dtype. Confirm overflow, nullable integer, string, categorical and decimal behaviour before accepting compatibility.",
+          "title": "Type resolution differs"
+        }
+      ],
+      "elapsed_seconds": 2.211853319000511,
+      "examples_run": 1,
+      "failures": [
+        {
+          "artifact": ".parity-skrub/aggjoiner-tied-mode-finding/20260813T171001.562094Z-d7c18e044ca7",
+          "candidate_metrics": {
+            "duration_seconds": 1.4828455160022713,
+            "iterations": 1,
+            "peak_rss_bytes": 220123136
+          },
+          "mismatch_counts": {
+            "dtype": 1,
+            "value": 4
+          },
+          "reference_metrics": {
+            "duration_seconds": 1.5787335940040066,
+            "iterations": 1,
+            "peak_rss_bytes": 220123136
+          },
+          "source": "adversarial:fixture",
+          "status": "failed"
+        }
+      ],
+      "generated_examples": 0,
+      "name": "aggjoiner-tied-mode-finding",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "failed"
+    },
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [
+        {
+          "code": "missing-values",
+          "confidence": "high",
+          "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+          "evidence": [
+            "The minimized difference contains a missing value."
+          ],
+          "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+          "title": "Missing-value semantics differ"
+        }
+      ],
+      "elapsed_seconds": 2.1088935770021635,
+      "examples_run": 1,
+      "failures": [
+        {
+          "artifact": ".parity-skrub/aggjoiner-ieee-nan-finding/20260813T171003.748256Z-b43a7f1e2c75",
+          "candidate_metrics": {
+            "duration_seconds": 1.497090685996227,
+            "iterations": 1,
+            "peak_rss_bytes": 220254208
+          },
+          "mismatch_counts": {
+            "value": 12
+          },
+          "reference_metrics": {
+            "duration_seconds": 1.5241618470026879,
+            "iterations": 1,
+            "peak_rss_bytes": 220254208
+          },
+          "source": "adversarial:fixture",
+          "status": "failed"
+        }
+      ],
+      "generated_examples": 0,
+      "name": "aggjoiner-ieee-nan-finding",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "scikit-learn",
+              "status": "installed",
+              "version": "1.9.0"
+            },
+            {
+              "name": "skrub",
+              "status": "installed",
+              "version": "0.11.dev0"
+            }
+          ],
+          "parity_version": "0.2.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "failed"
+    }
+  ],
+  "elapsed_seconds": 16.159596990000864,
+  "parity_version": "0.2.0",
+  "provenance": {
+    "config_sha256": "0222020df67a5401dbc3424b4bd66cc3a9863c63cb3ec94bdf94cef0d93e4d0f",
+    "orchestrator": {
+      "distributions": [
+        {
+          "name": "hypothesis",
+          "status": "installed",
+          "version": "6.165.5"
+        },
+        {
+          "name": "numpy",
+          "status": "installed",
+          "version": "2.5.2"
+        },
+        {
+          "name": "pandas",
+          "status": "installed",
+          "version": "3.0.5"
+        },
+        {
+          "name": "polars",
+          "status": "installed",
+          "version": "1.43.2"
+        },
+        {
+          "name": "pyarrow",
+          "status": "installed",
+          "version": "25.0.1"
+        }
+      ],
+      "parity_version": "0.2.0",
+      "platform_machine": "x86_64",
+      "platform_system": "Linux",
+      "python_implementation": "CPython",
+      "python_version": "3.12.13"
+    }
+  },
+  "schema_version": 2,
+  "status": "failed"
+}
