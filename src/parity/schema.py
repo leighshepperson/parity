@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
+import decimal
+import math
 from collections.abc import Iterable, Mapping
+from functools import cmp_to_key
+from itertools import pairwise
 from typing import Any, cast
 
 import pyarrow as pa
@@ -21,6 +26,8 @@ from parity.models import (
     JsonValue,
     KeyOverlap,
     KeyRef,
+    RowComparison,
+    SortedBy,
 )
 
 
@@ -154,6 +161,362 @@ def infer_bundle_schema(
 
 def _schema_columns(schema: FrameSchema) -> dict[str, ColumnSchema]:
     return {column.name: column for column in schema.columns}
+
+
+def _parse_constraint_bound(value: Any, family: str) -> Any:
+    if value is None:
+        return None
+    if family == "datetime" and isinstance(value, str):
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if family == "date" and isinstance(value, str):
+        return dt.date.fromisoformat(value)
+    if family == "time" and isinstance(value, str):
+        return dt.time.fromisoformat(value)
+    if family == "duration" and isinstance(value, (int, float)):
+        return dt.timedelta(seconds=value)
+    if family == "decimal" and not isinstance(value, decimal.Decimal):
+        return decimal.Decimal(str(value))
+    return value
+
+
+def _finite_constraint_values(column: ColumnSchema) -> list[Any] | None:
+    family = dtype_family(column.dtype)
+    if column.categories is not None:
+        return [
+            _parse_constraint_bound(value, family)
+            for value in column.categories
+            if value is not None and _value_within_column(value, column)
+        ]
+    if family == "boolean":
+        return [False, True]
+    if family == "integer":
+        minimum, maximum = _integer_domain_bounds(column)
+        if maximum - minimum <= 1_000:
+            return list(range(minimum, maximum + 1))
+    return None
+
+
+def _numeric_constraint_bounds(column: ColumnSchema) -> tuple[decimal.Decimal, decimal.Decimal]:
+    family = dtype_family(column.dtype)
+    if family == "integer":
+        minimum, maximum = _integer_domain_bounds(column)
+        return decimal.Decimal(minimum), decimal.Decimal(maximum)
+    decimal_minimum = (
+        decimal.Decimal(str(column.minimum))
+        if column.minimum is not None
+        else decimal.Decimal("-Infinity")
+    )
+    decimal_maximum = (
+        decimal.Decimal(str(column.maximum))
+        if column.maximum is not None
+        else decimal.Decimal("Infinity")
+    )
+    return decimal_minimum, decimal_maximum
+
+
+def _temporal_constraint_bounds(column: ColumnSchema) -> tuple[Any, Any]:
+    family = dtype_family(column.dtype)
+    defaults: dict[str, tuple[Any, Any]] = {
+        "date": (dt.date(1900, 1, 1), dt.date(2100, 12, 31)),
+        "datetime": (dt.datetime(1900, 1, 1), dt.datetime(2100, 12, 31)),
+        "time": (dt.time.min, dt.time.max),
+        "duration": (dt.timedelta(days=-36500), dt.timedelta(days=36500)),
+    }
+    default_minimum, default_maximum = defaults[family]
+    if family == "datetime" and column.timezone:
+        default_minimum = default_minimum.replace(tzinfo=dt.UTC)
+        default_maximum = default_maximum.replace(tzinfo=dt.UTC)
+    return (
+        _parse_constraint_bound(column.minimum, family)
+        if column.minimum is not None
+        else default_minimum,
+        _parse_constraint_bound(column.maximum, family)
+        if column.maximum is not None
+        else default_maximum,
+    )
+
+
+def _comparison_operator_holds(left: Any, operator: str, right: Any) -> bool:
+    try:
+        if operator == "lt":
+            return bool(left < right)
+        if operator == "le":
+            return bool(left <= right)
+        if operator == "eq":
+            return bool(left == right)
+        if operator == "ge":
+            return bool(left >= right)
+        return bool(left > right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _row_comparison_has_non_null_pair(
+    constraint: RowComparison,
+    columns: Mapping[str, ColumnSchema],
+) -> bool:
+    left = columns[constraint.left]
+    right = columns[constraint.right]
+    left_values = _finite_constraint_values(left)
+    right_values = _finite_constraint_values(right)
+    if left_values is not None and right_values is not None:
+        return any(
+            _comparison_operator_holds(left_value, constraint.operator, right_value)
+            for left_value in left_values
+            for right_value in right_values
+        )
+    if constraint.operator == "eq" and (left_values is not None or right_values is not None):
+        finite = left_values if left_values is not None else right_values or []
+        other = right if left_values is not None else left
+        return any(_value_within_column(value, other) for value in finite)
+
+    operator = constraint.operator
+    if operator in {"ge", "gt"}:
+        left, right = right, left
+        operator = "le" if operator == "ge" else "lt"
+    left_family = dtype_family(left.dtype)
+    if left_family in {"integer", "float", "decimal"}:
+        left_minimum, left_maximum = _numeric_constraint_bounds(left)
+        right_minimum, right_maximum = _numeric_constraint_bounds(right)
+    elif left_family in {"date", "datetime", "time", "duration"}:
+        left_minimum, left_maximum = _temporal_constraint_bounds(left)
+        right_minimum, right_maximum = _temporal_constraint_bounds(right)
+    else:
+        # Non-finite text/category domains cannot be generated constructively
+        # under ordering constraints in the initial contract vocabulary.
+        return operator == "eq" and left_values is None and right_values is None
+
+    if operator == "eq":
+        return max(left_minimum, right_minimum) <= min(left_maximum, right_maximum)
+    if operator == "lt":
+        return left_minimum < right_maximum
+    return left_minimum <= right_maximum
+
+
+def _finite_comparison_pairs(
+    constraint: RowComparison,
+    columns: Mapping[str, ColumnSchema],
+) -> list[tuple[Any, Any]] | None:
+    left_values = _finite_constraint_values(columns[constraint.left])
+    right_values = _finite_constraint_values(columns[constraint.right])
+    if left_values is None or right_values is None:
+        return None
+    return [
+        (left, right)
+        for left in left_values
+        for right in right_values
+        if _comparison_operator_holds(left, constraint.operator, right)
+    ]
+
+
+def validate_frame_schema(schema: FrameSchema) -> None:
+    """Reject unsupported or provably unsatisfiable frame contracts."""
+
+    columns = _schema_columns(schema)
+    for column in schema.columns:
+        if column.categories is not None:
+            valid = [
+                value
+                for value in column.categories
+                if value is None or _value_within_column(value, column)
+            ]
+            invalid = [
+                value
+                for value in column.categories
+                if value is not None and not _value_within_column(value, column)
+            ]
+            non_null_valid = [value for value in valid if value is not None]
+            if invalid and non_null_valid:
+                raise ValueError(
+                    f"column {column.name!r} contains categorical values outside its dtype "
+                    "or bounds"
+                )
+            if invalid and not valid and schema.min_rows > 0:
+                raise ValueError(
+                    f"column {column.name!r} has no values representable by dtype {column.dtype!r}"
+                )
+        if dtype_family(column.dtype) == "integer":
+            minimum, maximum = _integer_domain_bounds(column)
+            if minimum > maximum and not column.nullable:
+                raise ValueError(
+                    f"column {column.name!r} has no values representable by {column.dtype!r}"
+                )
+
+    compared_columns: set[str] = set()
+    for constraint in schema.constraints:
+        if not isinstance(constraint, RowComparison):
+            continue
+        selected = {constraint.left, constraint.right}
+        overlapping = selected & compared_columns
+        if overlapping:
+            raise ValueError(
+                "overlapping row_comparison constraints are not supported yet; "
+                f"columns already constrained: {sorted(overlapping)}"
+            )
+        compared_columns.update(selected)
+        left = columns[constraint.left]
+        right = columns[constraint.right]
+        left_family = dtype_family(left.dtype)
+        right_family = dtype_family(right.dtype)
+        if (
+            constraint.operator == "eq"
+            and left_family != right_family
+            and {left_family, right_family} <= {"integer", "float", "decimal"}
+            and left.categories is None
+            and right.categories is None
+        ):
+            left_minimum, left_maximum = _numeric_constraint_bounds(left)
+            right_minimum, right_maximum = _numeric_constraint_bounds(right)
+            common_minimum = max(left_minimum, right_minimum)
+            common_maximum = min(left_maximum, right_maximum)
+            no_integral_value = (
+                common_minimum.is_finite()
+                and common_maximum.is_finite()
+                and math.ceil(common_minimum) > math.floor(common_maximum)
+            )
+            if no_integral_value and not (left.nullable or right.nullable):
+                raise ValueError(
+                    "cross-family numeric equality requires a shared integral value "
+                    "or a nullable comparison column"
+                )
+        if (
+            constraint.operator != "eq"
+            and {left_family, right_family} <= {"string", "category"}
+            and (left.categories is None or right.categories is None)
+        ):
+            raise ValueError(
+                "ordered row_comparison text domains require categories on both columns"
+            )
+        if not _row_comparison_has_non_null_pair(constraint, columns) and not (
+            left.nullable or right.nullable
+        ):
+            raise ValueError(
+                f"row_comparison {constraint.left} {constraint.operator} "
+                f"{constraint.right} has no satisfying values in the declared domains"
+            )
+        finite_pairs = _finite_comparison_pairs(constraint, columns)
+        if finite_pairs is None or schema.min_rows == 0:
+            continue
+        left_values = _finite_constraint_values(left) or []
+        right_values = _finite_constraint_values(right) or []
+        if left.unique:
+            left_capacity = (
+                len({repr(value) for value in left_values})
+                if right.nullable
+                else len({repr(pair[0]) for pair in finite_pairs})
+            ) + int(left.nullable)
+            if schema.min_rows > left_capacity:
+                raise ValueError(
+                    f"row_comparison leaves only {left_capacity} distinct values for unique "
+                    f"column {left.name!r}, below min_rows={schema.min_rows}"
+                )
+        if right.unique:
+            right_capacity = (
+                len({repr(value) for value in right_values})
+                if left.nullable
+                else len({repr(pair[1]) for pair in finite_pairs})
+            ) + int(right.nullable)
+            if schema.min_rows > right_capacity:
+                raise ValueError(
+                    f"row_comparison leaves only {right_capacity} distinct values for unique "
+                    f"column {right.name!r}, below min_rows={schema.min_rows}"
+                )
+        constrained_names = {constraint.left, constraint.right}
+        for group in schema.unique_together:
+            if set(group) != constrained_names:
+                continue
+            pair_capacity = len({(repr(left), repr(right)) for left, right in finite_pairs})
+            if left.nullable:
+                pair_capacity += len(right_values)
+            if right.nullable:
+                pair_capacity += len(left_values)
+            if left.nullable and right.nullable:
+                pair_capacity += 1
+            if schema.min_rows > pair_capacity:
+                raise ValueError(
+                    "row_comparison leaves too few distinct pairs for unique_together "
+                    f"{group!r} and min_rows={schema.min_rows}"
+                )
+
+
+def _ordered_value_compare(left: Any, right: Any, constraint: SortedBy) -> int:
+    left_null = left is None
+    right_null = right is None
+    if left_null or right_null:
+        if left_null and right_null:
+            return 0
+        null_order = -1 if constraint.nulls == "first" else 1
+        return null_order if left_null else -null_order
+
+    left_nan = isinstance(left, float) and math.isnan(left)
+    right_nan = isinstance(right, float) and math.isnan(right)
+    if left_nan or right_nan:
+        if left_nan and right_nan:
+            return 0
+        result = 1 if left_nan else -1
+    else:
+        try:
+            result = (left > right) - (left < right)
+        except (TypeError, ValueError) as error:
+            raise ValueError("sorted_by values are not mutually orderable") from error
+    return -result if constraint.descending else result
+
+
+def _row_order_compare(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+    constraint: SortedBy,
+) -> int:
+    for name in constraint.columns:
+        result = _ordered_value_compare(left[name], right[name], constraint)
+        if result:
+            return result
+    return 0
+
+
+def sort_rows_for_constraints(
+    schema: FrameSchema,
+    rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return rows in the schema's declared stable lexicographic order."""
+
+    materialized = [dict(row) for row in rows]
+    constraint = next(
+        (item for item in schema.constraints if isinstance(item, SortedBy)),
+        None,
+    )
+    if constraint is None:
+        return materialized
+
+    def compare(left: dict[str, Any], right: dict[str, Any]) -> int:
+        return _row_order_compare(left, right, constraint)
+
+    return sorted(materialized, key=cmp_to_key(compare))
+
+
+def rows_satisfy_frame_constraints(
+    schema: FrameSchema,
+    rows: Iterable[Mapping[str, Any]],
+) -> bool:
+    """Return whether rows satisfy every declared valid-domain constraint."""
+
+    materialized = list(rows)
+    for constraint in schema.constraints:
+        if isinstance(constraint, SortedBy):
+            if any(
+                _row_order_compare(left, right, constraint) > 0
+                for left, right in pairwise(materialized)
+            ):
+                return False
+            continue
+        for row in materialized:
+            left = row[constraint.left]
+            right = row[constraint.right]
+            if left is None or right is None:
+                continue
+            if not _comparison_operator_holds(left, constraint.operator, right):
+                return False
+    return True
 
 
 def _relationship_refs(relationship: object) -> tuple[KeyRef, KeyRef] | None:
@@ -307,10 +670,14 @@ def _value_within_column(value: Any, column: ColumnSchema) -> bool:
         )
     except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError, TypeError, ValueError):
         return False
+    family = dtype_family(column.dtype)
+    comparable_value = _parse_constraint_bound(value, family)
+    minimum = _parse_constraint_bound(column.minimum, family)
+    maximum = _parse_constraint_bound(column.maximum, family)
     try:
-        if column.minimum is not None and value < column.minimum:
+        if minimum is not None and comparable_value < minimum:
             return False
-        if column.maximum is not None and value > column.maximum:
+        if maximum is not None and comparable_value > maximum:
             return False
     except TypeError:
         return False
@@ -475,6 +842,9 @@ def validate_bundle_schemas(
         raise ValueError(
             f"resolved bundle schemas differ from inputs; missing={missing}, extra={extra}"
         )
+
+    for schema in schemas.values():
+        validate_frame_schema(schema)
 
     columns_by_input = {name: _schema_columns(schema) for name, schema in schemas.items()}
     schema_row_capacities: dict[str, int] = {}
@@ -885,7 +1255,10 @@ __all__ = [
     "key_capacity",
     "key_is_unique",
     "portable_dtype",
+    "rows_satisfy_frame_constraints",
+    "sort_rows_for_constraints",
     "table_from_rows",
     "tables_from_bundle_rows",
     "validate_bundle_schemas",
+    "validate_frame_schema",
 ]

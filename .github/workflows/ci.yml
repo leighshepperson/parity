@@ -134,5 +134,6 @@ jobs:
           config: action-smoke/parity.toml
           max-examples: "20"
           max-findings: "2"
+          stability-repeats: "2"
           performance: "false"
           artifact-name: parity-action-smoke

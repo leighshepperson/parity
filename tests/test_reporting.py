@@ -250,3 +250,54 @@ def test_case_result_always_derives_count_from_current_failures(tmp_path: Path) 
 
     case.failures.pop()
     assert case.findings_discovered == 1
+
+
+def test_stability_errors_report_side_and_repeat_without_observed_values(
+    tmp_path: Path,
+) -> None:
+    suite = _suite(tmp_path)
+    stability = ExampleResult(
+        source="deterministic:stability:reference,candidate:repeat-2",
+        status=Status.ERROR,
+        mismatches=[
+            Mismatch(
+                kind=MismatchKind.EXCEPTION,
+                message="candidate secret@example.test changed on stability repeat 2",
+                path="$candidate.stability[2]",
+            ),
+            Mismatch(
+                kind=MismatchKind.EXCEPTION,
+                message="reference secret@example.test changed on stability repeat 2",
+                path="$reference.stability[2]",
+            ),
+        ],
+    )
+    suite.status = Status.ERROR
+    suite.cases[0] = CaseResult(
+        name="orders",
+        status=Status.ERROR,
+        examples_run=1,
+        deterministic_examples=1,
+        failures=[stability],
+    )
+
+    json_payload = json.loads(render_json(suite))
+    markdown = render_markdown(suite)
+    terminal = render_terminal(suite)
+    junit = ET.fromstring(render_junit(suite))
+
+    assert json_payload["cases"][0]["failures"][0]["source"] == stability.source
+    assert "reference changed on stability repeat 2" in markdown
+    assert "candidate changed on stability repeat 2" in markdown
+    assert markdown.index("reference changed") < markdown.index("candidate changed")
+    assert "reference changed on stability repeat 2" in terminal
+    assert "candidate changed on stability repeat 2" in terminal
+    junit_error = junit.find("testcase/error")
+    assert junit_error is not None
+    assert junit_error.attrib["message"] == (
+        "stability error: reference changed on stability repeat 2; "
+        "candidate changed on stability repeat 2"
+    )
+    assert "secret@example.test" not in render_json(suite) + markdown + terminal + render_junit(
+        suite
+    )

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0
+
+- Add `generation.stability_repeats`, defaulting to two same-input observations per implementation.
+  A matching but unstable pair now stops as an unsigned execution error before generated search or
+  benchmarking; setting the value to `1` explicitly disables the gate.
+- Add declarative `sorted_by` and `row_comparison` frame constraints. Deterministic cases,
+  property generation, shrinking and multi-input relationship rewrites preserve the declared valid
+  domain.
+- Add CLI and composite Action overrides for stability observations.
+- Add executable sorted as-of/valid-interval and hidden-state stability studies.
+
+### Compatibility notes
+
+- Existing schemas remain valid because frame constraints default to an empty list.
+- Stability checking is intentionally stricter: a deterministic input that used to pass because
+  both sides changed in the same way now returns an execution error. Set `stability_repeats = 1`
+  only when repeated observation is deliberately unwanted.
+- The composite Action's `stability-repeats` input and frame constraints require
+  `leighshepperson/parity@v0.6.0` or later.
+
 ## 0.4.0
 
 - Add atomic two- and three-frame input bundles for joins and lookups, with keyword or positional

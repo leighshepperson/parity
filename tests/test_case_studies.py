@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import polars as pl
+import pyarrow as pa
 
 from parity.models import ParityConfig
 
@@ -14,6 +15,8 @@ ROOT = Path(__file__).parents[1]
 STUDY = ROOT / "case_studies" / "pyjanitor_complete"
 SKRUB_STUDY = ROOT / "case_studies" / "skrub_agg_joiner"
 JOIN_STUDY = ROOT / "case_studies" / "pandas_polars_join"
+ASOF_STUDY = ROOT / "case_studies" / "pandas_polars_asof"
+STABILITY_STUDY = ROOT / "case_studies" / "stability_probe"
 SKRUB_COMMIT = "55dc7f45e140ccb76e768e3e4b4193f4eac3d5aa"
 
 SKRUB_CASES = [
@@ -229,3 +232,50 @@ def test_join_case_study_targets_execute_on_supported_core_dependencies() -> Non
     polars_result = targets["polars_left_join"](pl.DataFrame(rows), pl.DataFrame(right_rows))
 
     assert pandas_result.to_dict(orient="list") == polars_result.to_dict(as_series=False)
+
+
+def test_asof_case_study_declares_valid_order_and_row_domains() -> None:
+    raw = tomllib.loads((ASOF_STUDY / "parity.toml").read_text(encoding="utf-8"))
+    config = ParityConfig.model_validate(raw)
+    asof_case, interval_case = config.cases
+
+    assert asof_case.input_bundle is not None
+    assert list(asof_case.input_bundle.inputs) == ["left", "right"]
+    for spec in asof_case.input_bundle.inputs.values():
+        assert spec.input_schema is not None
+        constraint = spec.input_schema.constraints[0]
+        assert constraint.kind == "sorted_by"
+        assert constraint.columns == ["time"]
+    assert interval_case.input_schema is not None
+    comparison = interval_case.input_schema.constraints[0]
+    assert comparison.kind == "row_comparison"
+    assert (comparison.left, comparison.operator, comparison.right) == ("start", "le", "end")
+
+    targets = runpy.run_path(str(ASOF_STUDY / "asof_parity.py"))
+    left = {"time": [1], "left_value": [10]}
+    right = {"time": [0, 2], "right_value": [100, 200]}
+    backward = targets["pandas_backward"](pd.DataFrame(left), pd.DataFrame(right))
+    forward = targets["polars_forward"](pl.DataFrame(left), pl.DataFrame(right))
+    assert backward["right_value"].tolist() == [100]
+    assert forward["right_value"].to_list() == [200]
+    assert ".parity-asof/" in (ASOF_STUDY / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_stability_study_has_a_matching_but_changing_pair() -> None:
+    raw = tomllib.loads((STABILITY_STUDY / "parity.toml").read_text(encoding="utf-8"))
+    config = ParityConfig.model_validate(raw)
+    case = config.cases[0]
+    assert case.generation.stability_repeats == 2
+    assert case.fixture is not None
+    assert (STABILITY_STUDY / case.fixture).is_file()
+
+    targets = runpy.run_path(str(STABILITY_STUDY / "stability_parity.py"))
+    frame = pa.table({"value": [1]})
+    first_reference = targets["reference"](frame)
+    first_candidate = targets["candidate"](frame)
+    second_reference = targets["reference"](frame)
+    second_candidate = targets["candidate"](frame)
+    assert first_reference.equals(first_candidate)
+    assert second_reference.equals(second_candidate)
+    assert not first_reference.equals(second_reference)
+    assert ".parity-stability/" in (STABILITY_STUDY / ".gitignore").read_text(encoding="utf-8")

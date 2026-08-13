@@ -14,7 +14,7 @@ import pytest
 import parity.engine as engine
 from parity.artifacts import ArtifactStore
 from parity.engine import replay_artifact, run_live
-from parity.execution import ExecutionOutcome, Observation
+from parity.execution import ExceptionInfo, ExecutionOutcome, Observation
 from parity.models import (
     CallableSpec,
     CaseConfig,
@@ -32,6 +32,7 @@ from parity.models import (
     ParityConfig,
     PerformanceConfig,
     RunMetrics,
+    SortedBy,
     Status,
 )
 from parity.provenance import collect_runtime_provenance
@@ -494,6 +495,333 @@ def test_deterministic_side_nondeterminism_is_an_error(tmp_path: Path) -> None:
     assert "nondeterministic on the candidate side" in result.failures[0].mismatches[0].message
 
 
+def test_stability_probe_detects_synchronized_changing_outputs_and_stops(
+    tmp_path: Path,
+) -> None:
+    calls = {"reference": 0, "candidate": 0}
+    benchmark_called = False
+
+    def runner(label: str, _value: pa.Table) -> Observation:
+        calls[label] += 1
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            value={"call": calls[label]},
+            has_value=True,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def benchmark(_value: Any) -> None:
+        nonlocal benchmark_called
+        benchmark_called = True
+
+    result = engine._campaign(
+        name="synchronized-state",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(
+            max_examples=20,
+            adversarial_examples=False,
+            stability_repeats=4,
+        ),
+        performance_config=PerformanceConfig(enabled=True),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=lambda value: runner("reference", value),
+        candidate_runner=lambda value: runner("candidate", value),
+        artifact_case="synchronized-state",
+        benchmark=benchmark,  # type: ignore[arg-type]
+    )
+
+    failure = result.failures[0]
+    assert result.status is Status.ERROR
+    assert result.findings_discovered == 0
+    assert result.diagnoses == []
+    assert failure.finding_signature is None
+    assert failure.source == "deterministic:stability:reference,candidate:repeat-2"
+    assert [mismatch.path for mismatch in failure.mismatches] == [
+        "$reference.stability[2]",
+        "$candidate.stability[2]",
+    ]
+    assert all("repeat 2" in mismatch.message for mismatch in failure.mismatches)
+    assert calls == {"reference": 2, "candidate": 2}
+    assert result.examples_run == result.deterministic_examples == 1
+    assert result.generated_examples == 0
+    assert result.performance is None
+    assert not benchmark_called
+
+
+def test_stability_probe_attributes_one_sided_drift(tmp_path: Path) -> None:
+    candidate_calls = 0
+
+    def stable(_value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            value={"call": 1},
+            has_value=True,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def changing(_value: pa.Table) -> Observation:
+        nonlocal candidate_calls
+        candidate_calls += 1
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            value={"call": candidate_calls},
+            has_value=True,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    result = engine._campaign(
+        name="one-sided-state",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, stability_repeats=3),
+        performance_config=PerformanceConfig(enabled=False),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=stable,
+        candidate_runner=changing,
+        artifact_case="one-sided-state",
+        exact_only=True,
+    )
+
+    failure = result.failures[0]
+    assert result.status is Status.ERROR
+    assert failure.source == "deterministic:stability:candidate:repeat-2"
+    assert [mismatch.path for mismatch in failure.mismatches] == ["$candidate.stability[2]"]
+    assert candidate_calls == 2
+
+
+def test_stability_probe_allows_stable_outputs_for_configured_repeat_count(
+    tmp_path: Path,
+) -> None:
+    calls = {"reference": 0, "candidate": 0}
+
+    def runner(label: str, _value: pa.Table) -> Observation:
+        calls[label] += 1
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            value={"stable": True},
+            has_value=True,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    result = engine._campaign(
+        name="stable",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, stability_repeats=3),
+        performance_config=PerformanceConfig(enabled=False),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=lambda value: runner("reference", value),
+        candidate_runner=lambda value: runner("candidate", value),
+        artifact_case="stable",
+        exact_only=True,
+    )
+
+    assert result.status is Status.PASSED
+    assert result.failures == []
+    assert calls == {"reference": 3, "candidate": 3}
+    assert result.examples_run == 1
+
+
+def test_stability_repeats_one_disables_repeat_observations(tmp_path: Path) -> None:
+    calls = {"reference": 0, "candidate": 0}
+
+    def changing(label: str, _value: pa.Table) -> Observation:
+        calls[label] += 1
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            value={"call": calls[label]},
+            has_value=True,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    result = engine._campaign(
+        name="stability-disabled",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, stability_repeats=1),
+        performance_config=PerformanceConfig(enabled=False),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=lambda value: changing("reference", value),
+        candidate_runner=lambda value: changing("candidate", value),
+        artifact_case="stability-disabled",
+        exact_only=True,
+    )
+
+    assert result.status is Status.PASSED
+    assert calls == {"reference": 1, "candidate": 1}
+
+
+def test_fixture_constraints_apply_when_adversarial_examples_are_disabled(
+    tmp_path: Path,
+) -> None:
+    schema = FrameSchema(
+        columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+        constraints=[SortedBy(columns=["x"])],
+    )
+
+    with pytest.raises(ValueError, match="fixture does not satisfy"):
+        engine._campaign(
+            name="invalid-fixture",
+            schema=schema,
+            fixture=pa.table({"x": [2, 1]}),
+            comparison=ComparisonPolicy(),
+            generation=GenerationConfig(
+                max_examples=1,
+                adversarial_examples=False,
+                stability_repeats=1,
+            ),
+            performance_config=PerformanceConfig(enabled=False),
+            artifact_store=ArtifactStore(tmp_path),
+            reference_runner=lambda _value: pytest.fail("invalid fixture was executed"),
+            candidate_runner=lambda _value: pytest.fail("invalid fixture was executed"),
+            artifact_case="invalid-fixture",
+        )
+
+
+def test_bundle_fixture_constraints_apply_when_adversarial_examples_are_disabled(
+    tmp_path: Path,
+) -> None:
+    schemas = {
+        "left": FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            constraints=[SortedBy(columns=["x"])],
+        ),
+        "right": FrameSchema(columns=[ColumnSchema(name="x", dtype="integer", nullable=False)]),
+    }
+    bundle = InputBundle(
+        inputs={name: InputSpec(input_schema=schema) for name, schema in schemas.items()}
+    )
+
+    with pytest.raises(ValueError, match="does not satisfy its declared frame constraints"):
+        engine._campaign(
+            name="invalid-bundle-fixture",
+            schema=None,
+            fixture={"left": pa.table({"x": [2, 1]}), "right": pa.table({"x": [1]})},
+            input_bundle=bundle,
+            bundle_schemas=schemas,
+            comparison=ComparisonPolicy(),
+            generation=GenerationConfig(
+                max_examples=1,
+                adversarial_examples=False,
+                stability_repeats=1,
+            ),
+            performance_config=PerformanceConfig(enabled=False),
+            artifact_store=ArtifactStore(tmp_path),
+            reference_runner=lambda _value: pytest.fail("invalid fixture was executed"),
+            candidate_runner=lambda _value: pytest.fail("invalid fixture was executed"),
+            artifact_case="invalid-bundle-fixture",
+        )
+
+
+def test_stability_probe_detects_exception_contract_drift(tmp_path: Path) -> None:
+    candidate_calls = 0
+
+    def raised(message: str) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RAISED,
+            exception=ExceptionInfo("builtins", "ValueError", message),
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def candidate(_value: pa.Table) -> Observation:
+        nonlocal candidate_calls
+        candidate_calls += 1
+        return raised(f"attempt {candidate_calls}")
+
+    result = engine._campaign(
+        name="exception-state",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, stability_repeats=2),
+        performance_config=PerformanceConfig(enabled=False),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=lambda _value: raised("attempt 1"),
+        candidate_runner=candidate,
+        artifact_case="exception-state",
+        exact_only=True,
+    )
+
+    failure = result.failures[0]
+    assert result.status is Status.ERROR
+    assert failure.finding_signature is None
+    assert failure.source == "deterministic:stability:candidate:repeat-2"
+    assert failure.mismatches[0].message == "candidate changed on stability repeat 2"
+    assert "attempt" not in failure.mismatches[0].message
+
+
+def test_stability_probe_sanitizes_repeat_infrastructure_failure(tmp_path: Path) -> None:
+    candidate_calls = 0
+
+    def returned(_value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            value={"stable": True},
+            has_value=True,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def candidate(_value: pa.Table) -> Observation:
+        nonlocal candidate_calls
+        candidate_calls += 1
+        if candidate_calls == 1:
+            return returned(_value)
+        return Observation(
+            outcome=ExecutionOutcome.CRASHED,
+            exception=ExceptionInfo("parity.execution", "WorkerError", "private worker output"),
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    result = engine._campaign(
+        name="repeat-crash",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, stability_repeats=2),
+        performance_config=PerformanceConfig(enabled=False),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=returned,
+        candidate_runner=candidate,
+        artifact_case="repeat-crash",
+        exact_only=True,
+    )
+
+    failure = result.failures[0]
+    assert result.status is Status.ERROR
+    assert failure.source == "deterministic:stability:candidate:repeat-2"
+    assert failure.mismatches[0].message == "candidate changed on stability repeat 2"
+    assert "private worker output" not in failure.mismatches[0].message
+
+
 def test_configured_stateful_failure_is_not_accepted_from_a_warmed_session(
     tmp_path: Path,
 ) -> None:
@@ -554,6 +882,74 @@ def candidate(frame):
     assert case.findings_discovered == 0
     assert case.failures[0].finding_signature is None
     assert "not reproducible" in case.failures[0].mismatches[0].message
+
+
+def test_configured_stability_error_replays_with_saved_repeat_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "changing_transforms.py").write_text(
+        """
+_reference_calls = 0
+_candidate_calls = 0
+
+def reference(_frame):
+    global _reference_calls
+    _reference_calls += 1
+    return {"call": _reference_calls}
+
+def candidate(_frame):
+    global _candidate_calls
+    _candidate_calls += 1
+    return {"call": _candidate_calls}
+""",
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "fixture.arrow"
+    table = pa.table({"x": [1]})
+    with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    monkeypatch.chdir(tmp_path)
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="replay-stability",
+                reference=CallableSpec(
+                    target="changing_transforms:reference",
+                    adapter="pandas",
+                    workdir=tmp_path,
+                ),
+                candidate=CallableSpec(
+                    target="changing_transforms:candidate",
+                    adapter="pandas",
+                    workdir=tmp_path,
+                ),
+                fixture=fixture,
+                generation=GenerationConfig(
+                    max_examples=1,
+                    adversarial_examples=False,
+                    stability_repeats=3,
+                ),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    failure = result.cases[0].failures[0]
+    assert result.status is Status.ERROR
+    assert failure.source == "deterministic:stability:reference,candidate:repeat-2"
+    assert failure.artifact is not None
+    replay_contract = json.loads((failure.artifact / "replay.json").read_text(encoding="utf-8"))
+    assert replay_contract["case"]["generation"]["stability_repeats"] == 3
+
+    replayed = replay_artifact(failure.artifact)
+
+    replay_failure = replayed.cases[0].failures[0]
+    assert replayed.status is Status.ERROR
+    assert replay_failure.source == "deterministic:stability:reference,candidate:repeat-2"
+    assert replay_failure.artifact == failure.artifact
 
 
 def test_importable_live_failure_is_confirmed_in_a_fresh_process(tmp_path: Path) -> None:

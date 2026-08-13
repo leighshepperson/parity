@@ -19,13 +19,14 @@ jobs:
       - name: Install project dependencies
         run: python -m pip install -e .
       - id: parity
-        uses: leighshepperson/parity@v0.4.0
+        uses: leighshepperson/parity@v0.6.0
         with:
           config: migrations/parity.toml
           cases: orders,customers
           tags: critical
           max-examples: "500"
           max-findings: "3"
+          stability-repeats: "2"
           performance: "false"
           artifact-path: .parity
           upload-artifact: "false"
@@ -43,6 +44,7 @@ the action's source revision, but normally both should move together.
 | `tags` | empty | Comma-separated tags. |
 | `max-examples` | empty | Override generation budget. |
 | `max-findings` | empty | Override the maximum distinct mismatch signatures per case. |
+| `stability-repeats` | empty | Override same-input observations per implementation, from 1 through 10. |
 | `performance` | `true` | `true` or `false`. |
 | `python-version` | `3.12` | setup-python interpreter. |
 | `parity-version` | empty | Optional strict package version. |

@@ -95,6 +95,15 @@ def check(
         int | None,
         typer.Option("--max-findings", min=1, max=20, help="Override distinct findings"),
     ] = None,
+    stability_repeats: Annotated[
+        int | None,
+        typer.Option(
+            "--stability-repeats",
+            min=1,
+            max=10,
+            help="Override same-input observations per implementation",
+        ),
+    ] = None,
     performance: Annotated[
         bool, typer.Option("--performance/--no-performance", help="Run performance checks")
     ] = True,
@@ -131,6 +140,8 @@ def check(
             item.generation.max_examples = max_examples
         if max_findings is not None:
             item.generation.max_findings = max_findings
+        if stability_repeats is not None:
+            item.generation.stability_repeats = stability_repeats
         if not performance:
             item.performance.enabled = False
 

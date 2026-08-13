@@ -124,6 +124,7 @@ canonicalization.
 | `min_rows` | integer | `0` | At least 0. |
 | `max_rows` | integer | `30` | From `min_rows` through 10,000. |
 | `unique_together` | array of string arrays | `[]` | Each named tuple must be unique. |
+| `constraints` | array of tables | `[]` | Frame-local valid-domain constraints described below. |
 | `columns` | array of tables | required | One or more unique columns. |
 
 Declare a column with `[[cases.schema.columns]]`:
@@ -144,6 +145,38 @@ Portable dtype families are `integer`, `float`, `decimal`, `boolean`, `string`, 
 `binary`, `date`, `datetime`, `time`, `duration`, `list`, `struct` and `object`. Common concrete
 integer/float widths such as `int8`, `int64`, `uint32`, `float32` and `float64` are retained when
 materialising Arrow inputs. Bounds must be representable by the chosen type.
+
+### Frame constraints
+
+Declare each constraint with `[[cases.schema.constraints]]`, or under an input schema such as
+`[[cases.input_bundle.inputs.left.schema.constraints]]`.
+
+| `kind` | Fields | Meaning |
+|---|---|---|
+| `sorted_by` | `columns`, `descending=false`, `nulls="last"` | Generate the complete frame in lexicographic order by one or more columns. `nulls` is `first` or `last`. |
+| `row_comparison` | `left`, `operator`, `right` | Require the named columns to satisfy `lt`, `le`, `eq`, `ge` or `gt` on every row where both values are non-null. |
+
+```toml
+[[cases.schema.constraints]]
+kind = "sorted_by"
+columns = ["account_id", "event_time"]
+descending = false
+nulls = "last"
+
+[[cases.schema.constraints]]
+kind = "row_comparison"
+left = "start_time"
+operator = "le"
+right = "event_time"
+```
+
+At most one `sorted_by` constraint is accepted per frame. Referenced columns must exist and row
+comparisons must use compatible, orderable types. Constraints are preserved by deterministic
+cases, generated search, shrinking and relationship rewrites in input bundles; impossible domains
+are rejected during validation rather than weakened. The initial row-comparison vocabulary accepts
+independent column pairs; overlapping comparisons that reuse a column are rejected until Parity can
+construct and shrink the complete constraint graph without filter-only search. Explicit fixtures
+must satisfy frame constraints even when `adversarial_examples = false`.
 
 ## Comparison policy
 
@@ -177,6 +210,7 @@ comparison preserves multiplicity: two identical rows are not the same as one.
 |---|---:|---:|---|
 | `max_examples` | integer | `100` | Property examples, 1 through 100,000. |
 | `max_findings` | integer | `1` | Maximum distinct mismatch signatures, 1 through 20. Each additional search receives its own `max_examples` budget. |
+| `stability_repeats` | integer | `2` | Total same-input observations per implementation for deterministic passing inputs, 1 through 10. `1` disables the stability check. |
 | `seed` | integer/null | none | Stable run seed. |
 | `deadline_ms` | integer/null | none | Per-Hypothesis-example deadline. |
 | `adversarial_examples` | boolean | `true` | Run deterministic edge cases before search. |
@@ -188,6 +222,12 @@ A seed improves repeatability but a saved replay artifact is the strongest repro
 Mismatch signatures classify observable difference shapes, not root causes or separate bugs. Every
 generated witness is observed twice after shrinking; changing signatures or side-specific output
 nondeterminism stops the campaign as an execution error rather than creating questionable evidence.
+Separately, deterministic inputs that initially pass are observed `stability_repeats` times. Each
+side is compared with its own first observation, so matching but equally unstable implementations
+cannot produce a false pass. Repeat exceptions, crashes, timeouts or output drift stop the campaign
+as an unsigned execution error before generated search or benchmarking.
+`examples_run` and `deterministic_examples` count each input once; stability observations are
+additional callable executions, not additional generated examples.
 
 ## Performance policy
 

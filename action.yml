@@ -27,6 +27,10 @@ inputs:
     description: Optional distinct mismatch-signature override
     required: false
     default: ""
+  stability-repeats:
+    description: Optional same-input observations per implementation
+    required: false
+    default: ""
   performance:
     description: Run configured performance checks (true or false)
     required: false
@@ -103,6 +107,7 @@ runs:
         PARITY_TAGS: ${{ inputs.tags }}
         PARITY_MAX_EXAMPLES: ${{ inputs.max-examples }}
         PARITY_MAX_FINDINGS: ${{ inputs.max-findings }}
+        PARITY_STABILITY_REPEATS: ${{ inputs.stability-repeats }}
         PARITY_PERFORMANCE: ${{ inputs.performance }}
         PARITY_ARTIFACT_PATH: ${{ inputs.artifact-path }}
       run: |
@@ -129,6 +134,7 @@ runs:
 
         [[ -n "$PARITY_MAX_EXAMPLES" ]] && command+=(--max-examples "$PARITY_MAX_EXAMPLES")
         [[ -n "$PARITY_MAX_FINDINGS" ]] && command+=(--max-findings "$PARITY_MAX_FINDINGS")
+        [[ -n "$PARITY_STABILITY_REPEATS" ]] && command+=(--stability-repeats "$PARITY_STABILITY_REPEATS")
         if [[ "$PARITY_PERFORMANCE" == "false" ]]; then
           command+=(--no-performance)
         elif [[ "$PARITY_PERFORMANCE" != "true" ]]; then

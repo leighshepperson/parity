@@ -209,9 +209,12 @@ whole semantic campaign and its benchmark. The two sides never share a process, 
 receives a freshly deserialized input. Python module globals and other process state do persist
 between examples on each side. Avoid call counters, mutable caches with observable behaviour,
 background threads and other hidden state: they can make generated search and shrinking depend on
-execution order. If an invocation times out or crashes, Parity terminates that session and reports
-an error instead of restarting it with clean state. Library users who specifically need a new
-process for each call can continue to use `parity.execution.execute_isolated`.
+execution order. Parity repeats deterministic passing inputs and compares each implementation with
+its own first observation; matching drift is therefore an error rather than a pass. Configure the
+total observations with `generation.stability_repeats` (default `2`, or `1` to disable). If an
+invocation times out or crashes, Parity terminates that session and reports an error instead of
+restarting it with clean state. Library users who specifically need a new process for each call can
+continue to use `parity.execution.execute_isolated`.
 
 The `environment` table contains literal environment overrides. Do not put credentials in
 `parity.toml`; inject secrets through the CI runner if a wrapper truly needs them. Prefer pure,
@@ -226,10 +229,14 @@ Use both when possible:
 - Column `examples` force useful domain values into deterministic probes.
 - `categories` restrict generation to an enumeration.
 - `unique` and `unique_together` prevent impossible duplicates.
+- `sorted_by` keeps complete frames in a declared lexicographic order for as-of joins and windows.
+- `row_comparison` expresses per-row valid domains such as `start <= end` without wrapper-side
+  filtering.
 
 Generation budgets count classifier evaluations plus confirmation runs. Deterministic adversarial inputs—fixture, empty,
 singleton, null, NaN/signed-zero, duplicate, extreme, temporal, categorical and reversed-order
-cases where applicable—are reported separately.
+cases where applicable—are reported separately. Each deterministic input contributes one to the
+reported example count even when stability checking invokes both implementations more than once.
 
 ## Interpreting outcomes
 
@@ -251,6 +258,7 @@ parity inspect FIXTURE [--output PATH]        infer a portable schema
 parity check [--config PATH] [--case NAME]    run campaigns
              [--tag TAG] [--max-examples N]
              [--max-findings N]
+             [--stability-repeats N]
              [--performance|--no-performance]
              [--json PATH] [--junit PATH] [--markdown PATH]
 parity replay ARTIFACT                        reproduce a counterexample

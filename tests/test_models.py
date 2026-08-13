@@ -8,9 +8,12 @@ from parity.models import (
     CaseConfig,
     ColumnSchema,
     FrameSchema,
+    GenerationConfig,
     InputBundle,
     InputSpec,
     ParityConfig,
+    RowComparison,
+    SortedBy,
     Status,
     SuiteResult,
 )
@@ -32,6 +35,76 @@ def test_frame_schema_rejects_duplicate_columns() -> None:
                 ColumnSchema(name="id", dtype="int64"),
             ]
         )
+
+
+def test_frame_constraints_parse_defaults_and_discriminator() -> None:
+    schema = FrameSchema.model_validate(
+        {
+            "columns": [
+                {"name": "start", "dtype": "integer"},
+                {"name": "end", "dtype": "integer"},
+            ],
+            "constraints": [
+                {"kind": "sorted_by", "columns": ["start"]},
+                {
+                    "kind": "row_comparison",
+                    "left": "start",
+                    "operator": "le",
+                    "right": "end",
+                },
+            ],
+        }
+    )
+
+    assert schema.constraints == [
+        SortedBy(columns=["start"], descending=False, nulls="last"),
+        RowComparison(left="start", operator="le", right="end"),
+    ]
+
+
+def test_frame_constraints_validate_references_duplicates_and_comparability() -> None:
+    columns = [
+        ColumnSchema(name="number", dtype="integer"),
+        ColumnSchema(name="label", dtype="string"),
+    ]
+    with pytest.raises(ValidationError, match="unknown columns"):
+        FrameSchema(columns=columns, constraints=[SortedBy(columns=["missing"])])
+    with pytest.raises(ValidationError, match="must be unique"):
+        FrameSchema(
+            columns=columns,
+            constraints=[
+                RowComparison(left="number", operator="le", right="number"),
+                RowComparison(left="number", operator="ge", right="number"),
+            ],
+        )
+    with pytest.raises(ValidationError, match="comparable scalar dtype families"):
+        FrameSchema(
+            columns=columns,
+            constraints=[RowComparison(left="number", operator="eq", right="label")],
+        )
+    with pytest.raises(ValidationError, match="at most one sorted_by"):
+        FrameSchema(
+            columns=columns,
+            constraints=[SortedBy(columns=["number"]), SortedBy(columns=["label"])],
+        )
+
+
+def test_generation_stability_repeats_is_bounded() -> None:
+    assert GenerationConfig().stability_repeats == 2
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        GenerationConfig(stability_repeats=0)
+    with pytest.raises(ValidationError, match="less than or equal to 10"):
+        GenerationConfig(stability_repeats=11)
+
+
+def test_frame_constraint_models_are_exported_from_public_package() -> None:
+    from parity import FrameConstraint as PublicFrameConstraint
+    from parity import RowComparison as PublicRowComparison
+    from parity import SortedBy as PublicSortedBy
+
+    assert PublicFrameConstraint is not None
+    assert PublicSortedBy is SortedBy
+    assert PublicRowComparison is RowComparison
 
 
 def test_frame_schema_rejects_unknown_composite_key_column() -> None:

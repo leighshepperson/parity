@@ -82,6 +82,39 @@ class ColumnSchema(StrictModel):
         return self
 
 
+class SortedBy(StrictModel):
+    """Require rows to be lexicographically ordered by selected columns."""
+
+    kind: Literal["sorted_by"] = "sorted_by"
+    columns: list[str] = Field(min_length=1)
+    descending: bool = False
+    nulls: Literal["first", "last"] = "last"
+
+    @field_validator("columns")
+    @classmethod
+    def unique_columns(cls, columns: list[str]) -> list[str]:
+        if len(columns) != len(set(columns)):
+            raise ValueError("sorted_by columns must be unique")
+        if any(not column for column in columns):
+            raise ValueError("sorted_by column names cannot be empty")
+        return columns
+
+
+class RowComparison(StrictModel):
+    """Require a positional comparison between two columns on every non-null row."""
+
+    kind: Literal["row_comparison"] = "row_comparison"
+    left: str = Field(min_length=1)
+    operator: Literal["lt", "le", "eq", "ge", "gt"]
+    right: str = Field(min_length=1)
+
+
+FrameConstraint = Annotated[
+    SortedBy | RowComparison,
+    Field(discriminator="kind"),
+]
+
+
 class FrameSchema(StrictModel):
     """Schema and domain constraints for generated tabular inputs."""
 
@@ -89,10 +122,12 @@ class FrameSchema(StrictModel):
     min_rows: int = Field(default=0, ge=0)
     max_rows: int = Field(default=30, ge=0, le=10_000)
     unique_together: list[list[str]] = Field(default_factory=list)
+    constraints: list[FrameConstraint] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_schema(self) -> FrameSchema:
         names = [column.name for column in self.columns]
+        columns = {column.name: column for column in self.columns}
         if len(set(names)) != len(names):
             raise ValueError("column names must be unique")
         if self.min_rows > self.max_rows:
@@ -109,6 +144,94 @@ class FrameSchema(StrictModel):
         }
         if unknown:
             raise ValueError(f"unique_together references unknown columns: {sorted(unknown)}")
+
+        from parity.canonical import dtype_family
+
+        sortable_families = {
+            "boolean",
+            "integer",
+            "float",
+            "decimal",
+            "string",
+            "category",
+            "date",
+            "datetime",
+            "time",
+            "duration",
+        }
+        seen_constraints: set[tuple[object, ...]] = set()
+        sorted_constraints = 0
+        for constraint in self.constraints:
+            if isinstance(constraint, SortedBy):
+                marker: tuple[object, ...] = (
+                    constraint.kind,
+                    *constraint.columns,
+                    constraint.descending,
+                    constraint.nulls,
+                )
+            elif constraint.operator == "eq":
+                marker = (
+                    constraint.kind,
+                    constraint.operator,
+                    *sorted((constraint.left, constraint.right)),
+                )
+            elif constraint.operator in {"ge", "gt"}:
+                normalized = "le" if constraint.operator == "ge" else "lt"
+                marker = (constraint.kind, normalized, constraint.right, constraint.left)
+            else:
+                marker = (
+                    constraint.kind,
+                    constraint.operator,
+                    constraint.left,
+                    constraint.right,
+                )
+            if marker in seen_constraints:
+                raise ValueError("frame constraints must be unique")
+            seen_constraints.add(marker)
+            if isinstance(constraint, SortedBy):
+                sorted_constraints += 1
+                unknown = set(constraint.columns) - set(names)
+                if unknown:
+                    raise ValueError(f"sorted_by references unknown columns: {sorted(unknown)}")
+                unsupported = [
+                    name
+                    for name in constraint.columns
+                    if dtype_family(columns[name].dtype) not in sortable_families
+                ]
+                if unsupported:
+                    raise ValueError(
+                        "sorted_by requires scalar orderable columns; unsupported columns: "
+                        f"{unsupported}"
+                    )
+            else:
+                unknown = {constraint.left, constraint.right} - set(names)
+                if unknown:
+                    raise ValueError(
+                        f"row_comparison references unknown columns: {sorted(unknown)}"
+                    )
+                if constraint.left == constraint.right and constraint.operator in {"lt", "gt"}:
+                    raise ValueError("a strict row_comparison cannot compare a column with itself")
+                left = columns[constraint.left]
+                right = columns[constraint.right]
+                left_family = dtype_family(left.dtype)
+                right_family = dtype_family(right.dtype)
+                numeric = {"integer", "float", "decimal"}
+                textual = {"string", "category"}
+                comparable = (
+                    left_family == right_family
+                    or {left_family, right_family} <= numeric
+                    or {left_family, right_family} <= textual
+                )
+                if not comparable or left_family not in sortable_families:
+                    raise ValueError(
+                        "row_comparison columns must have comparable scalar dtype families: "
+                        f"{constraint.left} is {left_family}, "
+                        f"{constraint.right} is {right_family}"
+                    )
+                if left_family == "datetime" and left.timezone != right.timezone:
+                    raise ValueError("row_comparison datetime columns must have the same timezone")
+        if sorted_constraints > 1:
+            raise ValueError("a frame schema can contain at most one sorted_by constraint")
         return self
 
 
@@ -294,6 +417,7 @@ class GenerationConfig(StrictModel):
 
     max_examples: int = Field(default=100, ge=1, le=100_000)
     max_findings: int = Field(default=1, ge=1, le=20)
+    stability_repeats: int = Field(default=2, ge=1, le=10)
     seed: int | None = None
     deadline_ms: int | None = Field(default=None, ge=1)
     adversarial_examples: bool = True

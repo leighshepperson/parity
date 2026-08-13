@@ -82,6 +82,11 @@ def find_counterexample(
         )
     except NoSuchExample:
         return None
+    except Unsatisfiable as error:
+        raise ValueError(
+            "frame generation is unsatisfiable; relax row bounds, column domains, "
+            "uniqueness, or frame constraints"
+        ) from error
     return Counterexample(example=example)
 
 

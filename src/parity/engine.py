@@ -68,7 +68,7 @@ from parity.provenance import (
     effective_config_sha256,
     normalize_distribution_names,
 )
-from parity.schema import infer_schema, validate_bundle_schemas
+from parity.schema import infer_schema, rows_satisfy_frame_constraints, validate_bundle_schemas
 from parity.shrinking import (
     find_unseen_bundle_counterexample,
     find_unseen_counterexample,
@@ -250,6 +250,50 @@ def _campaign_error(
     )
 
 
+def _stability_error(
+    repeat: int,
+    reference: Observation,
+    candidate: Observation,
+    *,
+    reference_changed: bool,
+    candidate_changed: bool,
+) -> ExampleResult:
+    """Describe same-input drift without exposing either observed value."""
+
+    changed = [
+        label
+        for label, differs in (
+            ("reference", reference_changed),
+            ("candidate", candidate_changed),
+        )
+        if differs
+    ]
+    if not changed:
+        # A pair can cross a configured tolerance boundary even when each
+        # repeat remains individually close to its baseline. The comparison
+        # result still changed, but neither side can be attributed safely.
+        changed = ["reference-candidate-pair"]
+    mismatches = [
+        Mismatch(
+            kind=MismatchKind.EXCEPTION,
+            message=f"{label.replace('-', ' ')} changed on stability repeat {repeat}",
+            path=(
+                f"${label}.stability[{repeat}]"
+                if label in {"reference", "candidate"}
+                else f"$campaign.stability[{repeat}]"
+            ),
+        )
+        for label in changed
+    ]
+    return ExampleResult(
+        source=f"deterministic:stability:{','.join(changed)}:repeat-{repeat}",
+        status=Status.ERROR,
+        mismatches=mismatches,
+        reference_metrics=reference.metrics,
+        candidate_metrics=candidate.metrics,
+    )
+
+
 def _campaign(
     *,
     name: str,
@@ -286,6 +330,15 @@ def _campaign(
 
     if (schema is None) == (input_bundle is None or bundle_schemas is None):
         raise ValueError("campaign requires exactly one single-frame or input-bundle contract")
+
+    # Frame and relationship constraints define the valid domain even when
+    # deterministic edge families are disabled. Validate explicit fixtures
+    # here so the adversarial toggle cannot silently bypass that contract.
+    if isinstance(fixture, pa.Table) and schema is not None:
+        if not rows_satisfy_frame_constraints(schema, fixture.to_pylist()):
+            raise ValueError("fixture does not satisfy the declared frame constraints")
+    elif isinstance(fixture, dict) and input_bundle is not None and bundle_schemas is not None:
+        adversarial_bundle_cases(input_bundle, bundle_schemas, fixtures=fixture)
 
     def observe(value: CampaignInput) -> tuple[Observation, Observation, list[Mismatch], Status]:
         nonlocal reference_runtime, candidate_runtime
@@ -368,6 +421,51 @@ def _campaign(
             failures.append(failure)
             operational_error = True
             break
+        if status is Status.PASSED:
+            # Successful pairwise comparison alone cannot establish that either
+            # callable is stable: synchronized call counters or random streams
+            # can change together and remain pairwise equal. Re-observe only
+            # deterministic inputs, immediately and in the same sessions. The
+            # executor supplies a fresh adapter argument for every invocation.
+            for repeat in range(2, generation.stability_repeats + 1):
+                repeated_reference, repeated_candidate, _, repeated_status = observe(value)
+                reference_changed = bool(
+                    compare_observations(reference, repeated_reference, comparison)
+                )
+                candidate_changed = bool(
+                    compare_observations(candidate, repeated_candidate, comparison)
+                )
+                if (
+                    repeated_status is Status.PASSED
+                    and not reference_changed
+                    and not candidate_changed
+                ):
+                    continue
+                failure = _stability_error(
+                    repeat,
+                    repeated_reference,
+                    repeated_candidate,
+                    reference_changed=reference_changed,
+                    candidate_changed=candidate_changed,
+                )
+                _store_failure(
+                    artifact_store,
+                    artifact_case,
+                    value,
+                    failure,
+                    source=failure.source,
+                    seed=generation.seed,
+                    reference=reference_spec,
+                    candidate=candidate_spec,
+                    reference_observation=repeated_reference,
+                    candidate_observation=repeated_candidate,
+                    config_sha256=config_sha256,
+                )
+                failures.append(failure)
+                operational_error = True
+                break
+            if operational_error:
+                break
         if status is Status.FAILED:
             if exact_only:
                 failure = _example_result(source, reference, candidate, mismatches, status)
@@ -713,7 +811,12 @@ def _campaign(
     )
     nonsemantic_failures = [failure for failure in failures if failure.finding_signature is None]
     failures = [*semantic_failures, *nonsemantic_failures]
-    mismatches = [mismatch for failure in failures for mismatch in failure.mismatches]
+    diagnostic_mismatches = [
+        mismatch
+        for failure in failures
+        if not failure.source.startswith("deterministic:stability:")
+        for mismatch in failure.mismatches
+    ]
     status = _status_for(failures, None)
     verification = "captured"
     if exact_only and expected_provenance is None:
@@ -732,7 +835,7 @@ def _campaign(
         deterministic_examples=deterministic_count,
         generated_examples=generated_count,
         failures=failures,
-        diagnoses=diagnose(mismatches),
+        diagnoses=diagnose(diagnostic_mismatches),
         performance=performance,
         provenance=CaseProvenance(
             reference=reference_runtime,

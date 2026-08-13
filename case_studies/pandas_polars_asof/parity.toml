@@ -1,0 +1,146 @@
+version = 1
+artifact_dir = ".parity-asof"
+fail_fast = false
+
+[[cases]]
+name = "asof-direction"
+tags = ["input-bundle", "asof", "sorted"]
+
+[cases.reference]
+target = "asof_parity:pandas_backward"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["pandas"]
+
+[cases.candidate]
+target = "asof_parity:polars_forward"
+adapter = "polars"
+record_distributions = ["polars"]
+
+[cases.input_bundle]
+binding = "keyword"
+
+[cases.input_bundle.inputs.left.schema]
+min_rows = 1
+max_rows = 4
+unique_together = [["time"]]
+
+[[cases.input_bundle.inputs.left.schema.constraints]]
+kind = "sorted_by"
+columns = ["time"]
+descending = false
+nulls = "last"
+
+[[cases.input_bundle.inputs.left.schema.columns]]
+name = "time"
+dtype = "int64"
+nullable = false
+unique = true
+minimum = 0
+maximum = 8
+
+[[cases.input_bundle.inputs.left.schema.columns]]
+name = "left_value"
+dtype = "int64"
+nullable = false
+minimum = 0
+maximum = 20
+
+[cases.input_bundle.inputs.right.schema]
+min_rows = 1
+max_rows = 4
+unique_together = [["time"]]
+
+[[cases.input_bundle.inputs.right.schema.constraints]]
+kind = "sorted_by"
+columns = ["time"]
+descending = false
+nulls = "last"
+
+[[cases.input_bundle.inputs.right.schema.columns]]
+name = "time"
+dtype = "int64"
+nullable = false
+unique = true
+minimum = 0
+maximum = 8
+
+[[cases.input_bundle.inputs.right.schema.columns]]
+name = "right_value"
+dtype = "int64"
+nullable = false
+minimum = 100
+maximum = 120
+
+[[cases.input_bundle.relationships]]
+kind = "equal_row_count"
+inputs = ["left", "right"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 250
+max_findings = 1
+stability_repeats = 2
+seed = 20260813
+adversarial_examples = true
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "valid-interval-control"
+tags = ["row-comparison", "control"]
+
+[cases.reference]
+target = "asof_parity:pandas_span"
+adapter = "pandas"
+pandas_input = "native"
+
+[cases.candidate]
+target = "asof_parity:polars_span"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 0
+max_rows = 10
+
+[[cases.schema.constraints]]
+kind = "row_comparison"
+left = "start"
+operator = "le"
+right = "end"
+
+[[cases.schema.columns]]
+name = "start"
+dtype = "int64"
+nullable = false
+minimum = 0
+maximum = 20
+
+[[cases.schema.columns]]
+name = "end"
+dtype = "int64"
+nullable = false
+minimum = 0
+maximum = 20
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 100
+max_findings = 1
+stability_repeats = 2
+seed = 20260813
+adversarial_examples = true
+shrink = true
+
+[cases.performance]
+enabled = false

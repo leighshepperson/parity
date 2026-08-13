@@ -25,6 +25,8 @@ def test_generated_config_parses_and_validates(tmp_path: Path) -> None:
     assert raw["cases"][0]["schema"]["columns"][0]["name"] == "quantity"
     assert raw["cases"][0]["reference"]["record_distributions"] == []
     assert raw["cases"][0]["candidate"]["pandas_input"] == "arrow"
+    assert raw["cases"][0]["schema"]["constraints"] == []
+    assert raw["cases"][0]["generation"]["stability_repeats"] == 2
 
     path = tmp_path / "nested" / "parity.toml"
     path.parent.mkdir()

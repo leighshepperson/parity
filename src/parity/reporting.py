@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import xml.etree.ElementTree as ET
 from collections import Counter
@@ -14,6 +15,9 @@ from parity.execution import redact_text
 from parity.models import CaseResult, ExampleResult, Status, SuiteResult
 
 ReportFormat = Literal["json", "markdown", "github", "terminal", "junit"]
+
+_STABILITY_PATH = re.compile(r"^\$(reference|candidate)\.stability\[(\d+)\]$")
+_PAIR_STABILITY_PATH = re.compile(r"^\$campaign\.stability\[(\d+)\]$")
 
 
 def _artifact_name(path: Path | None) -> str | None:
@@ -65,6 +69,38 @@ def _finding_count(case: CaseResult) -> int:
             if failure.finding_signature is not None
         }
     )
+
+
+def _stability_summaries(case: CaseResult) -> list[str]:
+    """Render only structure encoded by Parity, never observed output text."""
+
+    details: set[tuple[int, int, str]] = set()
+    side_order = {"reference": 0, "candidate": 1}
+    for failure in _ordered_failures(case):
+        if not failure.source.startswith("deterministic:stability:"):
+            continue
+        for mismatch in failure.mismatches:
+            path = mismatch.path or ""
+            if matched := _STABILITY_PATH.fullmatch(path):
+                side, raw_repeat = matched.groups()
+                repeat = int(raw_repeat)
+                details.add(
+                    (
+                        repeat,
+                        side_order[side],
+                        f"{side} changed on stability repeat {repeat}",
+                    )
+                )
+            elif matched := _PAIR_STABILITY_PATH.fullmatch(path):
+                repeat = int(matched.group(1))
+                details.add(
+                    (
+                        repeat,
+                        2,
+                        f"reference/candidate pair changed on stability repeat {repeat}",
+                    )
+                )
+    return [detail for _, _, detail in sorted(details)]
 
 
 def _case_payload(case: CaseResult) -> dict[str, Any]:
@@ -198,6 +234,8 @@ def render_markdown(result: SuiteResult) -> str:
             lines.append(f"- **{case.name}**: {finding}{signature_label}")
             for artifact in artifacts:
                 lines.append(f"  - artifact: `{artifact}`")
+            for stability in _stability_summaries(case):
+                lines.append(f"  - stability error: {stability}")
             for diagnosis in case.diagnoses:
                 lines.append(
                     f"  - {redact_text(diagnosis.title)} ({diagnosis.confidence}): "
@@ -259,6 +297,8 @@ def render_terminal(result: SuiteResult, *, color: bool = False, console: Any | 
                 "             "
                 + ", ".join(f"{count} {kind}" for kind, count in sorted(kinds.items()))
             )
+        for stability in _stability_summaries(case):
+            lines.append(f"             stability error: {stability}")
         for diagnosis in case.diagnoses:
             lines.append(
                 f"             diagnosis ({diagnosis.confidence}): {redact_text(diagnosis.title)}"
@@ -304,6 +344,7 @@ def render_junit(result: SuiteResult) -> str:
             mismatch.kind.value for failure in case.failures for mismatch in failure.mismatches
         )
         summary = ", ".join(f"{count} {kind}" for kind, count in sorted(kinds.items()))
+        stability = "; ".join(_stability_summaries(case))
         if case.status is Status.FAILED:
             ET.SubElement(
                 testcase,
@@ -314,7 +355,14 @@ def render_junit(result: SuiteResult) -> str:
             ET.SubElement(
                 testcase,
                 "error",
-                {"message": summary or "execution error", "type": "ParityExecutionError"},
+                {
+                    "message": (
+                        f"stability error: {stability}"
+                        if stability
+                        else summary or "execution error"
+                    ),
+                    "type": "ParityExecutionError",
+                },
             )
         elif case.status is Status.SKIPPED:
             ET.SubElement(testcase, "skipped", {"message": "case skipped"})

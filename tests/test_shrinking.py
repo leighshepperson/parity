@@ -15,7 +15,10 @@ from parity.models import (
     InputSpec,
     KeyOverlap,
     KeyRef,
+    RowComparison,
+    SortedBy,
 )
+from parity.schema import rows_satisfy_frame_constraints
 from parity.shrinking import (
     Counterexample,
     InputBundleCounterexample,
@@ -44,6 +47,30 @@ def test_find_counterexample_shrinks_row_count_and_value() -> None:
     assert result.table.num_rows == 1
     assert result.table.column("x").to_pylist() == [11]
     assert result.source == "generated:shrunk"
+
+
+def test_find_counterexample_preserves_frame_constraints_while_shrinking() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="start", dtype="integer", nullable=False, minimum=0, maximum=5),
+            ColumnSchema(name="end", dtype="integer", nullable=False, minimum=0, maximum=5),
+        ],
+        max_rows=5,
+        constraints=[
+            RowComparison(left="start", operator="le", right="end"),
+            SortedBy(columns=["start", "end"], descending=True),
+        ],
+    )
+
+    result = find_counterexample(
+        schema,
+        lambda table: table.num_rows >= 2,
+        GenerationConfig(max_examples=100, derandomize=True),
+    )
+
+    assert result is not None
+    assert result.table.num_rows == 2
+    assert rows_satisfy_frame_constraints(schema, result.table.to_pylist())
 
 
 def test_find_counterexample_returns_none_when_property_never_fails() -> None:

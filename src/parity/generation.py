@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+import numpy as np
 import pyarrow as pa
 from hypothesis import assume
 from hypothesis import strategies as st
@@ -26,14 +27,18 @@ from parity.models import (
     InputBundle,
     KeyOverlap,
     KeyRef,
+    RowComparison,
 )
 from parity.schema import (
     arrow_type,
     infer_schema,
     key_is_unique,
+    rows_satisfy_frame_constraints,
+    sort_rows_for_constraints,
     table_from_rows,
     tables_from_bundle_rows,
     validate_bundle_schemas,
+    validate_frame_schema,
 )
 
 AdapterName = Literal["arrow", "pandas", "polars"]
@@ -53,6 +58,49 @@ def _integer_limits(dtype: str) -> tuple[int, int]:
         "uint64": (0, 2**64 - 1),
     }
     return limits.get(text, (-(2**63), 2**63 - 1))
+
+
+def _float_width(dtype: str) -> Literal[16, 32, 64]:
+    text = dtype.strip().lower()
+    if text == "float16":
+        return 16
+    if text == "float32":
+        return 32
+    return 64
+
+
+def _float_limit(width: Literal[16, 32, 64]) -> float:
+    if width == 16:
+        return float(np.finfo(np.float16).max)
+    if width == 32:
+        return float(np.finfo(np.float32).max)
+    return float(np.finfo(np.float64).max)
+
+
+def _strict_float_bound(
+    value: decimal.Decimal,
+    width: Literal[16, 32, 64],
+    *,
+    increasing: bool,
+) -> float:
+    as_float = float(value)
+    if width == 16:
+        rounded = float(np.float16(as_float))
+        target16 = np.float16(math.inf if increasing else -math.inf)
+        adjacent = float(np.nextafter(np.float16(rounded), target16))
+    elif width == 32:
+        rounded = float(np.float32(as_float))
+        target32 = np.float32(math.inf if increasing else -math.inf)
+        adjacent = float(np.nextafter(np.float32(rounded), target32))
+    else:
+        rounded = as_float
+        adjacent = math.nextafter(rounded, math.inf if increasing else -math.inf)
+    rounded_decimal = decimal.Decimal.from_float(rounded)
+    if increasing and rounded_decimal > value:
+        return rounded
+    if not increasing and rounded_decimal < value:
+        return rounded
+    return adjacent
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,7 +289,7 @@ def _rows_fit_contract(schema: FrameSchema, rows: list[dict[str, Any]]) -> bool:
         keys = [tuple(repr(row[name]) for name in group) for row in rows]
         if len(keys) != len(set(keys)):
             return False
-    return True
+    return rows_satisfy_frame_constraints(schema, rows)
 
 
 def adversarial_cases(
@@ -261,15 +309,22 @@ def adversarial_cases(
         if fixture is None:
             raise ValueError("adversarial generation requires a schema or fixture")
         schema = infer_schema(fixture)
+    validate_frame_schema(schema)
     fixture_table = to_arrow(fixture) if fixture is not None else None
     base = _base_rows(schema)
     cases: list[GeneratedCase] = []
 
     def append_if_valid(name: str, rows: list[dict[str, Any]]) -> None:
-        if _rows_fit_contract(schema, rows):
-            cases.append(GeneratedCase(name, table_from_rows(schema, rows)))
+        constrained_rows = sort_rows_for_constraints(schema, rows)
+        if _rows_fit_contract(schema, constrained_rows):
+            table = table_from_rows(schema, constrained_rows)
+            if rows_satisfy_frame_constraints(schema, table.to_pylist()):
+                cases.append(GeneratedCase(name, table))
 
     if fixture_table is not None:
+        fixture_rows = fixture_table.to_pylist()
+        if not rows_satisfy_frame_constraints(schema, fixture_rows):
+            raise ValueError("fixture does not satisfy the declared frame constraints")
         cases.append(GeneratedCase("fixture", fixture_table))
     append_if_valid("empty", [])
     append_if_valid("singleton", base[:1])
@@ -398,6 +453,17 @@ def adversarial_bundle_cases(
         if set(fixtures) != set(bundle.inputs):
             raise ValueError("bundle fixtures must contain every configured input")
         fixture_tables = {name: to_arrow(fixtures[name]).combine_chunks() for name in bundle.inputs}
+        for name, table in fixture_tables.items():
+            try:
+                valid = rows_satisfy_frame_constraints(schemas[name], table.to_pylist())
+            except KeyError as error:
+                raise ValueError(
+                    f"bundle fixture {name!r} does not match its declared frame schema"
+                ) from error
+            if not valid:
+                raise ValueError(
+                    f"bundle fixture {name!r} does not satisfy its declared frame constraints"
+                )
         if not _bundle_relationships_hold(bundle, fixture_tables):
             raise ValueError("bundle fixtures do not satisfy the declared relationships")
         cases.append(
@@ -450,7 +516,7 @@ def _bounded_float(column: ColumnSchema) -> SearchStrategy[Any]:
         # subnormal.  Forcing True is invalid for ordinary positive ranges
         # such as 5.0..7.0 and used to abort an otherwise valid campaign.
         allow_subnormal=None,
-        width=64,
+        width=_float_width(column.dtype),
     )
 
 
@@ -828,6 +894,383 @@ def _draw_bundle_row_counts(
     return counts
 
 
+def _comparison_holds(left: Any, operator: str, right: Any) -> bool:
+    if operator == "lt":
+        return bool(left < right)
+    if operator == "le":
+        return bool(left <= right)
+    if operator == "eq":
+        return bool(left == right)
+    if operator == "ge":
+        return bool(left >= right)
+    return bool(left > right)
+
+
+def _finite_column_values(column: ColumnSchema) -> list[Any] | None:
+    family = dtype_family(column.dtype)
+    if column.categories is not None:
+        values = [_parse_bound(value, family) for value in column.categories if value is not None]
+        return [value for value in values if _value_fits_column(value, column)]
+    if family == "boolean":
+        return [False, True]
+    if family == "integer":
+        type_minimum, type_maximum = _integer_limits(column.dtype)
+        minimum = (
+            max(type_minimum, int(cast(str | int | float, column.minimum)))
+            if column.minimum is not None
+            else type_minimum
+        )
+        maximum = (
+            min(type_maximum, int(cast(str | int | float, column.maximum)))
+            if column.maximum is not None
+            else type_maximum
+        )
+        if maximum - minimum <= 1_000:
+            return list(range(minimum, maximum + 1))
+    return None
+
+
+def _numeric_bounds(column: ColumnSchema) -> tuple[decimal.Decimal, decimal.Decimal]:
+    family = dtype_family(column.dtype)
+    if family == "integer":
+        type_minimum, type_maximum = _integer_limits(column.dtype)
+        minimum = (
+            max(type_minimum, int(cast(str | int | float, column.minimum)))
+            if column.minimum is not None
+            else type_minimum
+        )
+        maximum = (
+            min(type_maximum, int(cast(str | int | float, column.maximum)))
+            if column.maximum is not None
+            else type_maximum
+        )
+        return decimal.Decimal(minimum), decimal.Decimal(maximum)
+    float_limit = (
+        decimal.Decimal(str(_float_limit(_float_width(column.dtype))))
+        if family == "float"
+        else decimal.Decimal("1e12")
+    )
+    decimal_minimum = (
+        decimal.Decimal(str(column.minimum)) if column.minimum is not None else -float_limit
+    )
+    decimal_maximum = (
+        decimal.Decimal(str(column.maximum)) if column.maximum is not None else float_limit
+    )
+    if family == "float":
+        decimal_minimum = max(-float_limit, decimal_minimum)
+        decimal_maximum = min(float_limit, decimal_maximum)
+    return decimal_minimum, decimal_maximum
+
+
+def _numeric_value_strategy(
+    column: ColumnSchema,
+    *,
+    minimum: decimal.Decimal | None = None,
+    maximum: decimal.Decimal | None = None,
+    strict_minimum: bool = False,
+    strict_maximum: bool = False,
+) -> SearchStrategy[Any]:
+    domain_minimum, domain_maximum = _numeric_bounds(column)
+    selected_minimum = max(
+        domain_minimum,
+        minimum if minimum is not None else domain_minimum,
+    )
+    selected_maximum = min(
+        domain_maximum,
+        maximum if maximum is not None else domain_maximum,
+    )
+    family = dtype_family(column.dtype)
+    if family == "integer":
+        integer_minimum = math.floor(selected_minimum) + int(
+            strict_minimum or selected_minimum != selected_minimum.to_integral_value()
+        )
+        integer_maximum = math.ceil(selected_maximum) - int(
+            strict_maximum or selected_maximum != selected_maximum.to_integral_value()
+        )
+        if integer_minimum > integer_maximum:
+            return st.nothing()
+        return st.integers(min_value=integer_minimum, max_value=integer_maximum)
+    if family == "float":
+        width = _float_width(column.dtype)
+        float_minimum = float(selected_minimum)
+        float_maximum = float(selected_maximum)
+        if strict_minimum:
+            float_minimum = _strict_float_bound(selected_minimum, width, increasing=True)
+        if strict_maximum:
+            float_maximum = _strict_float_bound(selected_maximum, width, increasing=False)
+        if float_minimum > float_maximum:
+            return st.nothing()
+        return st.floats(
+            min_value=float_minimum,
+            max_value=float_maximum,
+            allow_nan=False,
+            allow_infinity=False,
+            allow_subnormal=None,
+            width=width,
+        )
+    step = decimal.Decimal("1e-9")
+    if strict_minimum:
+        selected_minimum += step
+    if strict_maximum:
+        selected_maximum -= step
+    if selected_minimum > selected_maximum:
+        return st.nothing()
+    return st.decimals(
+        min_value=selected_minimum,
+        max_value=selected_maximum,
+        places=9,
+        allow_nan=False,
+        allow_infinity=False,
+    )
+
+
+def _temporal_bounds(column: ColumnSchema) -> tuple[Any, Any]:
+    family = dtype_family(column.dtype)
+    defaults: dict[str, tuple[Any, Any]] = {
+        "date": (dt.date(1900, 1, 1), dt.date(2100, 12, 31)),
+        "datetime": (dt.datetime(1900, 1, 1), dt.datetime(2100, 12, 31)),
+        "time": (dt.time.min, dt.time.max),
+        "duration": (dt.timedelta(days=-36500), dt.timedelta(days=36500)),
+    }
+    minimum, maximum = defaults[family]
+    if family == "datetime" and column.timezone:
+        minimum = minimum.replace(tzinfo=dt.UTC)
+        maximum = maximum.replace(tzinfo=dt.UTC)
+    return (
+        _parse_bound(column.minimum, family) if column.minimum is not None else minimum,
+        _parse_bound(column.maximum, family) if column.maximum is not None else maximum,
+    )
+
+
+def _shift_temporal(value: Any, family: str, *, forward: bool) -> Any:
+    delta = dt.timedelta(days=1) if family == "date" else dt.timedelta(microseconds=1)
+    if family != "time":
+        return value + delta if forward else value - delta
+    anchor = dt.datetime.combine(dt.date(2000, 1, 1), value)
+    shifted = anchor + delta if forward else anchor - delta
+    if shifted.date() != anchor.date():
+        return None
+    return shifted.time()
+
+
+def _temporal_value_strategy(
+    column: ColumnSchema,
+    *,
+    minimum: Any | None = None,
+    maximum: Any | None = None,
+    strict_minimum: bool = False,
+    strict_maximum: bool = False,
+) -> SearchStrategy[Any]:
+    family = dtype_family(column.dtype)
+    domain_minimum, domain_maximum = _temporal_bounds(column)
+    selected_minimum = max(domain_minimum, minimum if minimum is not None else domain_minimum)
+    selected_maximum = min(domain_maximum, maximum if maximum is not None else domain_maximum)
+    if strict_minimum:
+        selected_minimum = _shift_temporal(selected_minimum, family, forward=True)
+    if strict_maximum:
+        selected_maximum = _shift_temporal(selected_maximum, family, forward=False)
+    if selected_minimum is None or selected_maximum is None or selected_minimum > selected_maximum:
+        return st.nothing()
+    if family == "date":
+        return st.dates(min_value=selected_minimum, max_value=selected_maximum)
+    if family == "datetime":
+        if column.timezone:
+            return st.datetimes(
+                min_value=selected_minimum.replace(tzinfo=None),
+                max_value=selected_maximum.replace(tzinfo=None),
+                timezones=st.just(dt.UTC),
+            )
+        return st.datetimes(
+            min_value=selected_minimum,
+            max_value=selected_maximum,
+            timezones=st.none(),
+        )
+    if family == "time":
+        return st.times(
+            min_value=selected_minimum,
+            max_value=selected_maximum,
+            timezones=st.none(),
+        )
+    return st.timedeltas(min_value=selected_minimum, max_value=selected_maximum)
+
+
+def _same_value_pair_strategy(
+    left: ColumnSchema,
+    right: ColumnSchema,
+) -> SearchStrategy[tuple[Any, Any]]:
+    left_family = dtype_family(left.dtype)
+    right_family = dtype_family(right.dtype)
+    numeric = {"integer", "float", "decimal"}
+    temporal = {"date", "datetime", "time", "duration"}
+    if left.categories is not None or right.categories is not None:
+        categorized = left if left.categories is not None else right
+        family = dtype_family(categorized.dtype)
+        candidates = [
+            _parse_bound(value, family)
+            for value in categorized.categories or []
+            if value is not None
+        ]
+        shared = [
+            value
+            for value in candidates
+            if _value_fits_column(value, left) and _value_fits_column(value, right)
+        ]
+        if not shared:
+            return st.nothing()
+        return st.sampled_from(shared).map(lambda value: (value, value))
+    if left_family in numeric:
+        left_minimum, left_maximum = _numeric_bounds(left)
+        right_minimum, right_maximum = _numeric_bounds(right)
+        minimum = max(left_minimum, right_minimum)
+        maximum = min(left_maximum, right_maximum)
+        if left_family == right_family:
+            base = (
+                min((left, right), key=lambda column: _float_width(column.dtype))
+                if left_family == "float"
+                else left
+            )
+            return _numeric_value_strategy(base, minimum=minimum, maximum=maximum).map(
+                lambda value: (value, value)
+            )
+        integer_minimum = math.ceil(minimum)
+        integer_maximum = math.floor(maximum)
+        if integer_minimum > integer_maximum:
+            return st.nothing()
+
+        def convert(value: int) -> tuple[Any, Any]:
+            converted = {
+                "integer": value,
+                "float": float(value),
+                "decimal": decimal.Decimal(value),
+            }
+            return converted[left_family], converted[right_family]
+
+        return st.integers(min_value=integer_minimum, max_value=integer_maximum).map(convert)
+    if left_family in temporal:
+        left_minimum, left_maximum = _temporal_bounds(left)
+        right_minimum, right_maximum = _temporal_bounds(right)
+        return _temporal_value_strategy(
+            left,
+            minimum=max(left_minimum, right_minimum),
+            maximum=min(left_maximum, right_maximum),
+        ).map(lambda value: (value, value))
+    return column_strategy(left, allow_null=False).map(lambda value: (value, value))
+
+
+def _ordered_numeric_pair_strategy(
+    left: ColumnSchema,
+    right: ColumnSchema,
+    *,
+    strict: bool,
+) -> SearchStrategy[tuple[Any, Any]]:
+    _, right_maximum = _numeric_bounds(right)
+    left_strategy = _numeric_value_strategy(
+        left,
+        maximum=right_maximum,
+        strict_maximum=strict,
+    )
+    return left_strategy.flatmap(
+        lambda left_value: _numeric_value_strategy(
+            right,
+            minimum=decimal.Decimal(str(left_value)),
+            strict_minimum=strict,
+        ).map(lambda right_value: (left_value, right_value))
+    )
+
+
+def _ordered_temporal_pair_strategy(
+    left: ColumnSchema,
+    right: ColumnSchema,
+    *,
+    strict: bool,
+) -> SearchStrategy[tuple[Any, Any]]:
+    _, right_maximum = _temporal_bounds(right)
+    left_strategy = _temporal_value_strategy(
+        left,
+        maximum=right_maximum,
+        strict_maximum=strict,
+    )
+    return left_strategy.flatmap(
+        lambda left_value: _temporal_value_strategy(
+            right,
+            minimum=left_value,
+            strict_minimum=strict,
+        ).map(lambda right_value: (left_value, right_value))
+    )
+
+
+def _non_null_comparison_strategy(
+    constraint: RowComparison,
+    columns: Mapping[str, ColumnSchema],
+) -> SearchStrategy[tuple[Any, Any]]:
+    left = columns[constraint.left]
+    right = columns[constraint.right]
+    left_values = _finite_column_values(left)
+    right_values = _finite_column_values(right)
+    if left_values is not None and right_values is not None:
+        pairs = [
+            (left_value, right_value)
+            for left_value in left_values
+            for right_value in right_values
+            if _comparison_holds(left_value, constraint.operator, right_value)
+        ]
+        return st.sampled_from(pairs) if pairs else st.nothing()
+    if constraint.operator == "eq":
+        return _same_value_pair_strategy(left, right)
+
+    reversed_result = constraint.operator in {"ge", "gt"}
+    ordered_left, ordered_right = (right, left) if reversed_result else (left, right)
+    strict = constraint.operator in {"lt", "gt"}
+    family = dtype_family(ordered_left.dtype)
+    if family in {"integer", "float", "decimal"}:
+        strategy = _ordered_numeric_pair_strategy(ordered_left, ordered_right, strict=strict)
+    elif family in {"date", "datetime", "time", "duration"}:
+        strategy = _ordered_temporal_pair_strategy(ordered_left, ordered_right, strict=strict)
+    else:
+        # Ordered textual domains are validated as finite categories above.
+        return st.nothing()
+    if reversed_result:
+        return strategy.map(lambda pair: (pair[1], pair[0]))
+    return strategy
+
+
+def _row_comparison_pair_strategy(
+    constraint: RowComparison,
+    columns: Mapping[str, ColumnSchema],
+) -> SearchStrategy[tuple[Any, Any]]:
+    left = columns[constraint.left]
+    right = columns[constraint.right]
+    strategies: list[SearchStrategy[tuple[Any, Any]]] = [
+        _non_null_comparison_strategy(constraint, columns)
+    ]
+    if left.nullable:
+        strategies.append(st.tuples(st.none(), column_strategy(right)))
+    if right.nullable:
+        strategies.append(st.tuples(column_strategy(left, allow_null=False), st.none()))
+
+    def survives_arrow_cast(pair: tuple[Any, Any]) -> bool:
+        try:
+            cast_left = pa.array(
+                [pair[0]],
+                type=arrow_type(left.dtype, timezone=left.timezone),
+                from_pandas=False,
+            )[0].as_py()
+            cast_right = pa.array(
+                [pair[1]],
+                type=arrow_type(right.dtype, timezone=right.timezone),
+                from_pandas=False,
+            )[0].as_py()
+        except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError, ValueError):
+            return False
+        return (
+            cast_left is None
+            or cast_right is None
+            or _comparison_holds(cast_left, constraint.operator, cast_right)
+        )
+
+    return st.one_of(*strategies).filter(survives_arrow_cast)
+
+
 @st.composite
 def _rows_for_count(
     draw: st.DrawFn,
@@ -847,13 +1290,33 @@ def _rows_for_count(
                 unique=column.unique,
             )
         )
+    columns = {column.name: column for column in schema.columns}
+    if row_count:
+        for constraint in schema.constraints:
+            if not isinstance(constraint, RowComparison):
+                continue
+            pairs = draw(
+                st.lists(
+                    _row_comparison_pair_strategy(constraint, columns),
+                    min_size=row_count,
+                    max_size=row_count,
+                )
+            )
+            values_by_column[constraint.left] = [pair[0] for pair in pairs]
+            values_by_column[constraint.right] = [pair[1] for pair in pairs]
     rows = [
         {column.name: values_by_column[column.name][index] for column in schema.columns}
         for index in range(row_count)
     ]
+    rows = sort_rows_for_constraints(schema, rows)
+    for column in schema.columns:
+        if column.unique:
+            markers = [repr(row[column.name]) for row in rows]
+            assume(len(markers) == len(set(markers)))
     for group in schema.unique_together:
         keys = [tuple(repr(row[name]) for name in group) for row in rows]
         assume(len(keys) == len(set(keys)))
+    assume(rows_satisfy_frame_constraints(schema, rows))
     return rows
 
 
@@ -1041,8 +1504,17 @@ def _arrow_bundle_strategy(
             progress = True
         assume(progress)
 
+    rows_by_input = {
+        name: sort_rows_for_constraints(schemas[name], rows) for name, rows in rows_by_input.items()
+    }
     assume(all(_rows_fit_contract(schemas[name], rows) for name, rows in rows_by_input.items()))
     tables = tables_from_bundle_rows(schemas, rows_by_input)
+    assume(
+        all(
+            rows_satisfy_frame_constraints(schemas[name], table.to_pylist())
+            for name, table in tables.items()
+        )
+    )
     assume(_bundle_relationships_hold(bundle, tables))
     return tables
 
@@ -1052,23 +1524,10 @@ def _arrow_table_strategy(draw: st.DrawFn, schema: FrameSchema) -> pa.Table:
     maximum = _effective_max_rows(schema)
     assume(schema.min_rows <= maximum)
     row_count = draw(st.integers(min_value=schema.min_rows, max_value=maximum))
-    values_by_column: dict[str, list[Any]] = {}
-    for column in schema.columns:
-        if row_count == 0:
-            values_by_column[column.name] = []
-            continue
-        strategy = column_strategy(column)
-        values_by_column[column.name] = draw(
-            st.lists(strategy, min_size=row_count, max_size=row_count, unique=column.unique)
-        )
-    rows = [
-        {column.name: values_by_column[column.name][index] for column in schema.columns}
-        for index in range(row_count)
-    ]
-    for group in schema.unique_together:
-        keys = [tuple(repr(row[name]) for name in group) for row in rows]
-        assume(len(keys) == len(set(keys)))
-    return table_from_rows(schema, rows)
+    rows = draw(_rows_for_count(schema, row_count))
+    table = table_from_rows(schema, rows)
+    assume(rows_satisfy_frame_constraints(schema, table.to_pylist()))
+    return table
 
 
 def frame_strategy(
@@ -1078,6 +1537,7 @@ def frame_strategy(
 ) -> SearchStrategy[Any]:
     """Return a shrinking, schema-aware Hypothesis dataframe strategy."""
 
+    validate_frame_schema(schema)
     strategy: SearchStrategy[Any] = _arrow_table_strategy(schema)
     if adapter == "arrow":
         return strategy
