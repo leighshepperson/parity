@@ -44,9 +44,11 @@ permission boundary.
 ## Supply chain
 
 Releases are built in GitHub Actions, checked with `twine`, attested and published through PyPI
-trusted publishing. CI runs dependency audit, dependency review and CodeQL. Dependabot covers Python
-and Actions dependencies. Consumers with stronger requirements should pin hashes or mirror packages
-through their approved registry.
+trusted publishing. CI always runs dependency audit. Dependency review and CodeQL run for public
+repositories, or for a private repository when GitHub Advanced Security is enabled and the
+`ENABLE_GHAS` repository variable is set to `true`. Dependabot covers Python and Actions
+dependencies. Consumers with stronger requirements should pin hashes or mirror packages through
+their approved registry.
 
 The composite Action installs the action's own source revision by default. A caller may request a
 strict `parity-version`; arbitrary package specifiers are rejected.

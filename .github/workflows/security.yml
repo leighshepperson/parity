@@ -25,6 +25,7 @@ jobs:
       - run: pip-audit
 
   codeql:
+    if: github.event.repository.visibility == 'public' || vars.ENABLE_GHAS == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,7 +38,9 @@ jobs:
       - uses: github/codeql-action/analyze@v3
 
   dependency-review:
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.repository.visibility == 'public' || vars.ENABLE_GHAS == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
