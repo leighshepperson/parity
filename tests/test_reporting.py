@@ -42,6 +42,7 @@ def _suite(tmp_path: Path) -> SuiteResult:
     failure = ExampleResult(
         source="fixture /private/customer/orders.parquet",
         status=Status.FAILED,
+        finding_signature="ms1:" + "b" * 64,
         artifact=tmp_path / "orders" / "campaign" / "result.json",
         mismatches=[
             Mismatch(
@@ -84,8 +85,10 @@ def _suite(tmp_path: Path) -> SuiteResult:
 def test_json_report_is_machine_readable_and_elides_values(tmp_path: Path) -> None:
     rendered = render_json(_suite(tmp_path))
     payload = json.loads(rendered)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["status"] == "failed"
+    assert payload["cases"][0]["findings_discovered"] == 1
+    assert payload["cases"][0]["failures"][0]["finding_signature"] == "ms1:" + "b" * 64
     assert payload["cases"][0]["failures"][0]["mismatch_counts"] == {"value": 1}
     assert payload["provenance"]["config_sha256"] == "a" * 64
     assert payload["cases"][0]["provenance"]["reference"]["distributions"][0] == {
@@ -115,10 +118,12 @@ def test_human_reports_show_counts_not_compared_data(tmp_path: Path) -> None:
     markdown = render_markdown(suite)
     assert "# Parity verification" in markdown
     assert "1 value" in markdown
+    assert "1 distinct mismatch signature" in markdown
     assert render_github_summary(suite) == markdown
     terminal = render_terminal(suite)
     assert "Parity FAILED" in terminal
     assert "1 value" in terminal
+    assert "1 distinct mismatch signature(s)" in terminal
     assert "secret@example.test" not in markdown + terminal
 
 
@@ -157,3 +162,91 @@ def test_report_writers_are_compatible_and_atomic(tmp_path: Path) -> None:
     assert json.loads(json_path.read_text(encoding="utf-8"))["status"] == "failed"
     assert ET.parse(junit_path).getroot().tag == "testsuite"
     assert markdown_path.read_text(encoding="utf-8").startswith("# Parity")
+
+
+def test_json_orders_signed_findings_by_signature_then_unsigned_errors(tmp_path: Path) -> None:
+    suite = _suite(tmp_path)
+    first = suite.cases[0].failures[0]
+    first.finding_signature = "ms1:" + "f" * 64
+    second = first.model_copy(
+        update={
+            "source": "second",
+            "finding_signature": "ms1:" + "a" * 64,
+            "artifact": None,
+        }
+    )
+    operational = first.model_copy(
+        update={
+            "source": "operational",
+            "status": Status.ERROR,
+            "finding_signature": None,
+            "artifact": None,
+        }
+    )
+    suite.cases[0] = suite.cases[0].model_copy(
+        update={
+            "failures": [operational, first, second],
+        }
+    )
+
+    case_payload = json.loads(render_json(suite))["cases"][0]
+    failures = case_payload["failures"]
+
+    assert case_payload["findings_discovered"] == 2
+    assert [failure["finding_signature"] for failure in failures] == [
+        "ms1:" + "a" * 64,
+        "ms1:" + "f" * 64,
+        None,
+    ]
+
+
+def test_markdown_lists_every_distinct_artifact_deterministically(tmp_path: Path) -> None:
+    suite = _suite(tmp_path)
+    first = suite.cases[0].failures[0]
+    first.artifact = tmp_path / "artifact-root" / "orders" / "z-campaign"
+    second = first.model_copy(
+        update={
+            "finding_signature": "ms1:" + "a" * 64,
+            "artifact": tmp_path / "artifact-root" / "orders" / "a-campaign",
+        }
+    )
+    duplicate = second.model_copy()
+    suite.cases[0].failures = [first, second, duplicate]
+
+    rendered = render_markdown(suite)
+
+    artifact_lines = [line for line in rendered.splitlines() if "artifact:" in line]
+    assert artifact_lines == [
+        "  - artifact: `artifact-root/orders/a-campaign`",
+        "  - artifact: `artifact-root/orders/z-campaign`",
+    ]
+    assert str(tmp_path) not in rendered
+
+
+def test_case_result_json_roundtrip_preserves_derived_finding_count(tmp_path: Path) -> None:
+    original = _suite(tmp_path).cases[0]
+
+    restored = CaseResult.model_validate_json(original.model_dump_json())
+
+    assert restored.findings_discovered == 1
+    assert restored == original
+
+
+def test_case_result_always_derives_count_from_current_failures(tmp_path: Path) -> None:
+    failure = _suite(tmp_path).cases[0].failures[0]
+    case = CaseResult.model_validate(
+        {
+            "name": "derived",
+            "status": Status.FAILED,
+            "findings_discovered": 99,
+            "failures": [failure],
+        }
+    )
+    assert case.findings_discovered == 1
+
+    second = failure.model_copy(update={"finding_signature": "ms1:" + "c" * 64})
+    case.failures = [failure, second]
+    assert case.findings_discovered == 2
+
+    case.failures.pop()
+    assert case.findings_discovered == 1

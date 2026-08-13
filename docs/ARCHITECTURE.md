@@ -3,8 +3,8 @@
 ## System boundary
 
 Parity is a local verifier around user-owned computations. It is not a dataframe execution engine,
-an application runtime or a UI layer. The canonical input and result contracts are stable Python
-models; adapters isolate engine details.
+an application runtime or a UI layer. The canonical input and result contracts are defined as
+Python models; adapters isolate engine details.
 
 ```text
 parity.toml / Python API
@@ -82,6 +82,13 @@ session unusable; it is never silently restarted with reset state. Campaign tear
 terminates both process groups and their descendants. The lower-level `execute_isolated` API remains
 available when a fresh disposable process is required for every invocation.
 
+Counterexample discovery benefits from those persistent sessions, but accepted configured findings
+do not rely on their accumulated state. Deterministic witnesses are repeated once in a fresh worker
+pair, and generated witnesses are repeated twice with a new worker pair for each observation.
+Importable live callables use the same clean confirmation before their evidence is called replayable.
+Non-importable live callables cannot be reconstructed in a fresh process and retain same-process
+confirmation; their artifacts are evidence-only and explicitly reject automatic replay.
+
 Worker processes are not a hostile-code sandbox.
 
 ### Comparison and diagnosis
@@ -102,19 +109,22 @@ effects.
 
 ### Artifacts and reporting
 
-Each counterexample path is append-only by timestamp and input hash:
+The writer creates a new timestamped directory for each counterexample and does not overwrite an
+existing directory:
 
 ```text
 <artifact-root>/<safe-case>/<UTC timestamp>-<input hash>/
-  input.arrow
-  input.parquet  # present when the Arrow schema is representable in Parquet
+  input.arrow  # legacy single input
+  input.parquet  # present when representable
+  # or input-000.arrow, input-001.arrow, ... for a bundle
   manifest.json
   result.json
   replay.json
 ```
 
-`input.arrow` is the lossless replay authority; Parquet is only a human/tooling convenience and is
-omitted for schemas it cannot represent. `manifest.json` binds case/config metadata, hashes and
+Arrow IPC files are the lossless replay authority; Parquet is only a human/tooling convenience and
+is omitted for schemas it cannot represent. Bundle filenames are opaque: `replay.json` binds each
+file to its logical input name. `manifest.json` binds case/config metadata, hashes and
 artifact schema. `replay.json` contains the
 sanitized executable contract and argument vector needed to reproduce the case, and records that
 replay must be launched from the original project invocation directory. Import roots outside that
@@ -122,11 +132,12 @@ directory are deliberately non-replayable rather than replaced with a potentiall
 same-named module. Reports are separate projections that omit frame and value data. Artifact writes
 use a temporary directory and final rename so interrupted runs do not look complete.
 
-Replay contract version 2 binds the saved case to both worker runtime fingerprints and a data-safe
-effective-configuration hash. Replay probes both workers before target import and blocks both
-callables on drift. Version 1 artifacts are still accepted and are reported as unverified. The
-manifest remains version 1 because its integrity envelope is unchanged; JSON reports use schema
-version 2 to add suite and per-case provenance.
+Replay contract version 2 binds a single input to both worker runtime fingerprints and a data-safe
+effective-configuration hash. Version 3 adds an atomic named input bundle. Bundle artifacts use
+manifest version 2 so every consumed input file is required and hash-bound. Replay probes both
+workers before target import and blocks both callables on drift. Version 1 artifacts remain
+accepted and are reported as unverified. JSON report schema version 3 adds data-free mismatch
+signatures and distinct-finding counts.
 
 ## Extension seams
 

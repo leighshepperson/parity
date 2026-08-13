@@ -22,6 +22,9 @@ public examples and the risk of false passes.
   columns.
 - Strengthen generation around empty inputs, duplicate and null keys, multi-column joins, timezone
   boundaries, extreme numeric values and mixed missing-value representations.
+- Exercise multi-input relational campaigns on more public join and lookup implementations, and
+  refine the small relationship vocabulary from reproducible examples.
+- Improve mismatch-signature classification without presenting signatures as root causes or bugs.
 - Add explicit comparison policies where real migrations require them while keeping strict behaviour
   as the default.
 - Improve performance checks with clearer warm-up, sampling and uncertainty reporting.
@@ -32,8 +35,7 @@ public examples and the risk of false passes.
 - Define a small, documented adapter interface before adding engines beyond pandas, Polars and Arrow.
 - Consider optional DuckDB or Ibis support only with public compatibility fixtures and no new
   pairwise conversion paths.
-- Explore multiple-input and stateful-sequence campaigns after their replay and shrinking contracts
-  are well defined.
+- Explore stateful-sequence campaigns after their replay and shrinking contracts are well defined.
 - Explore metamorphic properties and user-supplied invariants as complements to
   reference-versus-candidate comparison.
 - Keep generators, comparators and artifact readers independently testable and usable from Python.
@@ -51,8 +53,8 @@ public examples and the risk of false passes.
 
 After the core is dependable, it may be useful to investigate stateful transformations, numerical
 invariants, comparisons across languages or hardware, and signed provenance for evidence exchanged
-between systems. These are experiments, not a ten-year plan. They should become project work only
-when a concrete public use case shows that they belong in Parity rather than another tool.
+between systems. These are exploratory ideas. They should become project work only when a concrete
+public use case shows that they belong in Parity rather than another tool.
 
 ## Non-goals
 

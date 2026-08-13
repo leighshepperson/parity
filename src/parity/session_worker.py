@@ -1,9 +1,10 @@
 """Private persistent isolated-execution worker.
 
-The parent sends only opaque call-directory names over stdin.  User inputs and
-outputs continue to travel through private Arrow/JSON files, and stdout/stderr
-are never part of the protocol.  A protocol failure terminates the worker so
-the parent can fail the session closed.
+The parent sends only opaque call-directory names over stdin.  Single frames and
+ordered/named frame bundles continue to travel through private Arrow files;
+outputs use private Arrow/JSON files, and stdout/stderr are never part of the
+protocol.  A protocol failure terminates the worker so the parent can fail the
+session closed.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         run_session(Path(arguments[0]))
     except BaseException:
-        # Exceptions may include paths, source, or customer data.  Do not print
+        # Exceptions may include paths, source, or input data.  Do not print
         # them; the parent reports a data-safe WorkerSessionError instead.
         return 1
     return 0

@@ -10,29 +10,34 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import keyword
 import os
 import re
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 import pyarrow as pa
 
 from parity._version import __version__
 from parity.adapters import load_arrow_fixture, to_arrow
 from parity.artifacts import ArtifactStore
-from parity.comparison import compare_observations
+from parity.comparison import compare_observations, mismatch_signature
 from parity.diagnostics import diagnose
 from parity.execution import (
+    ArrowInputBundle,
     ExecutionOutcome,
     IsolatedExecutionSession,
     Observation,
     execute_callable_current,
 )
-from parity.generation import GeneratedCase, adversarial_cases
+from parity.generation import (
+    adversarial_bundle_cases,
+    adversarial_cases,
+)
 from parity.models import (
     AdapterName,
     CallableSpec,
@@ -43,12 +48,15 @@ from parity.models import (
     ExampleResult,
     FrameSchema,
     GenerationConfig,
+    InputBundle,
+    InputSpec,
     Mismatch,
     MismatchKind,
     PandasInput,
     ParityConfig,
     PerformanceConfig,
     PerformanceResult,
+    Relationship,
     Status,
     SuiteProvenance,
     SuiteResult,
@@ -60,16 +68,20 @@ from parity.provenance import (
     effective_config_sha256,
     normalize_distribution_names,
 )
-from parity.schema import infer_schema
-from parity.shrinking import find_counterexample
+from parity.schema import infer_schema, validate_bundle_schemas
+from parity.shrinking import (
+    find_unseen_bundle_counterexample,
+    find_unseen_counterexample,
+)
 
 
 class ReplayError(ValueError):
     """Raised when an artifact cannot be safely or exactly replayed."""
 
 
-Runner = Callable[[pa.Table], Observation]
-PairRunner = Callable[[pa.Table], tuple[Observation, Observation]]
+CampaignInput: TypeAlias = pa.Table | dict[str, pa.Table]
+Runner = Callable[[CampaignInput], Observation]
+PairRunner = Callable[[CampaignInput], tuple[Observation, Observation]]
 
 
 class _StopGeneratedCampaign(BaseException):
@@ -78,6 +90,12 @@ class _StopGeneratedCampaign(BaseException):
 
 def _infrastructure_error(observation: Observation) -> bool:
     if observation.outcome in {ExecutionOutcome.CRASHED, ExecutionOutcome.TIMED_OUT}:
+        return True
+    # The callable returned normally, but Parity could not preserve its value as
+    # Arrow or JSON. Treating two identical serialization failures as equivalent
+    # would turn an unobservable comparison into a false pass. User-raised
+    # exceptions have no return_type and remain part of the semantic contract.
+    if observation.outcome is ExecutionOutcome.RAISED and observation.return_type is not None:
         return True
     exception = observation.exception
     return bool(
@@ -101,17 +119,17 @@ def _infrastructure_mismatch(label: str, observation: Observation) -> Mismatch:
 
 
 def _observe_pair(
-    table: pa.Table,
+    value: CampaignInput,
     reference_runner: Runner,
     candidate_runner: Runner,
     policy: ComparisonPolicy,
     pair_runner: PairRunner | None = None,
 ) -> tuple[Observation, Observation, list[Mismatch], Status]:
     if pair_runner is None:
-        reference = reference_runner(table)
-        candidate = candidate_runner(table)
+        reference = reference_runner(value)
+        candidate = candidate_runner(value)
     else:
-        reference, candidate = pair_runner(table)
+        reference, candidate = pair_runner(value)
     infrastructure = []
     if _infrastructure_error(reference):
         infrastructure.append(_infrastructure_mismatch("reference", reference))
@@ -141,13 +159,16 @@ def _example_result(
         mismatches=mismatches,
         reference_metrics=reference.metrics,
         candidate_metrics=candidate.metrics,
+        finding_signature=(
+            mismatch_signature(mismatches) if status is Status.FAILED and mismatches else None
+        ),
     )
 
 
 def _store_failure(
     store: ArtifactStore,
     case: str | CaseConfig,
-    table: pa.Table,
+    value: CampaignInput,
     result: ExampleResult,
     *,
     source: str,
@@ -160,7 +181,7 @@ def _store_failure(
 ) -> None:
     result.artifact = store.write_failure(
         case,
-        table,
+        value,
         result,
         reference=reference,
         candidate=candidate,
@@ -197,11 +218,45 @@ def _performance_failure(result: PerformanceResult) -> ExampleResult:
     )
 
 
+def _input_row_count(value: CampaignInput) -> int:
+    """Return a stable size hint for representative-input selection."""
+
+    if isinstance(value, pa.Table):
+        return int(value.num_rows)
+    return sum(table.num_rows for table in value.values())
+
+
+def _campaign_error(
+    message: str,
+    reference: Observation,
+    candidate: Observation,
+    *,
+    source: str = "generated:unstable",
+) -> ExampleResult:
+    """Describe a failure of the discovery process, not a semantic finding."""
+
+    return ExampleResult(
+        source=source,
+        status=Status.ERROR,
+        mismatches=[
+            Mismatch(
+                kind=MismatchKind.EXCEPTION,
+                message=message,
+                path="$campaign",
+            )
+        ],
+        reference_metrics=reference.metrics,
+        candidate_metrics=candidate.metrics,
+    )
+
+
 def _campaign(
     *,
     name: str,
-    schema: FrameSchema,
-    fixture: pa.Table | None,
+    schema: FrameSchema | None,
+    fixture: CampaignInput | None,
+    input_bundle: InputBundle | None = None,
+    bundle_schemas: Mapping[str, FrameSchema] | None = None,
     comparison: ComparisonPolicy,
     generation: GenerationConfig,
     performance_config: PerformanceConfig,
@@ -209,10 +264,11 @@ def _campaign(
     reference_runner: Runner,
     candidate_runner: Runner,
     pair_runner: PairRunner | None = None,
+    confirmation_pair_runner: PairRunner | None = None,
     artifact_case: str | CaseConfig,
     reference_spec: CallableSpec | None = None,
     candidate_spec: CallableSpec | None = None,
-    benchmark: Callable[[pa.Table], PerformanceResult] | None = None,
+    benchmark: Callable[[CampaignInput], PerformanceResult] | None = None,
     exact_only: bool = False,
     expected_provenance: CaseProvenance | None = None,
     observed_provenance: CaseProvenance | None = None,
@@ -222,14 +278,19 @@ def _campaign(
     failures: list[ExampleResult] = []
     deterministic_count = 0
     generated_count = 0
-    representative = fixture
+    representative: CampaignInput | None = fixture
     reference_runtime = observed_provenance.reference if observed_provenance else None
     candidate_runtime = observed_provenance.candidate if observed_provenance else None
+    seen_signatures: set[str] = set()
+    operational_error = False
 
-    def observe(table: pa.Table) -> tuple[Observation, Observation, list[Mismatch], Status]:
+    if (schema is None) == (input_bundle is None or bundle_schemas is None):
+        raise ValueError("campaign requires exactly one single-frame or input-bundle contract")
+
+    def observe(value: CampaignInput) -> tuple[Observation, Observation, list[Mismatch], Status]:
         nonlocal reference_runtime, candidate_runtime
         observed = _observe_pair(
-            table,
+            value,
             reference_runner,
             candidate_runner,
             comparison,
@@ -240,33 +301,63 @@ def _campaign(
         candidate_runtime = candidate_runtime or candidate.runtime
         return observed
 
-    deterministic: list[GeneratedCase]
+    def confirm(value: CampaignInput) -> tuple[Observation, Observation, list[Mismatch], Status]:
+        """Re-observe a witness, using clean execution state when available."""
+
+        if confirmation_pair_runner is None:
+            return observe(value)
+        return _observe_pair(
+            value,
+            reference_runner,
+            candidate_runner,
+            comparison,
+            confirmation_pair_runner,
+        )
+
+    deterministic: list[tuple[str, CampaignInput]]
     if exact_only:
         if fixture is None:
             raise ReplayError("the replay artifact has no input fixture")
-        deterministic = [GeneratedCase("replay", fixture)]
-    elif generation.adversarial_examples:
-        deterministic = adversarial_cases(schema, fixture=fixture)
+        deterministic = [("replay", fixture)]
+    elif input_bundle is not None and bundle_schemas is not None:
+        if generation.adversarial_examples:
+            fixtures = fixture if isinstance(fixture, dict) else None
+            deterministic = [
+                (generated.source, generated.tables)
+                for generated in adversarial_bundle_cases(
+                    input_bundle,
+                    bundle_schemas,
+                    fixtures=fixtures,
+                )
+            ]
+        elif fixture is not None:
+            deterministic = [("fixture", fixture)]
+        else:
+            deterministic = []
+    elif generation.adversarial_examples and schema is not None:
+        single_fixture = fixture if isinstance(fixture, pa.Table) else None
+        deterministic = [
+            (generated.source, generated.table)
+            for generated in adversarial_cases(schema, fixture=single_fixture)
+        ]
     elif fixture is not None:
-        deterministic = [GeneratedCase("fixture", fixture)]
+        deterministic = [("fixture", fixture)]
     else:
         deterministic = []
 
-    for generated in deterministic:
+    for source, value in deterministic:
         deterministic_count += 1
-        if representative is None or (
-            generated.table.num_rows > representative.num_rows and generated.table.num_rows > 0
-        ):
-            representative = generated.table
-        reference, candidate, mismatches, status = observe(generated.table)
-        if status is not Status.PASSED:
-            failure = _example_result(generated.source, reference, candidate, mismatches, status)
+        if representative is None or _input_row_count(value) > _input_row_count(representative):
+            representative = value
+        reference, candidate, mismatches, status = observe(value)
+        if status is Status.ERROR:
+            failure = _example_result(source, reference, candidate, mismatches, status)
             _store_failure(
                 artifact_store,
                 artifact_case,
-                generated.table,
+                value,
                 failure,
-                source=generated.source,
+                source=source,
                 seed=generation.seed,
                 reference=reference_spec,
                 candidate=candidate_spec,
@@ -275,39 +366,186 @@ def _campaign(
                 config_sha256=config_sha256,
             )
             failures.append(failure)
-        if status is Status.ERROR:
+            operational_error = True
             break
+        if status is Status.FAILED:
+            if exact_only:
+                failure = _example_result(source, reference, candidate, mismatches, status)
+                _store_failure(
+                    artifact_store,
+                    artifact_case,
+                    value,
+                    failure,
+                    source=source,
+                    seed=generation.seed,
+                    reference=reference_spec,
+                    candidate=candidate_spec,
+                    reference_observation=reference,
+                    candidate_observation=candidate,
+                    config_sha256=config_sha256,
+                )
+                failures.append(failure)
+                break
+            initial_signature = mismatch_signature(mismatches)
+            repeated_reference, repeated_candidate, repeated_mismatches, repeated_status = confirm(
+                value
+            )
+            deterministic_error: str | None = None
+            if repeated_status is Status.ERROR:
+                failure = _example_result(
+                    source,
+                    repeated_reference,
+                    repeated_candidate,
+                    repeated_mismatches,
+                    Status.ERROR,
+                )
+            elif repeated_status is Status.PASSED:
+                deterministic_error = (
+                    "the deterministic witness was not reproducible; check callable state "
+                    "and external dependencies"
+                )
+            elif mismatch_signature(repeated_mismatches) != initial_signature:
+                deterministic_error = (
+                    "the deterministic witness produced different mismatch signatures "
+                    "across repeated evaluation"
+                )
+            else:
+                unstable_sides = [
+                    label
+                    for label, differences in (
+                        (
+                            "reference",
+                            compare_observations(reference, repeated_reference, comparison),
+                        ),
+                        (
+                            "candidate",
+                            compare_observations(candidate, repeated_candidate, comparison),
+                        ),
+                    )
+                    if differences
+                ]
+                if unstable_sides:
+                    deterministic_error = (
+                        "the deterministic witness was nondeterministic on the "
+                        + ", ".join(unstable_sides)
+                        + " side"
+                    )
 
-    # A deterministic failure is already a concrete, replayable witness.  A
-    # second property search cannot change the campaign outcome and used to
-    # launch hundreds of disposable workers for known-broken migrations.
-    if not exact_only and not failures:
+            if deterministic_error is not None:
+                failure = _campaign_error(
+                    deterministic_error,
+                    repeated_reference,
+                    repeated_candidate,
+                    source="deterministic:unstable",
+                )
+            elif repeated_status is Status.FAILED:
+                failure = _example_result(
+                    source,
+                    repeated_reference,
+                    repeated_candidate,
+                    repeated_mismatches,
+                    Status.FAILED,
+                )
+
+            if failure.status is Status.ERROR:
+                _store_failure(
+                    artifact_store,
+                    artifact_case,
+                    value,
+                    failure,
+                    source=failure.source,
+                    seed=generation.seed,
+                    reference=reference_spec,
+                    candidate=candidate_spec,
+                    reference_observation=repeated_reference,
+                    candidate_observation=repeated_candidate,
+                    config_sha256=config_sha256,
+                )
+                failures.append(failure)
+                operational_error = True
+                break
+
+            signature = failure.finding_signature
+            if signature is None:  # pragma: no cover - enforced by _example_result
+                raise RuntimeError("semantic failure has no finding signature")
+            if signature not in seen_signatures:
+                _store_failure(
+                    artifact_store,
+                    artifact_case,
+                    value,
+                    failure,
+                    source=source,
+                    seed=generation.seed,
+                    reference=reference_spec,
+                    candidate=candidate_spec,
+                    reference_observation=repeated_reference,
+                    candidate_observation=repeated_candidate,
+                    config_sha256=config_sha256,
+                )
+                failures.append(failure)
+                seen_signatures.add(signature)
+            if len(seen_signatures) >= generation.max_findings:
+                break
+
+    # Each search receives its own bounded Hypothesis budget. A classifier
+    # excludes already confirmed signatures, so max_findings bounds both the
+    # amount of evidence and the worst-case search cost.
+    while (
+        not exact_only and not operational_error and len(seen_signatures) < generation.max_findings
+    ):
         latest: tuple[Observation, Observation, list[Mismatch], Status] | None = None
-        latest_table: pa.Table | None = None
+        latest_value: CampaignInput | None = None
 
-        def differs(table: pa.Table) -> bool:
-            nonlocal generated_count, latest, latest_table
+        def classify(value: CampaignInput) -> str | None:
+            nonlocal generated_count, latest, latest_value
             generated_count += 1
-            latest_table = table
-            latest = observe(table)
+            latest_value = value
+            latest = observe(value)
             if latest[3] is Status.ERROR:
-                # Operational failures are not a semantic property of the input.
-                # Stop on the first one rather than repeatedly executing a
-                # crashed or timed-out worker during Hypothesis shrinking.
+                # Operational failures are not a semantic property of input.
+                # BaseException prevents Hypothesis from retrying or shrinking.
                 raise _StopGeneratedCampaign
-            return latest[3] is not Status.PASSED
+            if latest[3] is Status.PASSED:
+                return None
+            return mismatch_signature(latest[2])
 
         try:
-            counterexample = find_counterexample(schema, differs, generation)
+            if input_bundle is not None and bundle_schemas is not None:
+                counterexample = find_unseen_bundle_counterexample(
+                    input_bundle,
+                    bundle_schemas,
+                    classify,
+                    seen_signatures,
+                    generation,
+                )
+                counterexample_value = counterexample.tables if counterexample is not None else None
+                counterexample_source = (
+                    counterexample.source if counterexample is not None else None
+                )
+            elif schema is not None:
+                single_counterexample = find_unseen_counterexample(
+                    schema,
+                    classify,
+                    seen_signatures,
+                    generation,
+                )
+                counterexample_value = (
+                    single_counterexample.table if single_counterexample is not None else None
+                )
+                counterexample_source = (
+                    single_counterexample.source if single_counterexample is not None else None
+                )
+            else:  # pragma: no cover - guarded at campaign entry
+                raise RuntimeError("campaign input contract is missing")
         except _StopGeneratedCampaign:
-            if latest is None or latest_table is None:  # pragma: no cover - defensive
+            if latest is None or latest_value is None:  # pragma: no cover - defensive
                 raise
             reference, candidate, mismatches, status = latest
             failure = _example_result("generated:error", reference, candidate, mismatches, status)
             _store_failure(
                 artifact_store,
                 artifact_case,
-                latest_table,
+                latest_value,
                 failure,
                 source="generated:error",
                 seed=generation.seed,
@@ -318,40 +556,127 @@ def _campaign(
                 config_sha256=config_sha256,
             )
             failures.append(failure)
-            counterexample = None
-        if counterexample is not None:
-            # Re-observe the final minimized value. Hypothesis may have last
-            # evaluated a different shrink candidate before returning.
-            reference, candidate, mismatches, status = observe(counterexample.table)
-            if status is Status.PASSED:
-                status = Status.ERROR
-                mismatches = [
-                    Mismatch(
-                        kind=MismatchKind.EXCEPTION,
-                        message=(
-                            "the minimized witness was not reproducible; check callable state "
-                            "and external dependencies"
-                        ),
-                        path="$campaign",
-                    )
-                ]
+            operational_error = True
+            break
+        if counterexample_value is None or counterexample_source is None:
+            break
+
+        # Hypothesis may finish on a different shrink attempt than the returned
+        # value. Confirm twice, and require each implementation to be stable on
+        # its own before calling the witness a distinct semantic finding.
+        first = confirm(counterexample_value)
+        second = confirm(counterexample_value)
+        generated_count += 2
+        first_reference, first_candidate, first_mismatches, first_status = first
+        second_reference, second_candidate, second_mismatches, second_status = second
+        failure_reference = second_reference
+        failure_candidate = second_candidate
+
+        confirmation_message: str | None = None
+        if first_status is Status.ERROR or second_status is Status.ERROR:
+            error_observation = first if first_status is Status.ERROR else second
+            error_reference, error_candidate, error_mismatches, _ = error_observation
+            failure_reference = error_reference
+            failure_candidate = error_candidate
             failure = _example_result(
-                counterexample.source, reference, candidate, mismatches, status
+                "generated:error",
+                error_reference,
+                error_candidate,
+                error_mismatches,
+                Status.ERROR,
             )
+        elif first_status is Status.PASSED or second_status is Status.PASSED:
+            confirmation_message = (
+                "the minimized witness was not reproducible; check callable state "
+                "and external dependencies"
+            )
+            failure = _campaign_error(
+                confirmation_message,
+                second_reference,
+                second_candidate,
+            )
+        else:
+            first_signature = mismatch_signature(first_mismatches)
+            second_signature = mismatch_signature(second_mismatches)
+            reference_instability = compare_observations(
+                first_reference, second_reference, comparison
+            )
+            candidate_instability = compare_observations(
+                first_candidate, second_candidate, comparison
+            )
+            if first_signature != second_signature:
+                confirmation_message = (
+                    "the minimized witness produced different mismatch signatures "
+                    "across repeated evaluation"
+                )
+            elif reference_instability or candidate_instability:
+                unstable_side_names = ", ".join(
+                    label
+                    for label, differences in (
+                        ("reference", reference_instability),
+                        ("candidate", candidate_instability),
+                    )
+                    if differences
+                )
+                confirmation_message = (
+                    f"the minimized witness was nondeterministic on the {unstable_side_names} side"
+                )
+            elif first_signature in seen_signatures:
+                confirmation_message = (
+                    "the minimized witness changed into an already recorded mismatch signature"
+                )
+
+            if confirmation_message is not None:
+                failure = _campaign_error(
+                    confirmation_message,
+                    second_reference,
+                    second_candidate,
+                )
+            else:
+                failure = _example_result(
+                    counterexample_source,
+                    second_reference,
+                    second_candidate,
+                    second_mismatches,
+                    Status.FAILED,
+                )
+
+        if failure.status is Status.ERROR:
             _store_failure(
                 artifact_store,
                 artifact_case,
-                counterexample.table,
+                counterexample_value,
                 failure,
-                source=counterexample.source,
+                source=failure.source,
                 seed=generation.seed,
                 reference=reference_spec,
                 candidate=candidate_spec,
-                reference_observation=reference,
-                candidate_observation=candidate,
+                reference_observation=failure_reference,
+                candidate_observation=failure_candidate,
                 config_sha256=config_sha256,
             )
             failures.append(failure)
+            operational_error = True
+            break
+
+        signature = failure.finding_signature
+        if signature is None:  # pragma: no cover - enforced by _example_result
+            raise RuntimeError("confirmed semantic failure has no finding signature")
+        _store_failure(
+            artifact_store,
+            artifact_case,
+            counterexample_value,
+            failure,
+            source=counterexample_source,
+            seed=generation.seed,
+            reference=reference_spec,
+            candidate=candidate_spec,
+            reference_observation=second_reference,
+            candidate_observation=second_candidate,
+            config_sha256=config_sha256,
+        )
+        failures.append(failure)
+        seen_signatures.add(signature)
 
     performance: PerformanceResult | None = None
     semantics_passed = not failures
@@ -382,6 +707,12 @@ def _campaign(
             if performance.regression and performance_config.fail_on_regression:
                 failures.append(_performance_failure(performance))
 
+    semantic_failures = sorted(
+        (failure for failure in failures if failure.finding_signature is not None),
+        key=lambda failure: failure.finding_signature or "",
+    )
+    nonsemantic_failures = [failure for failure in failures if failure.finding_signature is None]
+    failures = [*semantic_failures, *nonsemantic_failures]
     mismatches = [mismatch for failure in failures for mismatch in failure.mismatches]
     status = _status_for(failures, None)
     verification = "captured"
@@ -421,10 +752,76 @@ def _configured_case(
     config_sha256: str | None = None,
 ) -> CaseResult:
     configured_started = time.perf_counter()
-    fixture = load_arrow_fixture(case.fixture) if case.fixture is not None else None
-    schema = case.input_schema or (infer_schema(fixture) if fixture is not None else None)
-    if schema is None:  # defensive; Pydantic normally prevents this state
-        raise ValueError(f"case {case.name!r} has no fixture or schema")
+    input_bundle = case.input_bundle
+    bundle_schemas: dict[str, FrameSchema] | None = None
+    if input_bundle is None:
+        fixture: CampaignInput | None = (
+            load_arrow_fixture(case.fixture) if case.fixture is not None else None
+        )
+        schema = case.input_schema or (
+            infer_schema(fixture) if isinstance(fixture, pa.Table) else None
+        )
+        if schema is None:  # defensive; Pydantic normally prevents this state
+            raise ValueError(f"case {case.name!r} has no fixture or schema")
+    else:
+        loaded_fixtures: dict[str, pa.Table] = {}
+        bundle_schemas = {}
+        for input_name, input_spec in input_bundle.inputs.items():
+            input_fixture = (
+                load_arrow_fixture(input_spec.fixture) if input_spec.fixture is not None else None
+            )
+            if input_fixture is not None:
+                loaded_fixtures[input_name] = input_fixture
+            resolved_schema = input_spec.input_schema or (
+                infer_schema(input_fixture) if input_fixture is not None else None
+            )
+            if resolved_schema is None:  # pragma: no cover - model validation is defensive
+                raise ValueError(
+                    f"case {case.name!r} input {input_name!r} has no fixture or schema"
+                )
+            bundle_schemas[input_name] = resolved_schema
+        validate_bundle_schemas(input_bundle, bundle_schemas)
+        # A deterministic fixture must be an atomic bundle. Partial fixture sets
+        # still inform schema inference but are never mixed with generated peers.
+        fixture = loaded_fixtures if len(loaded_fixtures) == len(input_bundle.inputs) else None
+        schema = None
+
+    def bound_input(value: CampaignInput) -> ArrowInputBundle:
+        if isinstance(value, pa.Table):
+            return value
+        if input_bundle is None or input_bundle.binding == "keyword":
+            return value
+        return tuple(value[name] for name in input_bundle.inputs)
+
+    def run_clean_pair(value: CampaignInput) -> tuple[Observation, Observation]:
+        """Execute one confirmation in newly started reference/candidate workers."""
+
+        with (
+            IsolatedExecutionSession(
+                case.reference,
+                timeout_seconds=case.timeout_seconds,
+                expected_runtime=(expected_provenance.reference if expected_provenance else None),
+            ) as clean_reference,
+            IsolatedExecutionSession(
+                case.candidate,
+                timeout_seconds=case.timeout_seconds,
+                expected_runtime=(expected_provenance.candidate if expected_provenance else None),
+            ) as clean_candidate,
+            ThreadPoolExecutor(max_workers=2, thread_name_prefix="parity-confirm") as clean_pool,
+        ):
+            reference_future = clean_pool.submit(
+                clean_reference.execute,
+                bound_input(value),
+                static_args=case.static_args,
+                static_kwargs=case.static_kwargs,
+            )
+            candidate_future = clean_pool.submit(
+                clean_candidate.execute,
+                bound_input(value),
+                static_args=case.static_args,
+                static_kwargs=case.static_kwargs,
+            )
+            return reference_future.result(), candidate_future.result()
 
     # A configured campaign amortizes interpreter/import startup across all
     # examples while retaining distinct reference and candidate process state.
@@ -494,37 +891,40 @@ def _configured_case(
                     elapsed_seconds=time.perf_counter() - configured_started,
                 )
 
-        def run(session: IsolatedExecutionSession, table: pa.Table) -> Observation:
+        def run(session: IsolatedExecutionSession, value: CampaignInput) -> Observation:
             return session.execute(
-                table,
+                bound_input(value),
                 static_args=case.static_args,
                 static_kwargs=case.static_kwargs,
             )
 
-        def run_pair(table: pa.Table) -> tuple[Observation, Observation]:
+        def run_pair(value: CampaignInput) -> tuple[Observation, Observation]:
             # Independent sessions make concurrent waits safe without sharing
             # callable globals or adapter arguments between the two sides.
-            reference = pool.submit(run, reference_session, table)
-            candidate = pool.submit(run, candidate_session, table)
+            reference = pool.submit(run, reference_session, value)
+            candidate = pool.submit(run, candidate_session, value)
             return reference.result(), candidate.result()
 
         return _campaign(
             name=case.name,
             schema=schema,
             fixture=fixture,
+            input_bundle=input_bundle,
+            bundle_schemas=bundle_schemas,
             comparison=case.comparison,
             generation=case.generation,
             performance_config=case.performance,
             artifact_store=artifact_store,
-            reference_runner=lambda table: run(reference_session, table),
-            candidate_runner=lambda table: run(candidate_session, table),
+            reference_runner=lambda value: run(reference_session, value),
+            candidate_runner=lambda value: run(candidate_session, value),
             pair_runner=run_pair,
+            confirmation_pair_runner=run_clean_pair,
             artifact_case=case,
             reference_spec=case.reference,
             candidate_spec=case.candidate,
-            benchmark=lambda table: benchmark_observations(
-                lambda: run(reference_session, table),
-                lambda: run(candidate_session, table),
+            benchmark=lambda value: benchmark_observations(
+                lambda: run(reference_session, value),
+                lambda: run(candidate_session, value),
                 case.performance,
             ),
             exact_only=exact_only,
@@ -661,6 +1061,10 @@ def run_live(
     *,
     fixture: Any | None,
     schema: FrameSchema | None,
+    input_fixtures: Mapping[str, Any] | None = None,
+    input_schemas: Mapping[str, FrameSchema] | None = None,
+    relationships: Sequence[Relationship] = (),
+    input_binding: Literal["keyword", "positional"] = "keyword",
     comparison: ComparisonPolicy,
     generation: GenerationConfig,
     performance: PerformanceConfig,
@@ -684,13 +1088,50 @@ def run_live(
     # look like equivalent user exceptions and incorrectly pass the suite.
     reference_distributions = normalize_distribution_names(reference_distributions)
     candidate_distributions = normalize_distribution_names(candidate_distributions)
+    has_single = fixture is not None or schema is not None
+    has_bundle = input_fixtures is not None or input_schemas is not None
+    if has_single == has_bundle:
+        raise ValueError(
+            "verify requires exactly one fixture/schema or input_fixtures/input_schemas"
+        )
+    if has_single and (relationships or input_binding != "keyword"):
+        raise ValueError(
+            "relationships and input_binding apply only to input_fixtures/input_schemas"
+        )
+
     # Fixture loaders and replay canonicalize chunk layout. Do the same before
-    # live observation so a chunk-sensitive Arrow callable sees identical input
-    # during the original run and replay.
-    table = to_arrow(fixture).combine_chunks() if fixture is not None else None
-    selected_schema = schema or (infer_schema(table) if table is not None else None)
-    if selected_schema is None:
-        raise ValueError("verify requires either fixture or schema")
+    # live observation so chunk-sensitive Arrow callables see identical inputs.
+    live_bundle: InputBundle | None = None
+    bundle_schemas: dict[str, FrameSchema] | None = None
+    if has_single:
+        campaign_fixture: CampaignInput | None = (
+            to_arrow(fixture).combine_chunks() if fixture is not None else None
+        )
+        selected_schema = schema or (
+            infer_schema(campaign_fixture) if isinstance(campaign_fixture, pa.Table) else None
+        )
+        if selected_schema is None:  # pragma: no cover - guarded above
+            raise ValueError("verify requires either fixture or schema")
+    else:
+        raw_fixtures = dict(input_fixtures or {})
+        explicit_schemas = dict(input_schemas or {})
+        if raw_fixtures and explicit_schemas and set(raw_fixtures) != set(explicit_schemas):
+            raise ValueError("input_fixtures and input_schemas must use the same input names")
+        names = list(raw_fixtures or explicit_schemas)
+        if not 2 <= len(names) <= 3:
+            raise ValueError("verify input bundles require two or three named inputs")
+        converted = {name: to_arrow(raw_fixtures[name]).combine_chunks() for name in raw_fixtures}
+        bundle_schemas = {
+            name: explicit_schemas.get(name) or infer_schema(converted[name]) for name in names
+        }
+        live_bundle = InputBundle(
+            inputs={name: InputSpec(input_schema=bundle_schemas[name]) for name in names},
+            relationships=list(relationships),
+            binding=input_binding,
+        )
+        validate_bundle_schemas(live_bundle, bundle_schemas)
+        campaign_fixture = converted if len(converted) == len(names) else None
+        selected_schema = None
 
     reference_spec = _importable_spec(
         reference,
@@ -707,29 +1148,64 @@ def run_live(
 
     artifact_case: str | CaseConfig = "live"
     if reference_spec is not None and candidate_spec is not None:
+        case_input: dict[str, Any] = (
+            {"input_schema": selected_schema}
+            if live_bundle is None
+            else {"input_bundle": live_bundle}
+        )
         artifact_case = CaseConfig(
             name="live",
             reference=reference_spec,
             candidate=candidate_spec,
-            input_schema=selected_schema,
             comparison=comparison,
             generation=generation,
             performance=performance,
+            **case_input,
         )
 
-    def reference_runner(value: pa.Table) -> Observation:
+    def bound_live_input(value: CampaignInput) -> ArrowInputBundle:
+        if isinstance(value, pa.Table):
+            return value
+        if live_bundle is None or live_bundle.binding == "keyword":
+            return value
+        return tuple(value[name] for name in live_bundle.inputs)
+
+    confirmation_pair_runner: PairRunner | None = None
+    if reference_spec is not None and candidate_spec is not None:
+
+        def run_clean_live_pair(value: CampaignInput) -> tuple[Observation, Observation]:
+            with (
+                IsolatedExecutionSession(reference_spec) as clean_reference,
+                IsolatedExecutionSession(candidate_spec) as clean_candidate,
+                ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="parity-live-confirm"
+                ) as clean_pool,
+            ):
+                reference_future = clean_pool.submit(
+                    clean_reference.execute,
+                    bound_live_input(value),
+                )
+                candidate_future = clean_pool.submit(
+                    clean_candidate.execute,
+                    bound_live_input(value),
+                )
+                return reference_future.result(), candidate_future.result()
+
+        confirmation_pair_runner = run_clean_live_pair
+
+    def reference_runner(value: CampaignInput) -> Observation:
         return execute_callable_current(
             reference,
-            value,
+            bound_live_input(value),
             adapter=reference_adapter,
             pandas_input=reference_pandas_input,
             record_distributions=reference_distributions,
         )
 
-    def candidate_runner(value: pa.Table) -> Observation:
+    def candidate_runner(value: CampaignInput) -> Observation:
         return execute_callable_current(
             candidate,
-            value,
+            bound_live_input(value),
             adapter=candidate_adapter,
             pandas_input=candidate_pandas_input,
             record_distributions=candidate_distributions,
@@ -761,6 +1237,7 @@ def run_live(
                     }
                 ),
                 "schema": selected_schema,
+                "input_bundle": live_bundle,
                 "comparison": comparison,
                 "generation": generation,
                 "performance": performance,
@@ -771,7 +1248,9 @@ def run_live(
     result = _campaign(
         name="live",
         schema=selected_schema,
-        fixture=table,
+        fixture=campaign_fixture,
+        input_bundle=live_bundle,
+        bundle_schemas=bundle_schemas,
         comparison=comparison,
         generation=generation,
         performance_config=performance,
@@ -781,6 +1260,7 @@ def run_live(
         artifact_case=artifact_case,
         reference_spec=reference_spec,
         candidate_spec=candidate_spec,
+        confirmation_pair_runner=confirmation_pair_runner,
         benchmark=lambda value: benchmark_observations(
             lambda: reference_runner(value),
             lambda: candidate_runner(value),
@@ -808,15 +1288,23 @@ def _artifact_root(path: Path) -> Path:
     raise ReplayError("artifact must be a campaign directory, replay.json, or manifest.json")
 
 
-def _verify_manifest(root: Path) -> None:
-    manifest_path = root / "manifest.json"
+def _verify_manifest(root: Path) -> dict[str, Any]:
+    try:
+        resolved_root = root.resolve(strict=True)
+    except OSError as error:
+        raise ReplayError("artifact directory is missing or invalid") from error
+    manifest_path = resolved_root / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ReplayError("artifact manifest must be a regular file")
     try:
         manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise ReplayError("artifact manifest is missing or invalid") from error
-    if manifest.get("version") != 1 or not isinstance(manifest.get("files"), dict):
+    if manifest.get("version") not in {1, 2} or not isinstance(manifest.get("files"), dict):
         raise ReplayError("unsupported artifact manifest")
-    required = {"input.arrow", "replay.json", "result.json"}
+    required = {"replay.json", "result.json"}
+    if manifest.get("version") == 1:
+        required.add("input.arrow")
     missing = required - set(manifest["files"])
     if missing:
         raise ReplayError(
@@ -825,15 +1313,67 @@ def _verify_manifest(root: Path) -> None:
     for name, metadata in manifest["files"].items():
         if not isinstance(name, str) or Path(name).name != name or not isinstance(metadata, dict):
             raise ReplayError("artifact manifest contains an unsafe file entry")
-        file_path = root / name
+        expected_bytes = metadata.get("bytes")
+        expected_sha256 = metadata.get("sha256")
+        if (
+            type(expected_bytes) is not int
+            or expected_bytes < 0
+            or not isinstance(expected_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+        ):
+            raise ReplayError(f"artifact manifest contains invalid metadata: {name}")
+        file_path = resolved_root / name
         try:
-            content = file_path.read_bytes()
+            if file_path.is_symlink():
+                raise ReplayError(f"artifact file is not a regular contained file: {name}")
+            resolved_file = file_path.resolve(strict=True)
+            if resolved_file.parent != resolved_root or not resolved_file.is_file():
+                raise ReplayError(f"artifact file is not a regular contained file: {name}")
+            actual_bytes = resolved_file.stat().st_size
         except OSError as error:
             raise ReplayError(f"artifact file is missing: {name}") from error
-        if len(content) != metadata.get("bytes"):
+        if actual_bytes != expected_bytes:
             raise ReplayError(f"artifact size check failed: {name}")
-        if hashlib.sha256(content).hexdigest() != metadata.get("sha256"):
+        digest = hashlib.sha256()
+        try:
+            with resolved_file.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+        except OSError as error:
+            raise ReplayError(f"artifact file could not be read: {name}") from error
+        if digest.hexdigest() != expected_sha256:
             raise ReplayError(f"artifact integrity check failed: {name}")
+    return manifest
+
+
+def _replay_bundle_inputs(
+    replay: dict[str, Any], manifest: dict[str, Any], root: Path
+) -> dict[str, Path]:
+    raw_inputs = replay.get("inputs")
+    if not isinstance(raw_inputs, list) or not 2 <= len(raw_inputs) <= 3:
+        raise ReplayError("replay input bundle must contain two or three named inputs")
+    inputs: dict[str, Path] = {}
+    seen_files: set[str] = set()
+    for raw in raw_inputs:
+        if not isinstance(raw, dict) or set(raw) != {"name", "file"}:
+            raise ReplayError("replay input bundle contains an invalid entry")
+        name, filename = raw["name"], raw["file"]
+        if (
+            not isinstance(name, str)
+            or not name.isidentifier()
+            or keyword.iskeyword(name)
+            or name in inputs
+            or not isinstance(filename, str)
+            or Path(filename).name != filename
+            or filename in seen_files
+            or not filename.endswith(".arrow")
+        ):
+            raise ReplayError("replay input bundle contains an unsafe entry")
+        if filename not in manifest["files"]:
+            raise ReplayError(f"artifact manifest does not bind bundled input: {filename}")
+        inputs[name] = root / filename
+        seen_files.add(filename)
+    return inputs
 
 
 def _restore_environment(case_data: dict[str, Any]) -> None:
@@ -892,21 +1432,29 @@ def replay_artifact(path: str | Path) -> SuiteResult:
 
     started = time.perf_counter()
     root = _artifact_root(Path(path).resolve())
-    _verify_manifest(root)
+    manifest = _verify_manifest(root)
     try:
         replay: dict[str, Any] = json.loads((root / "replay.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise ReplayError("replay.json is missing or invalid") from error
     replay_version = replay.get("version")
-    if replay_version not in {1, 2} or not isinstance(replay.get("case"), dict):
+    if replay_version not in {1, 2, 3} or not isinstance(replay.get("case"), dict):
         raise ReplayError("unsupported replay contract")
     if replay.get("path_base") != "invocation_cwd":
         raise ReplayError("unsupported replay path base")
-    if replay.get("input") != "input.arrow":
-        raise ReplayError("unsupported replay input")
+    bundled_inputs: dict[str, Path] | None = None
+    if replay_version == 3:
+        if manifest.get("version") != 2:
+            raise ReplayError("bundled replay requires a version 2 manifest")
+        bundled_inputs = _replay_bundle_inputs(replay, manifest, root)
+    else:
+        if manifest.get("version") != 1:
+            raise ReplayError("single-input replay requires a version 1 manifest")
+        if replay.get("input") != "input.arrow":
+            raise ReplayError("unsupported replay input")
     expected_provenance: CaseProvenance | None = None
     config_sha256: str | None = None
-    if replay_version == 2:
+    if replay_version == 2 or (replay_version == 3 and replay.get("expected_runtime") is not None):
         try:
             expected_provenance = CaseProvenance.model_validate(replay.get("expected_runtime"))
         except ValueError as error:
@@ -926,7 +1474,30 @@ def replay_artifact(path: str | Path) -> SuiteResult:
         raise ReplayError("redacted static arguments cannot be replayed automatically")
     _restore_environment(case_data)
     _resolve_replay_paths(case_data, Path.cwd().resolve())
-    case_data["fixture"] = root / "input.arrow"
+    if bundled_inputs is None:
+        case_data["fixture"] = root / "input.arrow"
+    else:
+        raw_bundle = case_data.get("input_bundle")
+        if not isinstance(raw_bundle, dict):
+            raise ReplayError("artifact input bundle does not match its case contract")
+        raw_specs = raw_bundle.get("inputs")
+        if (
+            not isinstance(raw_bundle, dict)
+            or not isinstance(raw_specs, dict)
+            or set(raw_specs) != set(bundled_inputs)
+        ):
+            raise ReplayError("artifact input bundle does not match its case contract")
+        # JSON object ordering is not a trusted invocation contract (the artifact
+        # writer sorts keys for deterministic files). Replay's separately
+        # hash-bound inputs list is authoritative for positional binding order.
+        ordered_specs = {name: raw_specs[name] for name in bundled_inputs}
+        raw_bundle["inputs"] = ordered_specs
+        raw_specs = ordered_specs
+        for name, path in bundled_inputs.items():
+            raw_spec = raw_specs.get(name)
+            if not isinstance(raw_spec, dict):
+                raise ReplayError("artifact contains an invalid bundled input contract")
+            raw_spec["fixture"] = path
     try:
         case = CaseConfig.model_validate(case_data)
     except ValueError as error:

@@ -40,7 +40,7 @@ trust boundary.
 | Path traversal overwrites unrelated files | Case names are constrained, safe artifact names and config-relative path resolution. | User-selected artifact/config paths remain trusted operator input. |
 | Counterexample leaks private values | Local default, `.gitignore`, report redaction, configurable Action upload/retention. | Artifacts contain values. Apply source data classification and access controls. |
 | Logs leak values or secrets | Parity reports omit frame values and does not enumerate environment variables. | User callables can print arbitrary content; use clean test credentials and protected logs. |
-| Forged/stale evidence is accepted | Input hashes, timestamped immutable artifact directories and replay metadata. | Local users can alter files; future signed attestations are needed across trust domains. |
+| Forged/stale evidence is accepted | Hash-bound artifacts written to new timestamped directories plus replay metadata. | Local users can alter files; signed attestations would be needed across trust domains. |
 | Dependency/package compromise | Audit, dependency review, CodeQL, protected trusted publishing and build attestation. | Consumers must pin/verify and control their dependency mirror. |
 | PR changes verifier and candidate together | CI review and public tests. | High-assurance users should run an independently pinned verifier from a protected workflow. |
 | Resource exhaustion from generated cases | Bounded rows/examples, deadlines, invocation timeouts. | Schemas up to 10,000 rows and native allocations can still be expensive; enforce host quotas. |
@@ -64,9 +64,9 @@ resource side channels, detect secrets inside arbitrary strings, guarantee delet
 artifact backups, or prove that the reference is legitimate. These need execution sandboxing,
 organizational data controls and code ownership/review respectively.
 
-## Future hardening
+## Possible hardening
 
-Planned architectural directions include content-addressed artifact manifests, signature and
+Possible directions include content-addressed artifact manifests, signature and
 provenance verification, an OCI-based hardened executor profile, deterministic environment capture,
 policy files protected separately from candidate changes and pluggable organization redaction. Each
 must preserve the offline local path.

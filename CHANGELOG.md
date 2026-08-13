@@ -1,0 +1,26 @@
+# Changelog
+
+## 0.4.0
+
+- Add atomic two- and three-frame input bundles for joins and lookups, with keyword or positional
+  binding, per-input mutation evidence, joint shrinking and replay.
+- Add relational generation constraints for key overlap, foreign keys, equal row counts and key
+  cardinality.
+- Add bounded multi-finding campaigns. `generation.max_findings` defaults to `1`; higher values
+  continue searching for distinct, data-free mismatch signatures.
+- Confirm saved findings in clean execution state and stop with an error when a witness is unstable
+  or cannot be reproduced.
+- Add replay contract version 3 and manifest version 2 for hash-bound multi-input artifacts. Existing
+  single-input replay contracts remain supported.
+- Add JSON report schema version 3 fields `finding_signature` and `findings_discovered`.
+- Add a synthetic pandas `merge` / Polars `join` compatibility study.
+
+### Compatibility notes
+
+- Existing single-input version 1 TOML files that use non-redundant schemas continue to work without
+  changes. Schema validation now rejects duplicate categories, null categories on non-nullable
+  columns, and empty or duplicate `unique_together` groups instead of failing later during search.
+- Consumers that validate the JSON report schema must accept schema version 3 before upgrading.
+- Multi-input artifacts require Parity 0.4 or later to replay. Older single-input artifacts remain
+  readable and are marked unverified when they predate runtime provenance.
+- The composite Action's `max-findings` input requires `leighshepperson/parity@v0.4.0` or later.

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import runpy
 import tomllib
 from pathlib import Path
+
+import pandas as pd
+import polars as pl
 
 from parity.models import ParityConfig
 
 ROOT = Path(__file__).parents[1]
 STUDY = ROOT / "case_studies" / "pyjanitor_complete"
 SKRUB_STUDY = ROOT / "case_studies" / "skrub_agg_joiner"
+JOIN_STUDY = ROOT / "case_studies" / "pandas_polars_join"
 SKRUB_COMMIT = "55dc7f45e140ccb76e768e3e4b4193f4eac3d5aa"
 
 SKRUB_CASES = [
@@ -179,3 +184,48 @@ def test_skrub_case_study_is_data_safe_and_has_only_draft_upstream_issues() -> N
     assert drafts.count(SKRUB_COMMIT) == 1
     assert ".parity-skrub/" in ignore
     assert not list(SKRUB_STUDY.glob(".parity-skrub"))
+
+
+def test_join_case_study_uses_a_generated_two_frame_contract() -> None:
+    raw = tomllib.loads((JOIN_STUDY / "parity.toml").read_text(encoding="utf-8"))
+    config = ParityConfig.model_validate(raw)
+    case = config.cases[0]
+
+    assert case.fixture is None
+    assert case.input_bundle is not None
+    assert list(case.input_bundle.inputs) == ["left", "right"]
+    assert case.input_bundle.binding == "keyword"
+    assert case.input_bundle.relationships[0].kind == "equal_row_count"
+    assert case.generation.max_examples == 500
+    assert case.generation.max_findings == 1
+    assert not case.generation.adversarial_examples
+    assert not case.performance.enabled
+    assert all(spec.input_schema is not None for spec in case.input_bundle.inputs.values())
+
+    source = (JOIN_STUDY / "join_parity.py").read_text(encoding="utf-8")
+    compile(source, str(JOIN_STUDY / "join_parity.py"), "exec")
+    assert "def pandas_left_join(" in source
+    assert "def polars_left_join(" in source
+    study_readme = (JOIN_STUDY / "README.md").read_text(encoding="utf-8")
+    assert "join_nulls=True" in study_readme
+    assert "nulls_equal=True" in study_readme
+    assert 'left.join(right, on="key", how="left")' in source
+    assert 'left.join(right, on="key", how="left", maintain_order=' not in source
+    assert ".parity-join/" in (JOIN_STUDY / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_join_case_study_targets_execute_on_supported_core_dependencies() -> None:
+    targets = runpy.run_path(str(JOIN_STUDY / "join_parity.py"))
+    rows = {
+        "key": [1, 2],
+        "left_value": [10, 20],
+    }
+    right_rows = {
+        "key": [1, 2],
+        "right_value": [100, 200],
+    }
+
+    pandas_result = targets["pandas_left_join"](pd.DataFrame(rows), pd.DataFrame(right_rows))
+    polars_result = targets["polars_left_join"](pl.DataFrame(rows), pl.DataFrame(right_rows))
+
+    assert pandas_result.to_dict(orient="list") == polars_result.to_dict(as_series=False)

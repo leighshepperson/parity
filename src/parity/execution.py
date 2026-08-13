@@ -1,10 +1,11 @@
 """Execute user dataframe transformations without leaking their inputs.
 
 The execution boundary is intentionally Arrow-first: callers provide one canonical
-``pyarrow.Table`` and each implementation receives a fresh adapter-specific copy.
-The module never prints user data, subprocess output, environment variables, or
-tracebacks.  Isolated execution uses files in a private temporary directory so a
-frame is never transported through a log stream.
+``pyarrow.Table`` or an ordered/named bundle of tables, and each implementation
+receives fresh adapter-specific copies.  The module never prints user data,
+subprocess output, environment variables, or tracebacks.  Isolated execution uses
+files in a private temporary directory so frames are never transported through a
+log stream.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import contextlib
 import hashlib
 import importlib
 import json
+import keyword
 import os
 import re
 import secrets
@@ -27,7 +29,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, cast, get_type_hints
+from typing import Any, Literal, TypeAlias, cast, get_type_hints
 
 import numpy as np
 import pyarrow as pa
@@ -38,7 +40,29 @@ from parity.adapters import to_arrow as adapter_to_arrow
 from parity.models import CallableSpec, JsonValue, PandasInput, RunMetrics
 from parity.provenance import RuntimeProvenance, collect_runtime_provenance, diff_runtime
 
-_WORKER_PROTOCOL_VERSION = 2
+_WORKER_PROTOCOL_VERSION = 3
+
+InputKind: TypeAlias = Literal["single", "positional", "keyword"]
+ArrowInputBundle: TypeAlias = pa.Table | Sequence[pa.Table] | Mapping[str, pa.Table]
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedInputs:
+    """Validated input binding plus stable, data-safe mutation labels."""
+
+    kind: InputKind
+    items: tuple[tuple[str, pa.Table], ...]
+
+    @property
+    def labels(self) -> tuple[str, ...]:
+        return tuple(label for label, _ in self.items)
+
+    def as_public_bundle(self) -> ArrowInputBundle:
+        if self.kind == "single":
+            return self.items[0][1]
+        if self.kind == "positional":
+            return tuple(table for _, table in self.items)
+        return dict(self.items)
 
 
 class ExecutionOutcome(StrEnum):
@@ -83,7 +107,7 @@ class Observation:
     """The complete, serializable observation of one implementation call.
 
     ``table`` and ``value`` are kept out of :meth:`to_metadata` so diagnostic
-    output cannot accidentally log customer data.  The worker protocol writes
+    output cannot accidentally log input data.  The worker protocol writes
     returned values to private files and only serializes this metadata as JSON.
     """
 
@@ -94,6 +118,7 @@ class Observation:
     has_value: bool = False
     exception: ExceptionInfo | None = None
     mutated_input: bool = False
+    mutated_inputs: tuple[str, ...] = ()
     return_type: str | None = None
     runtime: RuntimeProvenance | None = None
 
@@ -111,6 +136,7 @@ class Observation:
             "has_value": self.has_value,
             "exception": self.exception.to_dict() if self.exception else None,
             "mutated_input": self.mutated_input,
+            "mutated_inputs": list(self.mutated_inputs),
             "return_type": self.return_type,
             "runtime": self.runtime.model_dump(mode="json") if self.runtime else None,
         }
@@ -126,6 +152,103 @@ _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)\s*=\s*([^\s,;]+)"
 )
 _PROCESS_CONTEXT_LOCK = threading.RLock()
+
+
+def _normalize_inputs(inputs: ArrowInputBundle | _NormalizedInputs) -> _NormalizedInputs:
+    """Validate public input binding and preserve its deterministic order."""
+
+    if isinstance(inputs, _NormalizedInputs):
+        return inputs
+    if isinstance(inputs, pa.Table):
+        return _NormalizedInputs("single", (("input", inputs),))
+    if isinstance(inputs, Mapping):
+        if not inputs:
+            raise ExecutionError("a named input bundle cannot be empty")
+        items: list[tuple[str, pa.Table]] = []
+        for name, table in inputs.items():
+            if (
+                not isinstance(name, str)
+                or not name
+                or not name.isidentifier()
+                or keyword.iskeyword(name)
+            ):
+                raise ExecutionError("named input labels must be valid Python identifiers")
+            if not isinstance(table, pa.Table):
+                raise ExecutionError(f"named input {name!r} must be a pyarrow.Table")
+            items.append((name, table))
+        return _NormalizedInputs("keyword", tuple(items))
+    if isinstance(inputs, Sequence) and not isinstance(inputs, (str, bytes, bytearray)):
+        if not inputs:
+            raise ExecutionError("a positional input bundle cannot be empty")
+        positional: list[tuple[str, pa.Table]] = []
+        for index, table in enumerate(inputs):
+            if not isinstance(table, pa.Table):
+                raise ExecutionError(f"positional input {index} must be a pyarrow.Table")
+            positional.append((str(index), table))
+        return _NormalizedInputs("positional", tuple(positional))
+    raise ExecutionError(
+        "inputs must be a pyarrow.Table, a non-empty sequence of tables, "
+        "or a non-empty mapping of names to tables"
+    )
+
+
+def _validate_invocation_binding(
+    inputs: _NormalizedInputs,
+    static_args: Sequence[JsonValue],
+    static_kwargs: Mapping[str, JsonValue],
+) -> None:
+    if inputs.kind != "keyword":
+        return
+    if static_args:
+        raise ExecutionError("named input bundles cannot be combined with static positional args")
+    collisions = set(inputs.labels).intersection(static_kwargs)
+    if collisions:
+        raise ExecutionError(
+            "named inputs collide with static keyword args: " + ", ".join(sorted(collisions))
+        )
+
+
+def _materialize_inputs(
+    inputs: _NormalizedInputs,
+    adapter: str,
+    *,
+    pandas_input: PandasInput,
+) -> tuple[tuple[Any, ...], tuple[str | None, ...]]:
+    arguments = tuple(
+        _fresh_argument(table, adapter, pandas_input=pandas_input) for _, table in inputs.items
+    )
+    fingerprints = tuple(_fingerprint(argument, adapter) for argument in arguments)
+    return arguments, fingerprints
+
+
+def _invoke_with_inputs(
+    function: Callable[..., Any],
+    inputs: _NormalizedInputs,
+    arguments: tuple[Any, ...],
+    *,
+    static_args: Sequence[JsonValue],
+    static_kwargs: Mapping[str, JsonValue],
+) -> Any:
+    if inputs.kind == "single":
+        return function(arguments[0], *static_args, **dict(static_kwargs))
+    if inputs.kind == "positional":
+        return function(*arguments, *static_args, **dict(static_kwargs))
+    keywords = dict(zip(inputs.labels, arguments, strict=True))
+    keywords.update(static_kwargs)
+    return function(**keywords)
+
+
+def _mutated_labels(
+    inputs: _NormalizedInputs,
+    arguments: tuple[Any, ...],
+    before: tuple[str | None, ...],
+    adapter: str,
+) -> tuple[str, ...]:
+    return tuple(
+        label
+        for (label, _), argument, fingerprint in zip(inputs.items, arguments, before, strict=True)
+        if fingerprint != _fingerprint(argument, adapter)
+    )
 
 
 def redact_text(text: str) -> str:
@@ -215,13 +338,16 @@ def _resolve_adapter(requested: str, function: Callable[..., Any]) -> str:
 def _fresh_argument(table: pa.Table, adapter: str, *, pandas_input: PandasInput = "arrow") -> Any:
     # Round-tripping creates a fresh Arrow object and prevents implementations
     # from sharing Python wrapper state even when they both use the Arrow adapter.
-    fresh = ipc.open_stream(pa.py_buffer(_arrow_bytes(table))).read_all()
     try:
+        fresh = ipc.open_stream(pa.py_buffer(_arrow_bytes(table))).read_all()
         if adapter == "pandas" and pandas_input == "native":
             return fresh.to_pandas()
         return adapter_from_arrow(fresh, adapter)
-    except (TypeError, ValueError) as error:
-        raise ExecutionError(f"unsupported adapter: {adapter}") from error
+    except Exception:
+        # Adapter exceptions may include values or native-library details. The
+        # caller only needs to know that Parity could not construct the input;
+        # this is an infrastructure error, never a matching user exception.
+        raise ExecutionError(f"input could not be materialized for adapter: {adapter}") from None
 
 
 def _argument_to_arrow(value: Any, adapter: str, *, preserve_index: bool = False) -> pa.Table:
@@ -295,6 +421,27 @@ def _return_to_arrow(value: Any) -> pa.Table | None:
 def _json_value(value: Any) -> tuple[bool, JsonValue]:
     # Round-trip rather than using ``default=str``: object reprs can expose data,
     # paths, or credentials and have no stable cross-environment semantics.
+    def has_only_string_mapping_keys(item: Any) -> bool:
+        if isinstance(item, Mapping):
+            return all(
+                isinstance(key, str) and has_only_string_mapping_keys(nested)
+                for key, nested in item.items()
+            )
+        if isinstance(item, (list, tuple)):
+            return all(has_only_string_mapping_keys(nested) for nested in item)
+        return True
+
+    # JSON silently coerces integer/bool/null object keys to strings. Reject
+    # them recursively so the comparison boundary cannot erase key-type
+    # differences and produce a false pass.
+    try:
+        valid_mapping_keys = has_only_string_mapping_keys(value)
+    except Exception:
+        # Cycles and hostile container implementations are not a portable JSON
+        # value. Preserve the normal unsupported-return failure classification.
+        return False, None
+    if not valid_mapping_keys:
+        return False, None
     try:
         encoded = json.dumps(value, allow_nan=True)
         decoded: JsonValue = json.loads(encoded)
@@ -418,7 +565,7 @@ def _runtime_drift_observation(
 
 def execute_current(
     spec: CallableSpec,
-    input_table: pa.Table,
+    input_table: ArrowInputBundle,
     *,
     static_args: Sequence[JsonValue] = (),
     static_kwargs: Mapping[str, JsonValue] | None = None,
@@ -432,10 +579,14 @@ def execute_current(
     required.
     """
 
+    inputs = _normalize_inputs(input_table)
+    invocation_kwargs = dict(static_kwargs or {})
+    _validate_invocation_binding(inputs, static_args, invocation_kwargs)
     if spec.python is not None and Path(spec.python).resolve() != Path(sys.executable).resolve():
         raise ExecutionError("a different Python executable requires isolated execution")
     started = time.perf_counter()
     runtime: RuntimeProvenance | None = None
+    return_type: str | None = None
     with _MemorySampler() as memory:
         try:
             with _process_context(spec):
@@ -449,30 +600,61 @@ def execute_current(
                     return drift
                 function = import_callable(spec.target)
                 adapter = _resolve_adapter(spec.adapter, function)
-                argument = _fresh_argument(input_table, adapter, pandas_input=spec.pandas_input)
-                before = _fingerprint(argument, adapter)
+                arguments, before = _materialize_inputs(
+                    inputs, adapter, pandas_input=spec.pandas_input
+                )
                 try:
-                    returned = function(argument, *static_args, **dict(static_kwargs or {}))
+                    returned = _invoke_with_inputs(
+                        function,
+                        inputs,
+                        arguments,
+                        static_args=static_args,
+                        static_kwargs=invocation_kwargs,
+                    )
                 except BaseException as error:  # user code is an observation boundary
-                    after = _fingerprint(argument, adapter)
+                    mutated_inputs = _mutated_labels(inputs, arguments, before, adapter)
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(error),
-                        mutated_input=before != after,
+                        mutated_input=bool(mutated_inputs),
+                        mutated_inputs=mutated_inputs,
                         metrics=RunMetrics(
                             duration_seconds=time.perf_counter() - started,
                             peak_rss_bytes=memory.peak or None,
                         ),
                         runtime=runtime,
                     )
-                after = _fingerprint(argument, adapter)
-                table = _return_to_arrow(returned)
+                mutated_inputs = _mutated_labels(inputs, arguments, before, adapter)
+                return_type = f"{type(returned).__module__}.{type(returned).__qualname__}"
+                try:
+                    table = _return_to_arrow(returned)
+                except Exception:
+                    # Returned tabular objects can fail while crossing the
+                    # canonical Arrow boundary (unsupported dtype, malformed
+                    # extension array, etc.). Report a data-safe Parity error;
+                    # two matching conversion failures cannot establish parity.
+                    conversion_error = ExecutionError(
+                        f"return type {return_type} could not be canonicalized"
+                    )
+                    return Observation(
+                        outcome=ExecutionOutcome.RAISED,
+                        exception=ExceptionInfo.from_exception(conversion_error),
+                        mutated_input=bool(mutated_inputs),
+                        mutated_inputs=mutated_inputs,
+                        return_type=return_type,
+                        metrics=RunMetrics(
+                            duration_seconds=time.perf_counter() - started,
+                            peak_rss_bytes=memory.peak or None,
+                        ),
+                        runtime=runtime,
+                    )
                 if table is not None:
                     return Observation(
                         outcome=ExecutionOutcome.RETURNED,
                         table=table,
-                        mutated_input=before != after,
-                        return_type=f"{type(returned).__module__}.{type(returned).__qualname__}",
+                        mutated_input=bool(mutated_inputs),
+                        mutated_inputs=mutated_inputs,
+                        return_type=return_type,
                         metrics=RunMetrics(
                             duration_seconds=time.perf_counter() - started,
                             peak_rss_bytes=memory.peak or None,
@@ -482,14 +664,14 @@ def execute_current(
                 serializable, value = _json_value(returned)
                 if not serializable:
                     return_error = TypeError(
-                        f"return type {type(returned).__module__}.{type(returned).__qualname__} "
-                        "is neither tabular nor JSON-serializable"
+                        f"return type {return_type} is neither tabular nor JSON-serializable"
                     )
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(return_error),
-                        mutated_input=before != after,
-                        return_type=f"{type(returned).__module__}.{type(returned).__qualname__}",
+                        mutated_input=bool(mutated_inputs),
+                        mutated_inputs=mutated_inputs,
+                        return_type=return_type,
                         metrics=RunMetrics(
                             duration_seconds=time.perf_counter() - started,
                             peak_rss_bytes=memory.peak or None,
@@ -500,18 +682,21 @@ def execute_current(
                     outcome=ExecutionOutcome.RETURNED,
                     value=value,
                     has_value=True,
-                    mutated_input=before != after,
-                    return_type=f"{type(returned).__module__}.{type(returned).__qualname__}",
+                    mutated_input=bool(mutated_inputs),
+                    mutated_inputs=mutated_inputs,
+                    return_type=return_type,
                     metrics=RunMetrics(
                         duration_seconds=time.perf_counter() - started,
                         peak_rss_bytes=memory.peak or None,
                     ),
                     runtime=runtime,
                 )
-        except BaseException as error:
+        except BaseException:
+            boundary_error = ExecutionError("execution boundary failed before comparison")
             return Observation(
                 outcome=ExecutionOutcome.RAISED,
-                exception=ExceptionInfo.from_exception(error),
+                exception=ExceptionInfo.from_exception(boundary_error),
+                return_type=return_type,
                 metrics=RunMetrics(
                     duration_seconds=time.perf_counter() - started,
                     peak_rss_bytes=memory.peak or None,
@@ -522,7 +707,7 @@ def execute_current(
 
 def execute_callable_current(
     function: Callable[..., Any],
-    input_table: pa.Table,
+    input_table: ArrowInputBundle,
     *,
     adapter: str = "auto",
     pandas_input: PandasInput = "arrow",
@@ -543,35 +728,64 @@ def execute_callable_current(
         raise ValueError(f"unsupported adapter: {adapter}")
     if pandas_input not in {"arrow", "native"}:
         raise ValueError(f"unsupported pandas input: {pandas_input}")
+    inputs = _normalize_inputs(input_table)
+    invocation_kwargs = dict(static_kwargs or {})
+    _validate_invocation_binding(inputs, static_args, invocation_kwargs)
     started = time.perf_counter()
     runtime: RuntimeProvenance | None = None
+    return_type: str | None = None
     with _MemorySampler() as memory:
         try:
             runtime = collect_runtime_provenance(record_distributions)
             resolved = _resolve_adapter(adapter, function)
-            argument = _fresh_argument(input_table, resolved, pandas_input=pandas_input)
-            before = _fingerprint(argument, resolved)
+            arguments, before = _materialize_inputs(inputs, resolved, pandas_input=pandas_input)
             try:
-                returned = function(argument, *static_args, **dict(static_kwargs or {}))
+                returned = _invoke_with_inputs(
+                    function,
+                    inputs,
+                    arguments,
+                    static_args=static_args,
+                    static_kwargs=invocation_kwargs,
+                )
             except BaseException as error:
+                mutated_inputs = _mutated_labels(inputs, arguments, before, resolved)
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(error),
-                    mutated_input=before != _fingerprint(argument, resolved),
+                    mutated_input=bool(mutated_inputs),
+                    mutated_inputs=mutated_inputs,
                     metrics=RunMetrics(
                         duration_seconds=time.perf_counter() - started,
                         peak_rss_bytes=memory.peak or None,
                     ),
                     runtime=runtime,
                 )
-            mutated = before != _fingerprint(argument, resolved)
+            mutated_inputs = _mutated_labels(inputs, arguments, before, resolved)
             return_type = f"{type(returned).__module__}.{type(returned).__qualname__}"
-            table = _return_to_arrow(returned)
+            try:
+                table = _return_to_arrow(returned)
+            except Exception:
+                conversion_error = ExecutionError(
+                    f"return type {return_type} could not be canonicalized"
+                )
+                return Observation(
+                    outcome=ExecutionOutcome.RAISED,
+                    exception=ExceptionInfo.from_exception(conversion_error),
+                    mutated_input=bool(mutated_inputs),
+                    mutated_inputs=mutated_inputs,
+                    return_type=return_type,
+                    metrics=RunMetrics(
+                        duration_seconds=time.perf_counter() - started,
+                        peak_rss_bytes=memory.peak or None,
+                    ),
+                    runtime=runtime,
+                )
             if table is not None:
                 return Observation(
                     outcome=ExecutionOutcome.RETURNED,
                     table=table,
-                    mutated_input=mutated,
+                    mutated_input=bool(mutated_inputs),
+                    mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
                         duration_seconds=time.perf_counter() - started,
@@ -587,7 +801,8 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(return_error),
-                    mutated_input=mutated,
+                    mutated_input=bool(mutated_inputs),
+                    mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
                         duration_seconds=time.perf_counter() - started,
@@ -599,7 +814,8 @@ def execute_callable_current(
                 outcome=ExecutionOutcome.RETURNED,
                 value=value,
                 has_value=True,
-                mutated_input=mutated,
+                mutated_input=bool(mutated_inputs),
+                mutated_inputs=mutated_inputs,
                 return_type=return_type,
                 metrics=RunMetrics(
                     duration_seconds=time.perf_counter() - started,
@@ -607,10 +823,12 @@ def execute_callable_current(
                 ),
                 runtime=runtime,
             )
-        except BaseException as error:
+        except BaseException:
+            boundary_error = ExecutionError("execution boundary failed before comparison")
             return Observation(
                 outcome=ExecutionOutcome.RAISED,
-                exception=ExceptionInfo.from_exception(error),
+                exception=ExceptionInfo.from_exception(boundary_error),
+                return_type=return_type,
                 metrics=RunMetrics(
                     duration_seconds=time.perf_counter() - started,
                     peak_rss_bytes=memory.peak or None,
@@ -678,9 +896,63 @@ def _isolated_environment(spec: CallableSpec) -> dict[str, str]:
     return environment
 
 
+def _write_input_bundle(inputs: _NormalizedInputs, root: Path) -> dict[str, Any]:
+    """Write a validated bundle to opaque files and return its protocol envelope."""
+
+    items: list[dict[str, str]] = []
+    for index, (label, table) in enumerate(inputs.items):
+        path = root / f"input-{index:08d}.arrow"
+        _write_arrow(table, path)
+        items.append({"name": label, "path": str(path)})
+    return {"kind": inputs.kind, "items": items}
+
+
+def _read_input_bundle(value: Any, root: Path) -> _NormalizedInputs:
+    """Parse the worker bundle envelope, rejecting paths or labels outside the contract."""
+
+    if not isinstance(value, dict) or set(value) != {"kind", "items"}:
+        raise ValueError("invalid input bundle envelope")
+    kind = value["kind"]
+    if kind not in {"single", "positional", "keyword"}:
+        raise ValueError("invalid input bundle kind")
+    raw_items = value["items"]
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ValueError("input bundle items must be a non-empty list")
+    if kind == "single" and len(raw_items) != 1:
+        raise ValueError("single input bundle must contain exactly one item")
+
+    resolved_root = root.resolve(strict=True)
+    parsed: list[tuple[str, pa.Table]] = []
+    for index, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict) or set(raw_item) != {"name", "path"}:
+            raise ValueError("invalid input bundle item")
+        name = raw_item["name"]
+        raw_path = raw_item["path"]
+        if not isinstance(name, str) or not isinstance(raw_path, str):
+            raise ValueError("invalid input bundle item fields")
+        expected_path = (resolved_root / f"input-{index:08d}.arrow").resolve()
+        supplied_path = Path(raw_path).resolve(strict=True)
+        if supplied_path != expected_path or supplied_path.parent != resolved_root:
+            raise ValueError("input bundle path escapes its call directory")
+        parsed.append((name, _read_arrow(supplied_path)))
+
+    labels = tuple(name for name, _ in parsed)
+    if len(set(labels)) != len(labels):
+        raise ValueError("input bundle labels must be unique")
+    if kind == "single" and labels != ("input",):
+        raise ValueError("invalid single input label")
+    if kind == "positional" and labels != tuple(str(index) for index in range(len(parsed))):
+        raise ValueError("invalid positional input labels")
+    if kind == "keyword" and any(
+        not label or not label.isidentifier() or keyword.iskeyword(label) for label in labels
+    ):
+        raise ValueError("invalid keyword input labels")
+    return _NormalizedInputs(cast(InputKind, kind), tuple(parsed))
+
+
 def execute_isolated(
     spec: CallableSpec,
-    input_table: pa.Table,
+    input_table: ArrowInputBundle,
     *,
     static_args: Sequence[JsonValue] = (),
     static_kwargs: Mapping[str, JsonValue] | None = None,
@@ -691,17 +963,18 @@ def execute_isolated(
 
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
+    inputs = _normalize_inputs(input_table)
+    invocation_kwargs = dict(static_kwargs or {})
+    _validate_invocation_binding(inputs, static_args, invocation_kwargs)
     executable = str(spec.python or sys.executable)
     environment = _isolated_environment(spec)
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="parity-worker-") as temporary:
         root = Path(temporary)
-        input_path = root / "input.arrow"
         request_path = root / "request.json"
         response_path = root / "response.json"
         output_arrow = root / "output.arrow"
         output_json = root / "output.json"
-        _write_arrow(input_table, input_path)
         request = {
             "protocol_version": _WORKER_PROTOCOL_VERSION,
             "spec": {
@@ -713,11 +986,11 @@ def execute_isolated(
                 # the worker would apply it a second time (e.g. tests/tests).
                 "workdir": None,
             },
-            "input": str(input_path),
+            "inputs": _write_input_bundle(inputs, root),
             "output_arrow": str(output_arrow),
             "output_json": str(output_json),
             "static_args": list(static_args),
-            "static_kwargs": dict(static_kwargs or {}),
+            "static_kwargs": invocation_kwargs,
             "expected_runtime": (
                 expected_runtime.model_dump(mode="json") if expected_runtime else None
             ),
@@ -775,7 +1048,13 @@ def execute_isolated(
             )
         try:
             response: dict[str, Any] = json.loads(response_path.read_text(encoding="utf-8"))
-            observation = _observation_from_worker(response, output_arrow, output_json)
+            observation = _observation_from_worker(
+                response,
+                output_arrow,
+                output_json,
+                expected_input_labels=inputs.labels,
+                allow_outputless_success=False,
+            )
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             return Observation(
                 outcome=ExecutionOutcome.CRASHED,
@@ -799,7 +1078,12 @@ def execute_isolated(
 
 
 def _observation_from_worker(
-    response: Mapping[str, Any], output_arrow: Path, output_json: Path
+    response: Mapping[str, Any],
+    output_arrow: Path,
+    output_json: Path,
+    *,
+    expected_input_labels: tuple[str, ...],
+    allow_outputless_success: bool,
 ) -> Observation:
     if response.get("protocol_version") != _WORKER_PROTOCOL_VERSION:
         raise ValueError("unsupported worker protocol")
@@ -807,16 +1091,69 @@ def _observation_from_worker(
     metrics = RunMetrics.model_validate(response["metrics"])
     exception_raw = response.get("exception")
     runtime = RuntimeProvenance.model_validate(response["runtime"])
+    mutated_raw = response.get("mutated_input")
+    mutated_inputs_raw = response.get("mutated_inputs")
+    has_table_raw = response.get("has_table")
+    has_value_raw = response.get("has_value")
+    if not isinstance(mutated_raw, bool):
+        raise ValueError("invalid mutated_input flag")
+    if not isinstance(mutated_inputs_raw, list) or not all(
+        isinstance(label, str) for label in mutated_inputs_raw
+    ):
+        raise ValueError("invalid mutated_inputs labels")
+    mutated_inputs = tuple(mutated_inputs_raw)
+    mutated_input_set = set(mutated_inputs)
+    if len(mutated_input_set) != len(mutated_inputs):
+        raise ValueError("duplicate mutated_inputs labels")
+    if not mutated_input_set.issubset(expected_input_labels):
+        raise ValueError("unknown mutated_inputs label")
+    expected_mutation_order = tuple(
+        label for label in expected_input_labels if label in mutated_input_set
+    )
+    if mutated_inputs != expected_mutation_order:
+        raise ValueError("mutated_inputs labels are out of order")
+    if mutated_raw != bool(mutated_inputs):
+        raise ValueError("inconsistent input mutation metadata")
+    if not isinstance(has_table_raw, bool) or not isinstance(has_value_raw, bool):
+        raise ValueError("invalid worker output flags")
+    if has_table_raw and has_value_raw:
+        raise ValueError("worker response cannot contain table and JSON outputs")
+    if (
+        outcome is ExecutionOutcome.RETURNED
+        and not has_table_raw
+        and not has_value_raw
+        and not allow_outputless_success
+    ):
+        raise ValueError("execute worker response must contain an output")
+    if exception_raw is not None:
+        if not isinstance(exception_raw, Mapping) or set(exception_raw) != {
+            "module",
+            "type",
+            "message",
+        }:
+            raise ValueError("invalid worker exception metadata")
+        if not all(isinstance(value, str) for value in exception_raw.values()):
+            raise ValueError("invalid worker exception fields")
+    return_type_raw = response.get("return_type")
+    if return_type_raw is not None and not isinstance(return_type_raw, str):
+        raise ValueError("invalid worker return type")
+    if outcome is ExecutionOutcome.RETURNED and exception_raw is not None:
+        raise ValueError("returned worker response cannot contain an exception")
+    if outcome is not ExecutionOutcome.RETURNED and exception_raw is None:
+        raise ValueError("failed worker response must contain an exception")
+    if outcome is not ExecutionOutcome.RETURNED and (has_table_raw or has_value_raw):
+        raise ValueError("failed worker response cannot contain an output")
     observation = Observation(
         outcome=outcome,
         metrics=metrics,
         exception=ExceptionInfo.from_dict(exception_raw) if exception_raw else None,
-        mutated_input=bool(response.get("mutated_input", False)),
-        return_type=str(response["return_type"]) if response.get("return_type") else None,
-        has_value=bool(response.get("has_value", False)),
+        mutated_input=mutated_raw,
+        mutated_inputs=mutated_inputs,
+        return_type=return_type_raw,
+        has_value=has_value_raw,
         runtime=runtime,
     )
-    if response.get("has_table"):
+    if has_table_raw:
         observation.table = _read_arrow(output_arrow)
     if observation.has_value:
         observation.value = json.loads(output_json.read_text(encoding="utf-8"))
@@ -828,8 +1165,8 @@ class IsolatedExecutionSession:
 
     A session removes per-example interpreter startup while retaining a process
     boundary from the orchestrator.  Each session owns exactly one callable
-    specification, serializes calls, creates a fresh adapter argument from a new
-    Arrow file for every call, and enforces a wall-clock timeout per call.
+    specification, serializes calls, creates fresh adapter arguments from new
+    Arrow files for every call, and enforces a wall-clock timeout per call.
 
     Python module globals, imported-module caches, threads, and other worker
     process state intentionally persist between successful calls.  Reference and
@@ -920,18 +1257,21 @@ class IsolatedExecutionSession:
 
     def execute(
         self,
-        input_table: pa.Table,
+        input_table: ArrowInputBundle,
         *,
         static_args: Sequence[JsonValue] = (),
         static_kwargs: Mapping[str, JsonValue] | None = None,
         timeout_seconds: float | None = None,
         _operation: Literal["execute", "provenance"] = "execute",
     ) -> Observation:
-        """Execute one call, preserving worker state but never the input object."""
+        """Execute one call, preserving worker state but never input objects."""
 
         timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
         if timeout <= 0:
             raise ValueError("timeout_seconds must be positive")
+        inputs = _normalize_inputs(input_table)
+        invocation_kwargs = dict(static_kwargs or {})
+        _validate_invocation_binding(inputs, static_args, invocation_kwargs)
         started = time.perf_counter()
         with self._lock:
             if self._closed or self._broken:
@@ -950,13 +1290,11 @@ class IsolatedExecutionSession:
             token = f"call-{self._counter:08d}-{secrets.token_hex(16)}"
             call_root = self._root / token
             call_root.mkdir(mode=0o700)
-            input_path = call_root / "input.arrow"
             request_path = call_root / "request.json"
             response_path = call_root / "response.json"
             output_arrow = call_root / "output.arrow"
             output_json = call_root / "output.json"
             try:
-                _write_arrow(input_table, input_path)
                 request = {
                     "protocol_version": _WORKER_PROTOCOL_VERSION,
                     "operation": _operation,
@@ -970,11 +1308,11 @@ class IsolatedExecutionSession:
                         # values or ask the child to chdir a second time.
                         "workdir": None,
                     },
-                    "input": str(input_path),
+                    "inputs": _write_input_bundle(inputs, call_root),
                     "output_arrow": str(output_arrow),
                     "output_json": str(output_json),
                     "static_args": list(static_args),
-                    "static_kwargs": dict(static_kwargs or {}),
+                    "static_kwargs": invocation_kwargs,
                     "expected_runtime": (
                         self.expected_runtime.model_dump(mode="json")
                         if self.expected_runtime and _operation == "execute"
@@ -1040,7 +1378,13 @@ class IsolatedExecutionSession:
 
                 try:
                     response: dict[str, Any] = json.loads(response_path.read_text(encoding="utf-8"))
-                    observation = _observation_from_worker(response, output_arrow, output_json)
+                    observation = _observation_from_worker(
+                        response,
+                        output_arrow,
+                        output_json,
+                        expected_input_labels=inputs.labels,
+                        allow_outputless_success=_operation == "provenance",
+                    )
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                     self._fail_closed()
                     return Observation(
@@ -1087,7 +1431,7 @@ class IsolatedExecutionSession:
 
 def execute(
     spec: CallableSpec,
-    input_table: pa.Table,
+    input_table: ArrowInputBundle,
     *,
     static_args: Sequence[JsonValue] = (),
     static_kwargs: Mapping[str, JsonValue] | None = None,
@@ -1121,6 +1465,7 @@ def execute(
 
 
 __all__ = [
+    "ArrowInputBundle",
     "ExceptionInfo",
     "ExecutionError",
     "ExecutionOutcome",

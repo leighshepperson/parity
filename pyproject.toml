@@ -65,6 +65,21 @@ Issues = "https://github.com/leighshepperson/parity/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/parity"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "**/.parity*/**",
+  "**/__pycache__/**",
+  "**/*.py[cod]",
+  ".coverage",
+  "coverage.xml",
+  "htmlcov/**",
+  ".hypothesis/**",
+  ".mypy_cache/**",
+  ".pytest_cache/**",
+  ".ruff_cache/**",
+  ".venv/**",
+]
+
 [tool.hatch.version]
 path = "src/parity/_version.py"
 

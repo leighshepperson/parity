@@ -23,6 +23,7 @@ Declare cases with `[[cases]]`.
 | `candidate` | table | required | Replacement implementation. |
 | `fixture` | path | none | Seed input; Parquet, Arrow IPC, CSV or JSON according to loader support. |
 | `schema` | table | none | Generated input contract. At least `fixture` or `schema` is required. |
+| `input_bundle` | table | none | Two or three named inputs with optional relational constraints. Mutually exclusive with case-level `fixture`/`schema`. |
 | `static_args` | JSON-like array | `[]` | Positional values appended after the input frame. |
 | `static_kwargs` | JSON-like table | `{}` | Keyword arguments supplied to both implementations. |
 | `comparison` | table | defaults below | Equivalence policy. |
@@ -33,6 +34,56 @@ Declare cases with `[[cases]]`.
 
 TOML requires case-level scalar keys such as `fixture`, `tags` and `timeout_seconds` to appear
 before child tables like `[cases.reference]`.
+
+## Input bundles
+
+Use `[cases.input_bundle]` for joins, lookups and other callables that consume two or three frames.
+Each `[cases.input_bundle.inputs.<name>]` contains a `fixture`, a nested `schema`, or both. Names must
+be Python identifiers. With the default `binding = "keyword"`, Parity invokes
+`fn(**frames, **static_kwargs)` and rejects positional static arguments or colliding keywords.
+`binding = "positional"` invokes frames in declared TOML order before `static_args`.
+
+```toml
+[cases.input_bundle]
+binding = "keyword"
+
+[cases.input_bundle.inputs.orders]
+fixture = "tests/fixtures/orders.arrow"
+
+[cases.input_bundle.inputs.customers.schema]
+min_rows = 1
+max_rows = 20
+
+[[cases.input_bundle.inputs.customers.schema.columns]]
+name = "customer_id"
+dtype = "int64"
+nullable = false
+unique = true
+
+[[cases.input_bundle.relationships]]
+kind = "foreign_key"
+child = { input = "orders", columns = ["customer_id"] }
+parent = { input = "customers", columns = ["customer_id"] }
+allow_nulls = true
+```
+
+Relationships are generated and shrunk jointly:
+
+| `kind` | Fields | Meaning |
+|---|---|---|
+| `key_overlap` | `left`, `right`, `min_shared` | Require at least that many shared, distinct non-null keys. |
+| `foreign_key` | `child`, `parent`, `allow_nulls` | Every non-null child key occurs in the parent key domain. |
+| `equal_row_count` | `inputs` | Selected inputs have equal row counts. |
+| `cardinality` | `left`, `right`, `relationship` | Enforce `one_to_one`, `one_to_many`, `many_to_one` or `many_to_many` key uniqueness. |
+
+Keys are `{ input = "name", columns = ["one", "or_more"] }`. Paired keys must have the same
+arity and compatible portable dtype families. Cardinality does not imply overlap or inclusion; add
+the corresponding relationship explicitly. `one_to_many` makes the left key unique,
+`many_to_one` makes the right key unique, `one_to_one` makes both unique and `many_to_many` adds no
+uniqueness constraint. A foreign key with `allow_nulls = false` rejects null child keys; when true,
+only non-null child keys must occur in the parent. A fixture-only input has its schema inferred
+before relationship validation. Input fixtures are all-or-none: either provide a fixture for every
+input or use schemas for the generated bundle.
 
 ## Callable specification
 
@@ -125,6 +176,7 @@ comparison preserves multiplicity: two identical rows are not the same as one.
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
 | `max_examples` | integer | `100` | Property examples, 1 through 100,000. |
+| `max_findings` | integer | `1` | Maximum distinct mismatch signatures, 1 through 20. Each additional search receives its own `max_examples` budget. |
 | `seed` | integer/null | none | Stable run seed. |
 | `deadline_ms` | integer/null | none | Per-Hypothesis-example deadline. |
 | `adversarial_examples` | boolean | `true` | Run deterministic edge cases before search. |
@@ -133,6 +185,9 @@ comparison preserves multiplicity: two identical rows are not the same as one.
 | `suppress_too_slow` | boolean | `true` | Suppress Hypothesis health check for slow generation. |
 
 A seed improves repeatability but a saved replay artifact is the strongest reproduction mechanism.
+Mismatch signatures classify observable difference shapes, not root causes or separate bugs. Every
+generated witness is observed twice after shrinking; changing signatures or side-specific output
+nondeterminism stops the campaign as an execution error rather than creating questionable evidence.
 
 ## Performance policy
 

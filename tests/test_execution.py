@@ -44,6 +44,21 @@ def pandas_mutate(frame: pd.DataFrame):
     frame.loc[0, 'x'] = 999
     return frame
 
+def pandas_complex_output(_frame: pd.DataFrame):
+    return pd.DataFrame({'complex': [1 + 2j]})
+
+def pandas_positional_join(left: pd.DataFrame, right: pd.DataFrame, amount=0):
+    result = left.merge(right, on='key')
+    result['total'] = result['left'] + result['right'] + amount
+    return result
+
+def pandas_keyword_join(*, left: pd.DataFrame, right: pd.DataFrame, amount=0):
+    return pandas_positional_join(left, right, amount)
+
+def pandas_mutate_right_then_raise(left: pd.DataFrame, right: pd.DataFrame):
+    right.loc[0, 'right'] = 999
+    raise RuntimeError('bundle failed')
+
 def polars_add(frame: pl.DataFrame, amount=1):
     return frame.with_columns((pl.col('x') + amount).alias('x'))
 
@@ -107,6 +122,13 @@ def _table() -> pa.Table:
     return pa.table({"x": [1, 2], "name": ["a", "b"]})
 
 
+def _join_tables() -> tuple[pa.Table, pa.Table]:
+    return (
+        pa.table({"key": [1, 2], "left": [10, 20]}),
+        pa.table({"key": [1, 2], "right": [1, 2]}),
+    )
+
+
 def _pandas_edge_table() -> pa.Table:
     return pa.table(
         {
@@ -117,6 +139,16 @@ def _pandas_edge_table() -> pa.Table:
             "when": pa.array([0, None], type=pa.timestamp("us")),
         }
     )
+
+
+def _dense_union_table() -> pa.Table:
+    values = pa.UnionArray.from_dense(
+        pa.array([0, 1, 0], type=pa.int8()),
+        pa.array([0, 0, 1], type=pa.int32()),
+        [pa.array([1, 2], type=pa.int64()), pa.array(["text"])],
+        field_names=["number", "text"],
+    )
+    return pa.Table.from_arrays([values], names=["mixed"])
 
 
 def _isolated_spec(
@@ -186,6 +218,87 @@ def test_auto_adapter_uses_annotation_and_static_kwargs(transform_module: Path) 
     )
     assert pandas.table is not None
     assert pandas.table.column("x").to_pylist() == [6, 7]
+
+
+def test_execute_current_invokes_positional_and_named_input_bundles(
+    transform_module: Path,
+) -> None:
+    left, right = _join_tables()
+    positional = execute_current(
+        CallableSpec(target="parity_test_transforms:pandas_positional_join", adapter="pandas"),
+        [left, right],
+        static_args=[5],
+    )
+    named = execute_current(
+        CallableSpec(target="parity_test_transforms:pandas_keyword_join", adapter="pandas"),
+        {"left": left, "right": right},
+        static_kwargs={"amount": 7},
+    )
+
+    assert positional.succeeded
+    assert positional.table is not None
+    assert positional.table.column("total").to_pylist() == [16, 27]
+    assert positional.mutated_inputs == ()
+    assert named.succeeded
+    assert named.table is not None
+    assert named.table.column("total").to_pylist() == [18, 29]
+    assert named.mutated_inputs == ()
+
+
+def test_named_input_binding_rejects_ambiguous_or_invalid_arguments(
+    transform_module: Path,
+) -> None:
+    left, right = _join_tables()
+    spec = CallableSpec(target="parity_test_transforms:pandas_keyword_join", adapter="pandas")
+    with pytest.raises(ExecutionError, match="static positional"):
+        execute_current(spec, {"left": left, "right": right}, static_args=[1])
+    with pytest.raises(ExecutionError, match="collide"):
+        execute_current(spec, {"left": left, "right": right}, static_kwargs={"left": 1})
+    with pytest.raises(ExecutionError, match="identifiers"):
+        execute_current(spec, {"not-valid": left})
+
+
+def test_bundle_mutation_reports_the_affected_input_even_when_callable_raises(
+    transform_module: Path,
+) -> None:
+    left, right = _join_tables()
+    observation = execute_current(
+        CallableSpec(
+            target="parity_test_transforms:pandas_mutate_right_then_raise", adapter="pandas"
+        ),
+        {"left": left, "right": right},
+    )
+
+    assert observation.outcome is ExecutionOutcome.RAISED
+    assert observation.mutated_input
+    assert observation.mutated_inputs == ("right",)
+    assert observation.to_metadata()["mutated_inputs"] == ["right"]
+
+
+def test_live_callable_accepts_positional_bundle_and_materializes_each_input() -> None:
+    left, right = _join_tables()
+
+    def combine(first, second):
+        first.loc[0, "left"] = 50
+        return {"value": int(first.loc[0, "left"] + second.loc[0, "right"])}
+
+    observation = execute_callable_current(combine, (left, right), adapter="pandas")
+
+    assert observation.succeeded
+    assert observation.value == {"value": 51}
+    assert observation.mutated_input
+    assert observation.mutated_inputs == ("0",)
+    assert left.column("left").to_pylist() == [10, 20]
+
+    same_table = _table()
+
+    def mutate_first(first, second):
+        first.loc[0, "x"] = 999
+        return int(second.loc[0, "x"])
+
+    independent = execute_callable_current(mutate_first, (same_table, same_table), adapter="pandas")
+    assert independent.value == 1
+    assert independent.mutated_inputs == ("0",)
 
 
 def test_execute_live_non_importable_callable() -> None:
@@ -281,12 +394,44 @@ def test_native_pandas_input_propagates_to_disposable_and_session_workers(
     assert disposable.value["floating_isna"] == [True, True]
 
 
+def test_input_bundles_round_trip_through_disposable_and_persistent_workers(
+    transform_module: Path,
+) -> None:
+    left, right = _join_tables()
+    positional_spec = _isolated_spec(
+        transform_module,
+        "parity_test_transforms:pandas_positional_join",
+        adapter="pandas",
+    )
+    named_spec = _isolated_spec(
+        transform_module,
+        "parity_test_transforms:pandas_keyword_join",
+        adapter="pandas",
+    )
+
+    disposable = execute_isolated(
+        positional_spec, (left, right), static_args=[3], timeout_seconds=5
+    )
+    with IsolatedExecutionSession(named_spec, timeout_seconds=5) as session:
+        persistent = session.execute({"left": left, "right": right}, static_kwargs={"amount": 4})
+
+    assert disposable.succeeded
+    assert disposable.table is not None
+    assert disposable.table.column("total").to_pylist() == [14, 25]
+    assert disposable.mutated_inputs == ()
+    assert persistent.succeeded
+    assert persistent.table is not None
+    assert persistent.table.column("total").to_pylist() == [15, 26]
+    assert persistent.mutated_inputs == ()
+
+
 def test_mutation_exception_and_json_return_are_observed(transform_module: Path) -> None:
     mutated = execute_current(
         CallableSpec(target="parity_test_transforms:pandas_mutate", adapter="pandas"), _table()
     )
     assert mutated.succeeded
     assert mutated.mutated_input
+    assert mutated.mutated_inputs == ("input",)
 
     raised = execute_current(
         CallableSpec(target="parity_test_transforms:explode", adapter="pandas"), _table()
@@ -305,6 +450,133 @@ def test_mutation_exception_and_json_return_are_observed(transform_module: Path)
     assert scalar.value == {"rows": 2, "ok": True}
     assert scalar.to_metadata()["has_value"] is True
     assert "value" not in scalar.to_metadata()
+
+
+def test_failed_tabular_return_canonicalization_is_an_infrastructure_error(
+    transform_module: Path,
+) -> None:
+    import pandas as pd
+
+    live = execute_callable_current(
+        lambda _frame: pd.DataFrame({"complex": [1 + 2j]}),
+        _table(),
+        adapter="pandas",
+    )
+    current = execute_current(
+        CallableSpec(
+            target="parity_test_transforms:pandas_complex_output",
+            adapter="pandas",
+        ),
+        _table(),
+    )
+    isolated = execute_isolated(
+        _isolated_spec(
+            transform_module,
+            "parity_test_transforms:pandas_complex_output",
+            adapter="pandas",
+        ),
+        _table(),
+        timeout_seconds=5,
+    )
+
+    for observation in (live, current, isolated):
+        assert observation.outcome is ExecutionOutcome.RAISED
+        assert observation.exception is not None
+        assert observation.exception.module == "parity.execution"
+        assert observation.exception.type == "ExecutionError"
+        assert observation.return_type is not None
+        assert observation.return_type.startswith("pandas.")
+        assert observation.return_type.endswith(".DataFrame")
+        assert "1+2j" not in observation.exception.message
+        assert not observation.has_value
+        assert observation.table is None
+
+
+def test_failed_polars_input_materialization_is_an_infrastructure_error(
+    transform_module: Path,
+) -> None:
+    invoked = False
+
+    def live_identity(frame):
+        nonlocal invoked
+        invoked = True
+        return frame
+
+    input_table = _dense_union_table()
+    live = execute_callable_current(live_identity, input_table, adapter="polars")
+    current = execute_current(
+        CallableSpec(target="parity_test_transforms:polars_add", adapter="polars"),
+        input_table,
+    )
+    isolated = execute_isolated(
+        _isolated_spec(
+            transform_module,
+            "parity_test_transforms:polars_add",
+            adapter="polars",
+        ),
+        input_table,
+        timeout_seconds=5,
+    )
+
+    assert not invoked
+    for observation in (live, current, isolated):
+        assert observation.outcome is ExecutionOutcome.RAISED
+        assert observation.exception is not None
+        assert observation.exception.module == "parity.execution"
+        assert observation.exception.type == "ExecutionError"
+        assert "Union" not in observation.exception.message
+        assert observation.return_type is None
+
+
+def test_import_time_system_exit_is_a_sanitized_infrastructure_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "exit_during_import.py").write_text(
+        'raise SystemExit("private import detail")\n',
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    observation = execute_current(
+        CallableSpec(target="exit_during_import:transform", adapter="pandas"),
+        _table(),
+    )
+
+    assert observation.outcome is ExecutionOutcome.RAISED
+    assert observation.exception is not None
+    assert observation.exception.module == "parity.execution"
+    assert observation.exception.type == "ExecutionError"
+    assert "private import detail" not in observation.exception.message
+    assert observation.return_type is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {1: "coerced"},
+        {"nested": [{False: "coerced"}]},
+    ],
+)
+def test_json_return_rejects_non_string_mapping_keys_recursively(value: object) -> None:
+    observation = execute_callable_current(lambda _frame: value, _table(), adapter="pandas")
+
+    assert observation.outcome is ExecutionOutcome.RAISED
+    assert observation.exception is not None
+    assert observation.exception.type == "TypeError"
+    assert observation.return_type is not None
+    assert not observation.has_value
+
+
+def test_json_return_rejects_cyclic_containers_as_unsupported() -> None:
+    value: dict[str, object] = {}
+    value["cycle"] = value
+
+    observation = execute_callable_current(lambda _frame: value, _table(), adapter="pandas")
+
+    assert observation.outcome is ExecutionOutcome.RAISED
+    assert observation.exception is not None
+    assert observation.exception.type == "TypeError"
+    assert observation.return_type == "builtins.dict"
 
 
 def test_execute_isolated_round_trips_and_honours_workdir(transform_module: Path) -> None:
@@ -433,6 +705,46 @@ def test_isolated_session_malformed_response_fails_closed(
     assert unavailable.exception.type == "WorkerSessionUnavailableError"
 
 
+def test_isolated_session_outputless_execute_response_fails_closed(
+    transform_module: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_loads = __import__("parity.execution", fromlist=["json"]).json.loads
+
+    def outputless(payload: str):
+        parsed = original_loads(payload)
+        if isinstance(parsed, dict) and "outcome" in parsed:
+            parsed["has_table"] = False
+            parsed["has_value"] = False
+            parsed["return_type"] = None
+        return parsed
+
+    monkeypatch.setattr("parity.execution.json.loads", outputless)
+    spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
+    with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        malformed = session.execute(_table())
+        unavailable = session.execute(_table())
+
+    assert malformed.outcome is ExecutionOutcome.CRASHED
+    assert malformed.exception is not None
+    assert malformed.exception.type == "WorkerProtocolError"
+    assert unavailable.outcome is ExecutionOutcome.CRASHED
+    assert unavailable.exception is not None
+    assert unavailable.exception.type == "WorkerSessionUnavailableError"
+
+
+def test_isolated_session_allows_outputless_provenance_response(
+    transform_module: Path,
+) -> None:
+    spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
+    with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        provenance = session.inspect_runtime()
+
+    assert provenance.succeeded
+    assert provenance.runtime is not None
+    assert provenance.table is None
+    assert not provenance.has_value
+
+
 def test_isolated_session_malformed_runtime_fails_closed(
     transform_module: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -445,6 +757,32 @@ def test_isolated_session_malformed_runtime_fails_closed(
         return parsed
 
     monkeypatch.setattr("parity.execution.json.loads", malformed_runtime)
+    spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
+    with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        malformed = session.execute(_table())
+        unavailable = session.execute(_table())
+
+    assert malformed.outcome is ExecutionOutcome.CRASHED
+    assert malformed.exception is not None
+    assert malformed.exception.type == "WorkerProtocolError"
+    assert unavailable.outcome is ExecutionOutcome.CRASHED
+    assert unavailable.exception is not None
+    assert unavailable.exception.type == "WorkerSessionUnavailableError"
+
+
+def test_isolated_session_unknown_mutation_label_fails_closed(
+    transform_module: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_loads = __import__("parity.execution", fromlist=["json"]).json.loads
+
+    def unknown_mutation(payload: str):
+        parsed = original_loads(payload)
+        if isinstance(parsed, dict) and "outcome" in parsed:
+            parsed["mutated_input"] = True
+            parsed["mutated_inputs"] = ["customer-secret"]
+        return parsed
+
+    monkeypatch.setattr("parity.execution.json.loads", unknown_mutation)
     spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
     with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
         malformed = session.execute(_table())

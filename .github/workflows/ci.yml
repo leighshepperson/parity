@@ -29,7 +29,45 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src/parity
+      - name: Seed excluded build evidence
+        run: |
+          mkdir -p case_studies/package-safety/.parity-package-sentinel
+          printf 'must not ship\n' > case_studies/package-safety/.parity-package-sentinel/input.arrow
       - run: python -m build
+      - name: Verify distributions contain no local evidence or caches
+        run: |
+          python - <<'PY'
+          import pathlib
+          import tarfile
+          import zipfile
+
+          forbidden = (
+              "/.parity",
+              "/__pycache__/",
+              "/.venv/",
+              "/.hypothesis/",
+              "/.mypy_cache/",
+              "/.pytest_cache/",
+              "/.ruff_cache/",
+              "/.coverage",
+              "/coverage.xml",
+              "/htmlcov/",
+              ".pyc",
+          )
+          archives = [*pathlib.Path("dist").glob("*.tar.gz"), *pathlib.Path("dist").glob("*.whl")]
+          if len(archives) != 2:
+              raise SystemExit(f"expected wheel and sdist, found: {archives}")
+          for archive in archives:
+              if archive.suffix == ".whl":
+                  with zipfile.ZipFile(archive) as bundle:
+                      names = bundle.namelist()
+              else:
+                  with tarfile.open(archive, "r:gz") as bundle:
+                      names = bundle.getnames()
+              unsafe = [name for name in names if any(marker in f"/{name}" for marker in forbidden)]
+              if unsafe:
+                  raise SystemExit(f"unsafe packaged paths in {archive}: {unsafe}")
+          PY
 
   tests:
     runs-on: ubuntu-latest
@@ -95,5 +133,6 @@ jobs:
         with:
           config: action-smoke/parity.toml
           max-examples: "20"
+          max-findings: "2"
           performance: "false"
           artifact-name: parity-action-smoke

@@ -48,7 +48,7 @@ def _suite(status: Status) -> SuiteResult:
 def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     version = runner.invoke(cli.app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.2.0"
+    assert version.stdout.strip() == "0.4.0"
 
     config_path = tmp_path / "nested" / "parity.toml"
     created = runner.invoke(cli.app, ["init", str(config_path)])
@@ -103,6 +103,8 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
             "critical",
             "--max-examples",
             "7",
+            "--max-findings",
+            "3",
             "--no-performance",
             "--json",
             str(json_path),
@@ -116,6 +118,7 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
     assert captured["config"] is config
     assert captured["cases"] == {"orders"}
     assert config.cases[0].generation.max_examples == 7
+    assert config.cases[0].generation.max_findings == 3
     assert config.cases[0].performance.enabled is False
     assert json.loads(json_path.read_text(encoding="utf-8"))["status"] == "failed"
     assert "<testsuite" in junit_path.read_text(encoding="utf-8")
@@ -129,6 +132,10 @@ def test_check_rejects_unknown_case_and_appends_github_summary(tmp_path: Path, m
     unknown = runner.invoke(cli.app, ["check", "--case", "missing"])
     assert unknown.exit_code == 2
     assert "unknown case" in unknown.stderr
+
+    unknown_tag = runner.invoke(cli.app, ["check", "--tag", "does-not-exist"])
+    assert unknown_tag.exit_code == 2
+    assert "unknown tag" in unknown_tag.stderr
 
     summary = tmp_path / "step-summary.md"
     summary.write_text("existing\n", encoding="utf-8")

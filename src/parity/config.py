@@ -18,6 +18,10 @@ def _resolve_paths(config: ParityConfig, base: Path) -> ParityConfig:
     for case in config.cases:
         if case.fixture is not None:
             case.fixture = (base / case.fixture).resolve()
+        if case.input_bundle is not None:
+            for input_spec in case.input_bundle.inputs.values():
+                if input_spec.fixture is not None:
+                    input_spec.fixture = (base / input_spec.fixture).resolve()
         for implementation in (case.reference, case.candidate):
             if implementation.python is not None:
                 implementation.python = (base / implementation.python).resolve()

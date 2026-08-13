@@ -10,7 +10,7 @@ That property reduces exposure; it does not make every output non-sensitive.
 | Material | May contain input values | Default location | Intended audience |
 |---|---:|---|---|
 | Terminal/Markdown/JSON/JUnit report | No dataframe/value payloads | Console or requested path | Developers and CI |
-| `input.arrow` / optional `input.parquet` | Yes | Counterexample directory | Restricted engineering team |
+| `input.arrow` or bundled `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
 | `manifest.json` | Metadata, paths and hashes | Counterexample directory | Restricted engineering team |
 | `result.json` in artifact | Structured mismatch evidence | Counterexample directory | Restricted engineering team |
 | `replay.json` | Command/config references | Counterexample directory | Restricted engineering team |

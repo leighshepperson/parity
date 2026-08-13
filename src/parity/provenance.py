@@ -240,6 +240,7 @@ def _canonical_value(
     *,
     key: str | None = None,
     base_directory: Path | None = None,
+    path: tuple[str, ...] = (),
 ) -> Any:
     if key == "artifact_dir":
         return _OMIT
@@ -252,21 +253,43 @@ def _canonical_value(
     if isinstance(value, Path):
         return _canonical_path(value, base_directory)
     if isinstance(value, Mapping):
+        # Input declaration order is part of a positional bundle's callable
+        # contract. Preserve only the actual case-level input-bundle mapping;
+        # an ordinary static kwarg may also legitimately be named ``inputs``
+        # and remains a normal order-insensitive JSON mapping.
+        if path == ("cases", "input_bundle", "inputs"):
+            return [
+                {
+                    "name": str(item_key),
+                    "spec": _canonical_value(
+                        item_value,
+                        key=str(item_key),
+                        base_directory=base_directory,
+                        path=(*path, str(item_key)),
+                    ),
+                }
+                for item_key, item_value in value.items()
+            ]
         canonical: dict[str, Any] = {}
         for item_key in sorted(value, key=str):
             item_name = str(item_key)
-            item = _canonical_value(value[item_key], key=item_name, base_directory=base_directory)
+            item = _canonical_value(
+                value[item_key],
+                key=item_name,
+                base_directory=base_directory,
+                path=(*path, item_name),
+            )
             if item is not _OMIT:
                 canonical[item_name] = item
         return canonical
     if isinstance(value, (set, frozenset)):
-        items = [_canonical_value(item, base_directory=base_directory) for item in value]
+        items = [_canonical_value(item, base_directory=base_directory, path=path) for item in value]
         return sorted(
             items,
             key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
         )
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_canonical_value(item, base_directory=base_directory) for item in value]
+        return [_canonical_value(item, base_directory=base_directory, path=path) for item in value]
     if isinstance(value, float) and not math.isfinite(value):
         if math.isnan(value):
             return {"$float": "nan"}

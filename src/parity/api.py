@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from parity.config import load_config
 from parity.models import (
@@ -15,6 +15,7 @@ from parity.models import (
     GenerationConfig,
     PandasInput,
     PerformanceConfig,
+    Relationship,
     SuiteResult,
 )
 
@@ -33,6 +34,10 @@ def verify(
     *,
     fixture: Any | None = None,
     schema: FrameSchema | None = None,
+    input_fixtures: Mapping[str, Any] | None = None,
+    input_schemas: Mapping[str, FrameSchema] | None = None,
+    relationships: Sequence[Relationship] = (),
+    input_binding: Literal["keyword", "positional"] = "keyword",
     comparison: ComparisonPolicy | None = None,
     generation: GenerationConfig | None = None,
     performance: PerformanceConfig | None = None,
@@ -52,6 +57,9 @@ def verify(
     callable depends on pandas' conventional NumPy/object dtype behavior.
     ``reference_distributions`` and ``candidate_distributions`` add explicitly
     named target-library versions to each side's runtime provenance.
+    Multi-input callables use ``input_fixtures``/``input_schemas`` with two or
+    three named frames; relational constraints are generated and shrunk as one
+    atomic bundle.
     """
 
     from parity.engine import run_live
@@ -61,6 +69,10 @@ def verify(
         candidate,
         fixture=fixture,
         schema=schema,
+        input_fixtures=input_fixtures,
+        input_schemas=input_schemas,
+        relationships=relationships,
+        input_binding=input_binding,
         comparison=comparison or ComparisonPolicy(),
         generation=generation or GenerationConfig(),
         performance=performance or PerformanceConfig(),
