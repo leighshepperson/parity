@@ -56,6 +56,8 @@ schema in `parity.toml` for important cases.
 Choose row order, column order, dtype rules and numerical tolerance from the consumer's contract:
 
 - Use `row_order = "strict"` for ranked results, event streams and presentation-ready output.
+- Use `row_order = "keyed"` with `row_keys = ["account_id", "event_id"]` when rows may move but
+  have a unique, stable business identity. Parity aligns the composite key before comparing cells.
 - Use `row_order = "ignore"` only when rows are genuinely a bag. Duplicate rows are still counted.
 - Use `dtype = "strict"` when serialization width, categorical form or nullability matters.
 - Use `dtype = "compatible"` when an integer is an integer regardless of storage width.
@@ -64,6 +66,13 @@ Choose row order, column order, dtype rules and numerical tolerance from the con
 - Exclude a column only when it is explicitly non-semantic, such as a generated trace identifier.
 
 Commit policy changes to review. A weakened comparison can hide more defects than a code change.
+
+Key columns belong to the output contract, not the generated input schema. They must exist on both
+outputs and form a unique composite key on each side; do not choose a merely convenient column that
+can duplicate. Missing-value and signed-zero equality switches apply to key identity, but numeric
+and datetime tolerances never pair distinct keys. Those tolerances still apply to cells after
+alignment. Prefer keyed comparison over `ignore` whenever a real output key exists: failures then
+point to the differing cell instead of an unmatched whole row.
 
 ### 4. Run locally and replay
 

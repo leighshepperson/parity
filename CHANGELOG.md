@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.0
+
+- Add keyed output alignment with unique scalar composite keys. Reordered outputs can now be
+  matched by business identity while payload differences retain precise cell-level evidence.
+- Replace greedy order-insensitive row matching with deterministic maximum-cardinality matching,
+  removing false failures when numeric tolerance admits more than one possible pairing.
+- Keep row-key identity exact: value and datetime tolerances apply to payloads, never to keys;
+  missing-value and signed-zero key identity follow the explicit comparison policy.
+- Add a pinned public compatibility study whose grouped output uses composite keys.
+
+### Compatibility notes
+
+- Existing `strict` and `ignore` row-order configurations retain their meaning. `row_keys` must be
+  omitted or empty unless `row_order = "keyed"`.
+- Keyed comparison rejects duplicate, non-scalar or policy-non-reflexive keys rather than choosing
+  an arbitrary row pairing.
+- Replay and report format versions are unchanged; the additive comparison fields are already
+  covered by the versioned configuration fingerprint. Older policies still deserialize with an
+  empty `row_keys` default, but exact replay of version 2 and 3 artifacts continues to require the
+  recorded Parity and worker runtimes.
+
 ## 0.6.0
 
 - Add `generation.stability_repeats`, defaulting to two same-input observations per implementation.

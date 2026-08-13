@@ -12,6 +12,7 @@ from parity.models import (
     CallableSpec,
     CaseConfig,
     CaseProvenance,
+    ComparisonPolicy,
     ExampleResult,
     InputBundle,
     InputSpec,
@@ -90,9 +91,16 @@ def test_artifact_uses_v2_only_with_complete_runtime_and_config_contract(
     tmp_path: Path,
 ) -> None:
     runtime = collect_runtime_provenance(["definitely-not-installed-artifact-probe"])
+    case = CaseConfig(
+        name="complete-runtime",
+        reference=CallableSpec(target="old:transform", adapter="pandas"),
+        candidate=CallableSpec(target="new:transform", adapter="polars"),
+        fixture=tmp_path / "source.arrow",
+        comparison=ComparisonPolicy(row_order="keyed", row_keys=["account", "sequence"]),
+    )
     destination = ArtifactStore(tmp_path / "artifacts").write_failure(
-        "complete-runtime",
-        pa.table({"x": [1]}),
+        case,
+        pa.table({"account": ["A"], "sequence": [1], "value": [10]}),
         _result(),
         runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
         config_sha256="a" * 64,
@@ -103,6 +111,22 @@ def test_artifact_uses_v2_only_with_complete_runtime_and_config_contract(
     assert replay["config_sha256"] == "a" * 64
     assert replay["expected_runtime"]["reference"]["python_version"]
     assert replay["expected_runtime"]["candidate"]["distributions"]
+    assert replay["case"]["comparison"]["row_order"] == "keyed"
+    assert replay["case"]["comparison"]["row_keys"] == ["account", "sequence"]
+
+    # Keyed alignment is an additive CaseConfig field, not a new replay
+    # transport. The existing v2 contract reconstructs it without guessing.
+    restored = CaseConfig.model_validate(replay["case"])
+    assert restored.comparison == case.comparison
+
+    # Replay payloads produced before keyed alignment omitted row_keys. They
+    # retain their original strict/ignore semantics through the empty default.
+    legacy_case = dict(replay["case"])
+    legacy_comparison = dict(legacy_case["comparison"])
+    legacy_comparison["row_order"] = "strict"
+    legacy_comparison.pop("row_keys")
+    legacy_case["comparison"] = legacy_comparison
+    assert CaseConfig.model_validate(legacy_case).comparison.row_keys == []
 
 
 def test_artifact_rejects_malformed_config_fingerprint(tmp_path: Path) -> None:

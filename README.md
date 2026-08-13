@@ -25,6 +25,7 @@ engine-neutral so the same approach can cover other dataframe, numerical and dep
   command.
 - Joint generation, shrinking, mutation tracking and replay for two- or three-frame joins and
   lookups.
+- Exact alignment of reordered outputs by unique scalar business keys, including composite keys.
 - Frame-local valid-domain constraints for sorted inputs and row-wise column relationships.
 - Same-input stability checks that fail closed when either implementation changes across repeated
   observations, even when both sides happen to agree with each other.
@@ -71,7 +72,8 @@ adapter = "polars"
 record_distributions = ["orders-lib"]
 
 [cases.comparison]
-row_order = "ignore"
+row_order = "keyed"
+row_keys = ["order_id"]
 column_order = "strict"
 dtype = "compatible"
 rtol = 1e-7
@@ -171,6 +173,18 @@ them. A failing input is saved as data, not merely printed as a random seed; gen
 minimized when shrinking is enabled and succeeds. `sorted_by` and `row_comparison` constraints let
 the search stay inside valid domains required by as-of joins, windows and interval calculations.
 
+For outputs with stable identities, prefer keyed alignment to globally ignoring order:
+
+```toml
+[cases.comparison]
+row_order = "keyed"
+row_keys = ["customer_id", "period"]
+```
+
+Keys must be unique on both sides and match exactly; tolerances still apply to non-key payload
+columns. Parity fails closed when keys are missing, duplicated, nested or ambiguous under the
+selected name policy.
+
 ## Pytest
 
 The installed plugin exposes a `parity` assertion fixture:
@@ -212,7 +226,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: leighshepperson/parity@v0.6.0
+  - uses: leighshepperson/parity@v0.7.0
     with:
       config: parity.toml
       cases: orders,customers
@@ -270,13 +284,14 @@ the [threat model](docs/THREAT_MODEL.md).
 - [Multi-input case study: pandas `merge` / Polars `join`](case_studies/pandas_polars_join/README.md)
 - [Valid-domain case study: pandas `merge_asof` / Polars `join_asof`](case_studies/pandas_polars_asof/README.md)
 - [Same-input stability probe](case_studies/stability_probe/README.md)
+- [Keyed-output control: utilsforecast `evaluate`](case_studies/utilsforecast_evaluate/README.md)
 - [Development and contribution guide](docs/DEVELOPMENT.md)
 - [Technical roadmap](docs/ROADMAP.md)
 - [Clean-room provenance](docs/CLEAN_ROOM.md) and [public prior art](docs/PRIOR_ART.md)
 
 ## Development status
 
-Parity `0.6` is an alpha: useful on real migrations, but its configuration and artifact contracts
+Parity `0.7` is an alpha: useful on real migrations, but its configuration and artifact contracts
 may evolve before `1.0`. Issues and small, synthetic reproduction cases are welcome.
 
 Licensed under the [Apache License 2.0](LICENSE).

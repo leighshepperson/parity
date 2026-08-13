@@ -26,6 +26,7 @@ def test_generated_config_parses_and_validates(tmp_path: Path) -> None:
     assert raw["cases"][0]["reference"]["record_distributions"] == []
     assert raw["cases"][0]["candidate"]["pandas_input"] == "arrow"
     assert raw["cases"][0]["schema"]["constraints"] == []
+    assert raw["cases"][0]["comparison"]["row_keys"] == []
     assert raw["cases"][0]["generation"]["stability_repeats"] == 2
 
     path = tmp_path / "nested" / "parity.toml"
@@ -34,6 +35,7 @@ def test_generated_config_parses_and_validates(tmp_path: Path) -> None:
     config = load_config(path)
     assert config.cases[0].name == "critical-orders"
     assert config.cases[0].reference.target == "package.old:calculate"
+    assert config.cases[0].comparison.row_keys == []
     assert config.cases[0].input_schema is not None
     # Isolated pandas/Polars workers include interpreter startup.  A generated
     # starter must not turn machine speed into a flaky Hypothesis failure.

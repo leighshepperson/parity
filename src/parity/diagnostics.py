@@ -102,7 +102,7 @@ def diagnose(mismatches: list[Mismatch]) -> list[Diagnosis]:
             "One output contains a row for which the other has no equivalent. Check filtering, "
             "grouping-key treatment, join cardinality and duplicate preservation.",
             "high",
-            "An order-insensitive comparison found an unmatched row.",
+            "A keyed or order-insensitive comparison found incompatible row identity or content.",
         )
     if MismatchKind.COLUMN in kinds or MismatchKind.SCHEMA in kinds:
         add(

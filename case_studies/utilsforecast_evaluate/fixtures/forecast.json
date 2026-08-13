@@ -1,0 +1,8 @@
+[
+  {"unique_id": 2, "ds": 1, "y": 10.0, "model": 9.0},
+  {"unique_id": 1, "ds": 1, "y": 5.0, "model": 4.0},
+  {"unique_id": 3, "ds": 1, "y": -2.0, "model": -1.5},
+  {"unique_id": 2, "ds": 2, "y": 14.0, "model": 11.0},
+  {"unique_id": 1, "ds": 2, "y": 8.0, "model": 10.0},
+  {"unique_id": 3, "ds": 2, "y": 3.0, "model": 3.5}
+]

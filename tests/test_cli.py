@@ -48,7 +48,7 @@ def _suite(status: Status) -> SuiteResult:
 def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     version = runner.invoke(cli.app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.6.0"
+    assert version.stdout.strip() == "0.7.0"
 
     config_path = tmp_path / "nested" / "parity.toml"
     created = runner.invoke(cli.app, ["init", str(config_path)])

@@ -51,6 +51,13 @@ Arrow is a transport representation, not the definition of equivalence. Comparis
 families and applies explicit policies for concrete dtypes, names, order, missing values, numerical
 tolerances and temporal values.
 
+Output rows have three deliberately separate comparison modes. Strict mode is positional; ignore
+mode treats rows as a multiplicity-preserving bag; keyed mode resolves a declared unique composite
+key, aligns the two outputs by exact key identity, and then uses the ordinary cell policy. Keeping
+key identity outside tolerance matching prevents a wider numeric tolerance from silently pairing
+different business entities. Duplicate or unavailable keys fail closed rather than selecting an
+arbitrary pairing.
+
 ### Generation
 
 Schema-aware deterministic cases run first so common faults have stable names and reproduce without
@@ -146,6 +153,13 @@ manifest version 2 so every consumed input file is required and hash-bound. Repl
 workers before target import and blocks both callables on drift. Version 1 artifacts remain
 accepted and are reported as unverified. JSON report schema version 3 adds data-free mismatch
 signatures and distinct-finding counts.
+
+Comparison-policy additions such as keyed row alignment do not change the replay transport: the
+sanitized case already stores the complete policy and its effective-configuration hash. Policy
+deserialization remains compatible: an older case without `row_keys` receives the empty default,
+while a keyed case reuses the existing single-input or bundle replay version. Exact replay of
+version 2 and 3 artifacts still requires the recorded Parity and worker runtimes; version 1 replay
+remains explicitly unverified.
 
 ## Extension seams
 
