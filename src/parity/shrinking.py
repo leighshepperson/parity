@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
 from hypothesis import HealthCheck, Phase, find, settings
-from hypothesis.errors import NoSuchExample
+from hypothesis.errors import NoSuchExample, Unsatisfiable
 
-from parity.generation import frame_strategy
-from parity.models import FrameSchema, GenerationConfig
+from parity.generation import bundle_strategy, frame_strategy
+from parity.models import FrameSchema, GenerationConfig, InputBundle
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +25,18 @@ class Counterexample:
     @property
     def table(self) -> pa.Table:
         return self.example
+
+
+@dataclass(frozen=True, slots=True)
+class InputBundleCounterexample:
+    """A jointly minimized, atomically replayable input bundle."""
+
+    example: dict[str, pa.Table]
+    source: str = "generated:shrunk"
+
+    @property
+    def tables(self) -> dict[str, pa.Table]:
+        return dict(self.example)
 
 
 def hypothesis_settings(config: GenerationConfig | None = None) -> settings:
@@ -73,6 +85,75 @@ def find_counterexample(
     return Counterexample(example=example)
 
 
+def find_unseen_counterexample(
+    schema: FrameSchema,
+    classifier: Callable[[pa.Table], str | None],
+    excluded_signatures: Collection[str],
+    config: GenerationConfig | None = None,
+) -> Counterexample | None:
+    """Find a witness whose stable mismatch signature has not been excluded.
+
+    ``classifier`` returns ``None`` for an equivalent input and a versioned
+    signature for a semantic failure. Exceptions deliberately propagate so an
+    operational error cannot be learned as another semantic finding. Callers
+    must re-observe the returned witness before persisting it.
+    """
+
+    excluded = frozenset(excluded_signatures)
+    return find_counterexample(
+        schema,
+        lambda table: (signature := classifier(table)) is not None and signature not in excluded,
+        config,
+    )
+
+
+def find_bundle_counterexample(
+    bundle: InputBundle,
+    schemas: Mapping[str, FrameSchema],
+    predicate: Callable[[dict[str, pa.Table]], bool],
+    config: GenerationConfig | None = None,
+) -> InputBundleCounterexample | None:
+    """Find and jointly shrink an atomic bundle satisfying ``predicate``."""
+
+    try:
+        selected = config or GenerationConfig()
+        kwargs: dict[str, Any] = {}
+        if selected.seed is not None:
+            kwargs["random"] = random.Random(selected.seed)
+        example = find(
+            bundle_strategy(bundle, schemas),
+            predicate,
+            settings=hypothesis_settings(selected),
+            **kwargs,
+        )
+    except NoSuchExample:
+        return None
+    except Unsatisfiable as error:
+        raise ValueError(
+            "input bundle generation is unsatisfiable; relax input row bounds, "
+            "key domains, or relationship constraints"
+        ) from error
+    return InputBundleCounterexample(example=dict(example))
+
+
+def find_unseen_bundle_counterexample(
+    bundle: InputBundle,
+    schemas: Mapping[str, FrameSchema],
+    classifier: Callable[[dict[str, pa.Table]], str | None],
+    excluded_signatures: Collection[str],
+    config: GenerationConfig | None = None,
+) -> InputBundleCounterexample | None:
+    """Find a jointly minimized bundle with an unexcluded mismatch signature."""
+
+    excluded = frozenset(excluded_signatures)
+    return find_bundle_counterexample(
+        bundle,
+        schemas,
+        lambda tables: (signature := classifier(tables)) is not None and signature not in excluded,
+        config,
+    )
+
+
 def minimize_counterexample(
     initial: pa.Table,
     predicate: Callable[[pa.Table], bool],
@@ -95,7 +176,11 @@ def minimize_counterexample(
 
 __all__ = [
     "Counterexample",
+    "InputBundleCounterexample",
+    "find_bundle_counterexample",
     "find_counterexample",
+    "find_unseen_bundle_counterexample",
+    "find_unseen_counterexample",
     "hypothesis_settings",
     "minimize_counterexample",
 ]

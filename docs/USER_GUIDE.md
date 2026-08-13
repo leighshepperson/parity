@@ -6,13 +6,20 @@ A Parity case has four parts:
 
 1. A **reference** callable whose observable behaviour is the baseline.
 2. A **candidate** callable that should preserve that behaviour.
-3. An **input domain**, supplied by a fixture, a schema, or both.
+3. An **input domain**, supplied by a fixture/schema or a named two- or three-frame bundle.
 4. An explicit **comparison policy** defining what “the same” means.
 
-Parity converts one canonical Arrow input into each callable's requested adapter, observes both
-executions, canonicalises the outcomes and compares them. It first runs stable adversarial cases,
-then a property-based search. A discovered difference is shrunk and written as a replayable
-artifact. If semantic checks pass, Parity can benchmark both implementations.
+Parity converts canonical Arrow input(s) into each callable's requested adapter, observes both
+executions, canonicalises the outcomes and compares them. It first runs deterministic adversarial
+cases, then a property-based search. A discovered difference is written as a counterexample
+artifact; automatic replay is available when the callable environment can be reconstructed.
+Generated differences are minimized when shrinking is enabled and succeeds. If semantic checks
+pass, Parity can benchmark both implementations.
+
+For joins and lookups, an input bundle generates all frames from one joint strategy. Key overlap,
+foreign-key, cardinality and equal-row-count relationships therefore remain true while Hypothesis
+shrinks the complete bundle. Mutation is tracked by logical input name and replay restores every
+Arrow IPC input atomically.
 
 The reference is not declared *correct* by Parity. It is the contract you have chosen to preserve.
 Review reference defects before turning a historical accident into a permanent requirement.
@@ -77,7 +84,7 @@ drifted, neither callable runs and replay returns an error. A legacy artifact wi
 still usable, but terminal and Markdown reports mark it unverified rather than claiming an exact
 reproduction.
 
-The minimized Arrow input is the authority. A Parquet convenience copy is also written when its
+The saved Arrow input is the authority. A Parquet convenience copy is also written when its
 format can represent the input schema. A diagnosis is a deterministic hypothesis, not an automatic
 repair instruction. Add the artifact input (or an appropriately sanitized equivalent) to your own
 unit-test corpus before fixing the candidate.
@@ -100,6 +107,11 @@ Run quick critical cases on every pull request and a larger campaign on a schedu
 parity check --tag critical --max-examples 250 --no-performance
 parity check --max-examples 5000 --json .parity/nightly.json
 ```
+
+Set `max_findings` above one when one campaign should continue searching for other observable
+difference shapes. Each distinct signature receives a separate `max_examples` budget. Signatures
+are data-free classifications—not bug IDs—and every shrunk witness is confirmed twice; unstable
+outputs stop discovery as an error.
 
 Keep seeds in version control for reproducibility, but retain shrinking. Store artifacts with
 restricted access because a counterexample derived from a fixture may contain fixture values.
@@ -128,6 +140,11 @@ record_distributions = ["orders-lib", "scikit-learn"]
 static_args = ["GBP"]
 static_kwargs = { include_tax = true }
 ```
+
+For a keyword-bound input bundle, each logical name is passed as a frame keyword and cannot collide
+with `static_kwargs`; `static_args` are disallowed. Positional bundles pass frames in declared order
+before `static_args`. See the [configuration reference](CONFIG_REFERENCE.md) for the relationship
+syntax and validation rules.
 
 `adapter = "auto"` is convenient when both functions accept Arrow-compatible input, but explicit
 adapters make reviews and errors clearer. A distinct `python` executable lets Parity compare
@@ -166,19 +183,26 @@ result = parity.verify(
 )
 ```
 
+Live joins use `input_fixtures={"orders": orders, "customers": customers}` and optionally matching
+`input_schemas`, `relationships`, and `input_binding="keyword"` or `"positional"`. Do not combine
+those arguments with the legacy single `fixture`/`schema` pair.
+
 When both live callables are plain module-level functions with stable import paths, failure
 artifacts preserve the full comparison contract and can be replayed from the same project checkout.
 Lambdas, nested functions, bound methods, callable instances and functions defined in `__main__`
-still produce minimized evidence, but cannot be re-imported by a later process; use a configured
-case when automatic replay is required.
+still produce saved evidence, with generated failures minimized when shrinking succeeds, but cannot
+be re-imported by a later process; use a configured case when automatic replay is required.
 
 Live verification runs sequentially in the caller's interpreter; replay and configured campaigns
-isolate each side in a separate process. Automatic replay therefore assumes pure callables with no
-shared module globals or external mutable state. A stateful result that disappears when Parity
-re-observes a shrunk witness is reported as an error, never accepted as a semantic failure or pass.
-Project-relative interpreter and import paths can be preserved. Absolute or external interpreter
-and import paths are deliberately omitted rather than replaced with the current environment, so
-those artifacts remain inspectable evidence but require an explicit configuration to re-run.
+isolate each side in a separate process. Before accepting a configured finding, or a live finding
+whose two callables have stable import paths, Parity re-observes the witness in newly started worker
+processes. A stateful result that disappears in clean execution is reported as an error, never
+accepted as a semantic finding. Non-importable live callables are repeated only in the caller's
+process, must be pure functions of their arguments, and produce evidence that cannot be replayed
+automatically. Project-relative interpreter and import paths can be preserved. Absolute or external
+interpreter and import paths are deliberately omitted rather than replaced with the current
+environment, so those artifacts remain inspectable evidence but require an explicit configuration
+to re-run.
 
 A configured case uses one persistent reference worker and one persistent candidate worker for the
 whole semantic campaign and its benchmark. The two sides never share a process, and every call
@@ -203,7 +227,7 @@ Use both when possible:
 - `categories` restrict generation to an enumeration.
 - `unique` and `unique_together` prevent impossible duplicates.
 
-Generation budgets count Hypothesis examples. Deterministic adversarial inputs—fixture, empty,
+Generation budgets count classifier evaluations plus confirmation runs. Deterministic adversarial inputs—fixture, empty,
 singleton, null, NaN/signed-zero, duplicate, extreme, temporal, categorical and reversed-order
 cases where applicable—are reported separately.
 
@@ -226,6 +250,7 @@ parity init [PATH] [--force]                  create a runnable starter
 parity inspect FIXTURE [--output PATH]        infer a portable schema
 parity check [--config PATH] [--case NAME]    run campaigns
              [--tag TAG] [--max-examples N]
+             [--max-findings N]
              [--performance|--no-performance]
              [--json PATH] [--junit PATH] [--markdown PATH]
 parity replay ARTIFACT                        reproduce a counterexample

@@ -24,6 +24,8 @@ from parity.models import (
     ExampleResult,
     FrameSchema,
     GenerationConfig,
+    InputBundle,
+    InputSpec,
     Mismatch,
     MismatchKind,
     PandasInput,
@@ -52,9 +54,62 @@ def corrupt_everything(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+_live_stateful_calls = 0
+
+
+def corrupt_after_live_warmup(frame: pd.DataFrame) -> pd.DataFrame:
+    global _live_stateful_calls
+    _live_stateful_calls += 1
+    result = frame.copy()
+    if _live_stateful_calls > 2:
+        result["x"] = result["x"] + 1
+    return result
+
+
+def return_unsupported(_frame: pd.DataFrame) -> object:
+    return object()
+
+
+def return_complex_dataframe(_frame: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame({"complex": [1 + 2j]})
+
+
+def return_integer_mapping_key(_frame: pd.DataFrame) -> dict[object, str]:
+    return {1: "same"}
+
+
+def return_string_mapping_key(_frame: pd.DataFrame) -> dict[object, str]:
+    return {"1": "same"}
+
+
+def corrupt_two_shapes(frame: pd.DataFrame) -> pd.DataFrame:
+    """Expose two independent semantic symptoms for multi-finding tests."""
+
+    result = frame.copy()
+    if (result["x"] == 0).any():
+        return result.rename(columns={"x": "renamed"})
+    if (result["x"] > 0).any():
+        result["x"] = result["x"] + 1
+    return result
+
+
+def merge_named(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+    return left.merge(right, on="key", how="left", sort=True)
+
+
 def unannotated_polars_identity(frame):
     assert isinstance(frame, pl.DataFrame)
     return frame
+
+
+def _dense_union_table() -> pa.Table:
+    values = pa.UnionArray.from_dense(
+        pa.array([0, 1, 0], type=pa.int8()),
+        pa.array([0, 0, 1], type=pa.int32()),
+        [pa.array([1, 2], type=pa.int64()), pa.array(["text"])],
+        field_names=["number", "text"],
+    )
+    return pa.Table.from_arrays([values], names=["mixed"])
 
 
 def arrow_chunk_count(frame: pa.Table) -> dict[str, int]:
@@ -146,6 +201,43 @@ def test_live_engine_accepts_explicit_cross_engine_adapters(tmp_path: Path) -> N
     )
 
     assert result.status is Status.PASSED
+
+
+def test_live_engine_accepts_named_input_bundle(tmp_path: Path) -> None:
+    result = run_live(
+        merge_named,
+        merge_named,
+        fixture=None,
+        schema=None,
+        input_fixtures={
+            "left": pd.DataFrame({"key": [1, 2]}),
+            "right": pd.DataFrame({"key": [1], "value": [10]}),
+        },
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=2, adversarial_examples=False),
+        performance=PerformanceConfig(enabled=False),
+        artifact_dir=tmp_path,
+        reference_adapter="pandas",
+        candidate_adapter="pandas",
+    )
+
+    assert result.status is Status.PASSED
+    assert result.cases[0].generated_examples >= 2
+
+
+def test_live_engine_rejects_bundle_options_for_single_input(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="apply only"):
+        run_live(
+            identity,
+            identity,
+            fixture=pd.DataFrame({"x": [1]}),
+            schema=None,
+            input_binding="positional",
+            comparison=ComparisonPolicy(),
+            generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+            performance=PerformanceConfig(enabled=False),
+            artifact_dir=tmp_path,
+        )
 
 
 def test_live_engine_rejects_invalid_distribution_names_before_execution(tmp_path: Path) -> None:
@@ -308,6 +400,214 @@ def test_deterministic_witness_skips_redundant_property_search(tmp_path: Path) -
     assert case.generated_examples == 0
 
 
+def test_engine_discovers_and_orders_two_distinct_mismatch_signatures(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        corrupt_two_shapes,
+        generation=GenerationConfig(
+            max_examples=500,
+            max_findings=2,
+            seed=74,
+            adversarial_examples=False,
+        ),
+    )
+
+    case = result.cases[0]
+    signatures = [failure.finding_signature for failure in case.failures]
+    assert result.status is Status.FAILED
+    assert case.findings_discovered == 2
+    assert len(set(signatures)) == 2
+    assert signatures == sorted(signatures)  # type: ignore[arg-type]
+    assert all(signature and signature.startswith("ms1:") for signature in signatures)
+
+
+def test_default_finding_budget_stops_after_first_distinct_signature(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        corrupt_two_shapes,
+        generation=GenerationConfig(
+            max_examples=500,
+            seed=75,
+            adversarial_examples=False,
+        ),
+    )
+
+    assert result.cases[0].findings_discovered == 1
+    assert len(result.cases[0].failures) == 1
+
+
+def test_repeated_witnesses_with_one_signature_are_deduplicated(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        corrupt_everything,
+        generation=GenerationConfig(
+            max_examples=20,
+            max_findings=3,
+            seed=76,
+        ),
+    )
+
+    case = result.cases[0]
+    assert result.status is Status.FAILED
+    assert case.findings_discovered == 1
+    assert len(case.failures) == 1
+
+
+def test_deterministic_side_nondeterminism_is_an_error(tmp_path: Path) -> None:
+    candidate_calls = 0
+
+    def reference_runner(value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=value,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def candidate_runner(_value: pa.Table) -> Observation:
+        nonlocal candidate_calls
+        candidate_calls += 1
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=pa.table({"x": [candidate_calls + 1]}),
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    result = engine._campaign(
+        name="nondeterministic",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+        performance_config=PerformanceConfig(enabled=False),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=reference_runner,
+        candidate_runner=candidate_runner,
+        artifact_case="nondeterministic",
+    )
+
+    assert result.status is Status.ERROR
+    assert result.findings_discovered == 0
+    assert "nondeterministic on the candidate side" in result.failures[0].mismatches[0].message
+
+
+def test_configured_stateful_failure_is_not_accepted_from_a_warmed_session(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "stateful_transforms.py").write_text(
+        """
+_calls = 0
+
+def reference(frame):
+    return frame.copy()
+
+def candidate(frame):
+    global _calls
+    _calls += 1
+    result = frame.copy()
+    if _calls > 2:
+        result["x"] = result["x"] + 1
+    return result
+""",
+        encoding="utf-8",
+    )
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="stateful",
+                reference=CallableSpec(
+                    target="stateful_transforms:reference",
+                    adapter="pandas",
+                    workdir=tmp_path,
+                ),
+                candidate=CallableSpec(
+                    target="stateful_transforms:candidate",
+                    adapter="pandas",
+                    workdir=tmp_path,
+                ),
+                input_schema=FrameSchema(
+                    columns=[
+                        ColumnSchema(
+                            name="x",
+                            dtype="integer",
+                            nullable=False,
+                            minimum=0,
+                            maximum=1,
+                        )
+                    ],
+                    max_rows=5,
+                ),
+                generation=GenerationConfig(max_examples=20, derandomize=True),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert case.failures[0].finding_signature is None
+    assert "not reproducible" in case.failures[0].mismatches[0].message
+
+
+def test_importable_live_failure_is_confirmed_in_a_fresh_process(tmp_path: Path) -> None:
+    global _live_stateful_calls
+    _live_stateful_calls = 0
+
+    result = _run(
+        tmp_path,
+        corrupt_after_live_warmup,
+        generation=GenerationConfig(max_examples=20, derandomize=True),
+    )
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert case.failures[0].finding_signature is None
+    assert "not reproducible" in case.failures[0].mismatches[0].message
+
+
+def test_exact_replay_observes_saved_input_once_per_side(tmp_path: Path) -> None:
+    calls = {"reference": 0, "candidate": 0}
+
+    def runner(label: str, value: pa.Table) -> Observation:
+        calls[label] += 1
+        output = value if label == "reference" else pa.table({"x": [2]})
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=output,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    result = engine._campaign(
+        name="exact",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="int64", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=100, max_findings=10),
+        performance_config=PerformanceConfig(enabled=False),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=lambda value: runner("reference", value),
+        candidate_runner=lambda value: runner("candidate", value),
+        artifact_case="exact",
+        exact_only=True,
+    )
+
+    assert result.status is Status.FAILED
+    assert calls == {"reference": 1, "candidate": 1}
+    assert result.examples_run == 1
+
+
 def test_generated_infrastructure_error_stops_without_shrinking(
     tmp_path: Path,
     monkeypatch,
@@ -349,15 +649,324 @@ def test_generated_infrastructure_error_stops_without_shrinking(
     assert calls == 2
 
 
+def test_matching_unsupported_live_returns_are_an_error(tmp_path: Path) -> None:
+    result = run_live(
+        return_unsupported,
+        return_unsupported,
+        fixture=None,
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+        performance=PerformanceConfig(enabled=False),
+        artifact_dir=tmp_path,
+        reference_adapter="pandas",
+        candidate_adapter="pandas",
+    )
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert case.failures[0].finding_signature is None
+    assert all(
+        "could not be executed" in mismatch.message for mismatch in case.failures[0].mismatches
+    )
+
+
+def test_matching_unsupported_configured_returns_are_an_error(tmp_path: Path) -> None:
+    (tmp_path / "unsupported_transforms.py").write_text(
+        "def unsupported(_frame):\n    return object()\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="unsupported_transforms:unsupported",
+        adapter="pandas",
+        workdir=tmp_path,
+    )
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="unsupported-return",
+                reference=spec,
+                candidate=spec.model_copy(deep=True),
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+                    min_rows=1,
+                    max_rows=1,
+                ),
+                generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert case.failures[0].finding_signature is None
+    assert len(case.failures[0].mismatches) == 2
+
+
+def test_matching_failed_tabular_canonicalization_is_an_error_live(tmp_path: Path) -> None:
+    result = run_live(
+        return_complex_dataframe,
+        return_complex_dataframe,
+        fixture=pd.DataFrame({"x": [1]}),
+        schema=None,
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+        performance=PerformanceConfig(enabled=False),
+        artifact_dir=tmp_path,
+        reference_adapter="pandas",
+        candidate_adapter="pandas",
+    )
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert case.failures[0].finding_signature is None
+    assert [mismatch.path for mismatch in case.failures[0].mismatches] == [
+        "$reference",
+        "$candidate",
+    ]
+
+
+def test_matching_failed_tabular_canonicalization_is_an_error_configured(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "complex_output.py").write_text(
+        "import pandas as pd\n"
+        "def transform(_frame):\n"
+        "    return pd.DataFrame({'complex': [1 + 2j]})\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(target="complex_output:transform", adapter="pandas", workdir=tmp_path)
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="complex-output",
+                reference=spec,
+                candidate=spec.model_copy(deep=True),
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+                    min_rows=1,
+                    max_rows=1,
+                ),
+                generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert case.failures[0].finding_signature is None
+    assert [mismatch.path for mismatch in case.failures[0].mismatches] == [
+        "$reference",
+        "$candidate",
+    ]
+
+
+def test_matching_failed_polars_input_materialization_is_an_error_live(
+    tmp_path: Path,
+) -> None:
+    result = run_live(
+        unannotated_polars_identity,
+        unannotated_polars_identity,
+        fixture=_dense_union_table(),
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="mixed", dtype="object")],
+            min_rows=1,
+            max_rows=3,
+        ),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+        performance=PerformanceConfig(enabled=False),
+        artifact_dir=tmp_path,
+        reference_adapter="polars",
+        candidate_adapter="polars",
+    )
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert [mismatch.path for mismatch in case.failures[0].mismatches] == [
+        "$reference",
+        "$candidate",
+    ]
+
+
+def test_matching_failed_polars_input_materialization_is_an_error_configured(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "polars_input.py").write_text(
+        "def transform(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "dense-union.arrow"
+    table = _dense_union_table()
+    with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    spec = CallableSpec(target="polars_input:transform", adapter="polars", workdir=tmp_path)
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="polars-input",
+                reference=spec,
+                candidate=spec.model_copy(deep=True),
+                fixture=fixture,
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="mixed", dtype="object")],
+                    min_rows=1,
+                    max_rows=3,
+                ),
+                generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert [mismatch.path for mismatch in case.failures[0].mismatches] == [
+        "$reference",
+        "$candidate",
+    ]
+
+
+def test_matching_import_time_system_exit_is_an_error_configured(tmp_path: Path) -> None:
+    (tmp_path / "exit_during_import.py").write_text(
+        'raise SystemExit("private import detail")\n',
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="exit_during_import:transform",
+        adapter="pandas",
+        workdir=tmp_path,
+    )
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="import-exit",
+                reference=spec,
+                candidate=spec.model_copy(deep=True),
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+                    min_rows=1,
+                    max_rows=1,
+                ),
+                generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert [mismatch.path for mismatch in case.failures[0].mismatches] == [
+        "$reference",
+        "$candidate",
+    ]
+    assert all(
+        "private import detail" not in mismatch.message for mismatch in case.failures[0].mismatches
+    )
+
+
+def test_json_mapping_key_coercion_cannot_hide_a_live_difference(tmp_path: Path) -> None:
+    result = run_live(
+        return_integer_mapping_key,
+        return_string_mapping_key,
+        fixture=None,
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+        performance=PerformanceConfig(enabled=False),
+        artifact_dir=tmp_path,
+        reference_adapter="pandas",
+        candidate_adapter="pandas",
+    )
+
+    case = result.cases[0]
+    assert result.status is Status.ERROR
+    assert case.findings_discovered == 0
+    assert [mismatch.path for mismatch in case.failures[0].mismatches] == ["$reference"]
+
+
+def test_json_mapping_key_coercion_cannot_hide_a_configured_difference(tmp_path: Path) -> None:
+    (tmp_path / "mapping_key_transforms.py").write_text(
+        """
+def integer_key(_frame):
+    return {1: "same"}
+
+def string_key(_frame):
+    return {"1": "same"}
+""",
+        encoding="utf-8",
+    )
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="mapping-key-coercion",
+                reference=CallableSpec(
+                    target="mapping_key_transforms:integer_key",
+                    adapter="pandas",
+                    workdir=tmp_path,
+                ),
+                candidate=CallableSpec(
+                    target="mapping_key_transforms:string_key",
+                    adapter="pandas",
+                    workdir=tmp_path,
+                ),
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+                    min_rows=1,
+                    max_rows=1,
+                ),
+                generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    assert result.status is Status.ERROR
+    assert result.cases[0].findings_discovered == 0
+    assert [mismatch.path for mismatch in result.cases[0].failures[0].mismatches] == ["$reference"]
+
+
 def test_vanished_shrunk_witness_is_reported_as_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def find(_schema, predicate, _generation):
+    def find(_schema, classifier, _excluded, _generation):
         table = pa.table({"x": [7]})
-        assert predicate(table)
+        assert classifier(table) is not None
         return type("Found", (), {"table": pa.table({"x": [7]}), "source": "generated:shrunk"})()
 
-    monkeypatch.setattr(engine, "find_counterexample", find)
+    monkeypatch.setattr(engine, "find_unseen_counterexample", find)
     calls = 0
 
     def observe(*_args, **_kwargs):
@@ -536,6 +1145,107 @@ def test_artifact_replay_resolves_import_root_from_invocation_cwd(
     assert not (artifact / "replay-output").exists()
 
 
+def test_configured_named_bundle_failure_replays_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "join_transforms.py").write_text(
+        "def reference(left, right):\n"
+        "    return left.merge(right, on='key', how='left', sort=True)\n"
+        "def candidate(left, right):\n"
+        "    result = left.merge(right, on='key', how='left', sort=True)\n"
+        "    result['value'] = result['value'].fillna(-1)\n"
+        "    return result\n",
+        encoding="utf-8",
+    )
+    left_path = tmp_path / "left.arrow"
+    right_path = tmp_path / "right.arrow"
+    for path, table in (
+        (left_path, pa.table({"key": [1, 2]})),
+        (right_path, pa.table({"key": [1], "value": [10]})),
+    ):
+        with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+    monkeypatch.chdir(tmp_path)
+    case = CaseConfig(
+        name="named-bundle-replay",
+        reference=CallableSpec(
+            target="join_transforms:reference", adapter="pandas", workdir=tmp_path
+        ),
+        candidate=CallableSpec(
+            target="join_transforms:candidate", adapter="pandas", workdir=tmp_path
+        ),
+        input_bundle=InputBundle(
+            inputs={
+                "left": InputSpec(fixture=left_path),
+                "right": InputSpec(fixture=right_path),
+            }
+        ),
+        generation=GenerationConfig(
+            max_examples=1, adversarial_examples=False, suppress_too_slow=False
+        ),
+        performance=PerformanceConfig(enabled=False),
+    )
+    result = engine.run_suite(ParityConfig(artifact_dir=tmp_path / ".parity", cases=[case]))
+    artifact = result.cases[0].failures[0].artifact
+
+    assert result.status is Status.FAILED
+    assert artifact is not None
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    assert replay["version"] == 3
+    assert [item["name"] for item in replay["inputs"]] == ["left", "right"]
+
+    replayed = replay_artifact(artifact)
+    assert replayed.status is Status.FAILED
+    assert replayed.cases[0].failures[0].artifact == artifact
+
+
+def test_positional_bundle_replay_restores_hash_bound_input_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    case = CaseConfig(
+        name="positional-order",
+        reference=CallableSpec(target="test_engine:identity", adapter="pandas"),
+        candidate=CallableSpec(target="test_engine:identity", adapter="pandas"),
+        input_bundle=InputBundle(
+            binding="positional",
+            inputs={
+                "zebra": InputSpec(fixture=tmp_path / "zebra.arrow"),
+                "alpha": InputSpec(fixture=tmp_path / "alpha.arrow"),
+            },
+        ),
+        generation=GenerationConfig(adversarial_examples=False, max_examples=1),
+        performance=PerformanceConfig(enabled=False),
+    )
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        case,
+        {
+            "zebra": pa.table({"x": [1]}),
+            "alpha": pa.table({"x": [2]}),
+        },
+        ExampleResult(source="test", status=Status.FAILED),
+    )
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    assert list(replay["case"]["input_bundle"]["inputs"]) == ["alpha", "zebra"]
+    assert [item["name"] for item in replay["inputs"]] == ["zebra", "alpha"]
+
+    observed: dict[str, tuple[str, ...]] = {}
+
+    class CapturedCase(Exception):
+        pass
+
+    def capture_case(replay_case: CaseConfig, *_args: Any, **_kwargs: Any) -> None:
+        assert replay_case.input_bundle is not None
+        observed["names"] = tuple(replay_case.input_bundle.inputs)
+        raise CapturedCase
+
+    monkeypatch.setattr(engine, "_configured_case", capture_case)
+    with pytest.raises(CapturedCase):
+        replay_artifact(artifact)
+
+    assert observed["names"] == ("zebra", "alpha")
+
+
 def test_v2_replay_runtime_drift_blocks_both_callables_before_import(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -675,6 +1385,40 @@ def test_replay_manifest_must_bind_every_consumed_file(tmp_path: Path) -> None:
 
     with pytest.raises(engine.ReplayError, match="missing required file"):
         replay_artifact(artifact)
+
+
+def test_replay_rejects_single_input_contract_with_bundle_manifest(tmp_path: Path) -> None:
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        "manifest-version",
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+    )
+    manifest_path = artifact / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["version"] = 2
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(engine.ReplayError, match="single-input replay requires"):
+        replay_artifact(artifact)
+
+
+def test_replay_manifest_rejects_symlinked_external_file(tmp_path: Path) -> None:
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        "manifest-symlink",
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+    )
+    input_path = artifact / "input.arrow"
+    external = tmp_path / "external.arrow"
+    external.write_bytes(input_path.read_bytes())
+    input_path.unlink()
+    try:
+        input_path.symlink_to(external)
+    except OSError:
+        pytest.skip("filesystem does not permit symlink creation")
+
+    with pytest.raises(engine.ReplayError, match="regular contained file"):
+        engine._verify_manifest(artifact)
 
 
 @pytest.mark.parametrize("argument", ["/private/customer.csv", "API_TOKEN=secret"])

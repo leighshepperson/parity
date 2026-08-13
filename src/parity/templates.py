@@ -92,6 +92,7 @@ ignored_columns = []
 
 [cases.generation]
 max_examples = 250
+max_findings = 1
 seed = 20260813
 adversarial_examples = true
 shrink = true

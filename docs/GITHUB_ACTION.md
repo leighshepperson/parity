@@ -1,8 +1,8 @@
 # GitHub Action
 
 The composite action installs the same Parity source revision as the action tag, runs configured
-cases, writes JSON/JUnit/Markdown reports, appends Markdown to the job summary, uploads evidence
-and then enforces Parity's exit code.
+cases, writes JSON/JUnit/Markdown reports, appends Markdown to the job summary, optionally uploads
+evidence and then enforces Parity's exit code.
 
 ```yaml
 name: Semantic migration
@@ -19,16 +19,16 @@ jobs:
       - name: Install project dependencies
         run: python -m pip install -e .
       - id: parity
-        uses: leighshepperson/parity@v0.1.0
+        uses: leighshepperson/parity@v0.4.0
         with:
           config: migrations/parity.toml
           cases: orders,customers
           tags: critical
           max-examples: "500"
+          max-findings: "3"
           performance: "false"
           artifact-path: .parity
-          artifact-name: parity-${{ github.run_id }}
-          retention-days: "14"
+          upload-artifact: "false"
 ```
 
 Case and tag filters are combined by the CLI. `parity-version` may pin a PyPI release instead of
@@ -42,6 +42,7 @@ the action's source revision, but normally both should move together.
 | `cases` | empty | Comma-separated case names. |
 | `tags` | empty | Comma-separated tags. |
 | `max-examples` | empty | Override generation budget. |
+| `max-findings` | empty | Override the maximum distinct mismatch signatures per case. |
 | `performance` | `true` | `true` or `false`. |
 | `python-version` | `3.12` | setup-python interpreter. |
 | `parity-version` | empty | Optional strict package version. |

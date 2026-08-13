@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import hashlib
+import json
 import math
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -32,6 +35,112 @@ class ComparisonResult:
     @property
     def equivalent(self) -> bool:
         return not self.mismatches
+
+
+_SIGNATURE_VERSION = "ms1"
+_SIGNATURE_KIND_PRIORITY = {
+    # Prefer contract-level symptoms over downstream cell differences. A
+    # single execution can emit several mismatches; selecting one conservative
+    # primary symptom avoids presenting every secondary effect as a finding.
+    MismatchKind.EXCEPTION: 0,
+    MismatchKind.MUTATION: 1,
+    MismatchKind.SCHEMA: 2,
+    MismatchKind.COLUMN: 3,
+    MismatchKind.SHAPE: 4,
+    MismatchKind.DTYPE: 5,
+    MismatchKind.ROW: 6,
+    MismatchKind.VALUE: 7,
+    MismatchKind.PERFORMANCE: 8,
+}
+_SIGNATURE_MESSAGE_CODES = {
+    "null values are not equivalent": "null-null",
+    "null differs from a value": "null-value",
+    "one result is tabular and the other is not": "frame-type",
+    "one result is a series and the other is not": "series-type",
+    "mapping differs from non-mapping": "mapping-type",
+    "mapping keys differ": "mapping-keys",
+    "sequence differs from non-sequence": "sequence-type",
+    "sequence lengths differ": "sequence-length",
+    "set differs from non-set": "set-type",
+    "set members differ": "set-members",
+    "datetime values differ": "datetime-value",
+    "duration values differ": "duration-value",
+    "numeric values differ beyond tolerance": "numeric-value",
+    "boolean differs from a non-boolean value": "boolean-type",
+    "values differ": "value",
+    "one implementation raised and the other returned": "raise-return",
+    "raised exceptions differ": "exception-contract",
+    "column dtype differs": "column-dtype",
+    "dtype differs": "dtype",
+    "series names differ": "series-name",
+    "series lengths differ": "series-length",
+    "column names are ambiguous under the selected name policy": "ambiguous-columns",
+    "column sets differ": "column-set",
+    "column order differs": "column-order",
+    "row counts differ": "row-count",
+    "reference row has no equivalent candidate row": "missing-candidate-row",
+    "candidate contains an unmatched row": "unexpected-candidate-row",
+    "input mutation behaviour differs": "input-mutation",
+}
+_INDEXED_PATH = re.compile(r"\[(?:-?\d+|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")\]")
+
+
+def _normalized_signature_path(path: str | None) -> str:
+    """Retain structural path shape without persisting user-defined names."""
+
+    if not path:
+        return "$"
+    normalized = _INDEXED_PATH.sub("[*]", path)
+    if normalized.startswith("$inputs/"):
+        return "$inputs/<input>"
+    prefix, separator, _field = normalized.partition(".")
+    if separator:
+        return f"{prefix}.<field>"
+    return normalized
+
+
+def _signature_component(mismatch: Mismatch) -> tuple[int, str, str, str]:
+    return (
+        _SIGNATURE_KIND_PRIORITY[mismatch.kind],
+        mismatch.kind.value,
+        _SIGNATURE_MESSAGE_CODES.get(mismatch.message, f"{mismatch.kind.value}-other"),
+        _normalized_signature_path(mismatch.path),
+    )
+
+
+def _stable_mapping_key(value: Any) -> tuple[str, str, str]:
+    """Order heterogeneous mapping keys independently of Python's hash seed."""
+
+    try:
+        encoded = json.dumps(
+            json_safe(value),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+    except (TypeError, ValueError, OverflowError):  # pragma: no cover - json_safe is defensive
+        encoded = repr(value)
+    return type(value).__module__, type(value).__qualname__, encoded
+
+
+def mismatch_signature(mismatches: Sequence[Mismatch]) -> str:
+    """Return a stable, data-free signature for an observable mismatch shape.
+
+    A signature identifies one conservative primary symptom, not a root cause
+    or a claim that two signatures are two separate bugs. Compared values,
+    verbose details, exception text and witness-dependent row indices are never
+    included. The prefix versions the canonicalization contract.
+    """
+
+    if not mismatches:
+        raise ValueError("mismatch_signature requires at least one mismatch")
+    primary = min(_signature_component(mismatch) for mismatch in mismatches)
+    encoded = json.dumps(
+        {"version": _SIGNATURE_VERSION, "primary": primary},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"{_SIGNATURE_VERSION}:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _mismatch(
@@ -192,7 +301,10 @@ def _value_mismatches(
                     unexpected=sorted(map(str, candidate_keys - reference_keys)),
                 )
             )
-        for key in reference_keys & candidate_keys:
+        # Comparison stops after a bounded number of mismatches. Set iteration
+        # order depends on PYTHONHASHSEED, so sort before the cap is applied or
+        # an identical output can acquire a different primary signature.
+        for key in sorted(reference_keys & candidate_keys, key=_stable_mapping_key):
             mismatches.extend(
                 _value_mismatches(
                     reference[key],
@@ -651,7 +763,46 @@ def compare_observations(
     if selected.check_input_mutation:
         reference_mutated = bool(getattr(reference, "mutated_input", False))
         candidate_mutated = bool(getattr(candidate, "mutated_input", False))
-        if reference_mutated != candidate_mutated:
+        reference_labels = getattr(reference, "mutated_inputs", None)
+        candidate_labels = getattr(candidate, "mutated_inputs", None)
+        if isinstance(reference_labels, tuple) and isinstance(candidate_labels, tuple):
+            reference_set = {str(label) for label in reference_labels}
+            candidate_set = {str(label) for label in candidate_labels}
+            inconsistent_sides = [
+                label
+                for label, aggregate, labels in (
+                    ("reference", reference_mutated, reference_set),
+                    ("candidate", candidate_mutated, candidate_set),
+                )
+                if aggregate != bool(labels)
+            ]
+            if inconsistent_sides:
+                mismatches.append(
+                    _mismatch(
+                        MismatchKind.MUTATION,
+                        "input mutation metadata is inconsistent",
+                        "$inputs",
+                        reference_mutated,
+                        candidate_mutated,
+                        sides=inconsistent_sides,
+                    )
+                )
+            for label in sorted(reference_set ^ candidate_set):
+                if len(mismatches) >= max_mismatches:
+                    break
+                escaped = label.replace("~", "~0").replace("/", "~1")
+                mismatches.append(
+                    _mismatch(
+                        MismatchKind.MUTATION,
+                        "input mutation behaviour differs",
+                        f"$inputs/{escaped}",
+                        label in reference_set,
+                        label in candidate_set,
+                        input=label,
+                    )
+                )
+        elif len(mismatches) < max_mismatches and reference_mutated != candidate_mutated:
+            # Retain the legacy aggregate check for old/duck-typed observations.
             mismatches.append(
                 _mismatch(
                     MismatchKind.MUTATION,
@@ -724,4 +875,5 @@ __all__ = [
     "compare_observations",
     "compare_result",
     "equivalent",
+    "mismatch_signature",
 ]

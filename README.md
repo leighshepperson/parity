@@ -4,8 +4,8 @@
 
 Parity tries to disprove that a rewrite means the same thing as the implementation it replaces.
 It executes both versions over fixtures and generated edge cases, compares their observable
-behaviour under an explicit policy, shrinks a failure to a small counterexample and preserves it
-for replay. Performance is measured only after correctness.
+behaviour under an explicit policy, attempts to shrink generated failures and preserves failing
+inputs for replay. Performance is measured only after correctness.
 
 The initial adapters support pandas-to-Polars comparisons. The contracts and artifact format are
 engine-neutral so the same approach can cover other dataframe, numerical and dependency changes.
@@ -23,6 +23,10 @@ engine-neutral so the same approach can cover other dataframe, numerical and dep
   distributions, so dependency drift is distinguishable from semantic drift.
 - Reproducible Arrow counterexamples, plus Parquet when representable, with a manifest and replay
   command.
+- Joint generation, shrinking, mutation tracking and replay for two- or three-frame joins and
+  lookups.
+- Bounded discovery of several distinct mismatch signatures in one campaign, with repeated
+  confirmation before evidence is accepted.
 - Median runtime and peak-memory comparisons with optional regression gates.
 - Terminal, JSON, Markdown, JUnit and GitHub step-summary reporting.
 - A Python API, pytest fixture, CLI and composite GitHub Action.
@@ -72,6 +76,7 @@ atol = 0.0
 
 [cases.generation]
 max_examples = 250
+max_findings = 3
 seed = 20260813
 shrink = true
 
@@ -105,6 +110,9 @@ When Parity finds a mismatch it writes a directory like:
 ├── replay.json
 └── result.json
 ```
+
+Multi-input failures use opaque `input-000.arrow`, `input-001.arrow`, … files bound to their
+logical names in `replay.json`; the complete bundle is integrity-checked and replayed atomically.
 
 Reproduce it without regenerating inputs:
 
@@ -149,7 +157,8 @@ examples = [0.0, -0.0, 0.1]
 
 The generator targets empty and singleton frames, nulls, NaNs, infinities, signed zero, numeric
 boundaries, duplicate values, awkward strings and temporal boundaries where the schema permits
-them. A minimized failure is always saved as data, not merely printed as a random seed.
+them. A failing input is saved as data, not merely printed as a random seed; generated failures are
+minimized when shrinking is enabled and succeeds.
 
 ## Pytest
 
@@ -189,7 +198,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: leighshepperson/parity@v0.1.0
+  - uses: leighshepperson/parity@v0.4.0
     with:
       config: parity.toml
       cases: orders,customers
@@ -219,7 +228,7 @@ suite = verify(
 )
 ```
 
-`check` and `verify` return stable Pydantic result models. They do not terminate the process; the
+`check` and `verify` return typed Pydantic result models. They do not terminate the process; the
 caller decides how to enforce the result.
 
 ## Design boundaries
@@ -237,19 +246,21 @@ the [threat model](docs/THREAT_MODEL.md).
 
 ## Documentation
 
+- [Release notes](CHANGELOG.md)
 - [Getting started and migration workflow](docs/USER_GUIDE.md)
 - [Configuration reference](docs/CONFIG_REFERENCE.md)
 - [Architecture and artifact contracts](docs/ARCHITECTURE.md)
 - [Fault corpus](docs/FAULT_CORPUS.md)
 - [Real-world case study: pyjanitor `complete()`](case_studies/pyjanitor_complete/README.md)
 - [Version-matrix case study: skrub `AggJoiner`](case_studies/skrub_agg_joiner/README.md)
+- [Multi-input case study: pandas `merge` / Polars `join`](case_studies/pandas_polars_join/README.md)
 - [Development and contribution guide](docs/DEVELOPMENT.md)
 - [Technical roadmap](docs/ROADMAP.md)
 - [Clean-room provenance](docs/CLEAN_ROOM.md) and [public prior art](docs/PRIOR_ART.md)
 
 ## Development status
 
-Parity `0.2` is an alpha: useful on real migrations, but its configuration and artifact contracts
+Parity `0.4` is an alpha: useful on real migrations, but its configuration and artifact contracts
 may evolve before `1.0`. Issues and small, synthetic reproduction cases are welcome.
 
 Licensed under the [Apache License 2.0](LICENSE).

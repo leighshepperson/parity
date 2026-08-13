@@ -6,8 +6,18 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from parity.models import ColumnSchema, FrameSchema
-from parity.schema import arrow_schema, infer_schema, table_from_rows
+from parity.models import (
+    Cardinality,
+    ColumnSchema,
+    EqualRowCount,
+    ForeignKey,
+    FrameSchema,
+    InputBundle,
+    InputSpec,
+    KeyOverlap,
+    KeyRef,
+)
+from parity.schema import arrow_schema, infer_schema, table_from_rows, validate_bundle_schemas
 
 
 def test_infer_portable_schema_and_observed_constraints() -> None:
@@ -70,3 +80,254 @@ def test_table_from_rows_rejects_values_outside_declared_dtype() -> None:
     schema = FrameSchema(columns=[ColumnSchema(name="id", dtype="int64")])
     with pytest.raises(ValueError, match="declared dtype"):
         table_from_rows(schema, [{"id": "not-an-integer"}])
+
+
+def _two_input_bundle(
+    left: FrameSchema,
+    right: FrameSchema,
+    relationship: KeyOverlap | Cardinality | EqualRowCount,
+) -> tuple[InputBundle, dict[str, FrameSchema]]:
+    schemas = {"left": left, "right": right}
+    return (
+        InputBundle(
+            inputs={name: InputSpec(input_schema=schema) for name, schema in schemas.items()},
+            relationships=[relationship],
+        ),
+        schemas,
+    )
+
+
+def test_cardinality_does_not_require_key_domain_overlap() -> None:
+    left = FrameSchema(columns=[ColumnSchema(name="key", dtype="string", categories=["left"])])
+    right = FrameSchema(columns=[ColumnSchema(name="key", dtype="string", categories=["right"])])
+    bundle, schemas = _two_input_bundle(
+        left,
+        right,
+        Cardinality(
+            left=KeyRef(input="left", columns=["key"]),
+            right=KeyRef(input="right", columns=["key"]),
+            relationship="many_to_many",
+        ),
+    )
+
+    validate_bundle_schemas(bundle, schemas)
+
+
+def test_key_overlap_rejects_disjoint_concrete_numeric_domains() -> None:
+    left = FrameSchema(columns=[ColumnSchema(name="key", dtype="int8", minimum=0, maximum=1)])
+    right = FrameSchema(columns=[ColumnSchema(name="key", dtype="int64", minimum=2, maximum=3)])
+    bundle, schemas = _two_input_bundle(
+        left,
+        right,
+        KeyOverlap(
+            left=KeyRef(input="left", columns=["key"]),
+            right=KeyRef(input="right", columns=["key"]),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="no common non-null value"):
+        validate_bundle_schemas(bundle, schemas)
+
+
+def test_equal_row_count_accounts_for_finite_schema_uniqueness() -> None:
+    left = FrameSchema(
+        columns=[ColumnSchema(name="key", dtype="boolean", nullable=False, unique=True)],
+        max_rows=4,
+    )
+    right = FrameSchema(
+        columns=[ColumnSchema(name="key", dtype="boolean", nullable=False)],
+        min_rows=3,
+        max_rows=4,
+    )
+    bundle, schemas = _two_input_bundle(
+        left,
+        right,
+        EqualRowCount(inputs=["left", "right"]),
+    )
+
+    with pytest.raises(ValueError, match="incompatible row ranges"):
+        validate_bundle_schemas(bundle, schemas)
+
+
+def test_bundle_rejects_overlapping_non_identical_keys_on_one_input() -> None:
+    schemas = {
+        "left": FrameSchema(
+            columns=[
+                ColumnSchema(name="a", dtype="integer"),
+                ColumnSchema(name="b", dtype="integer"),
+            ]
+        ),
+        "right": FrameSchema(
+            columns=[
+                ColumnSchema(name="a", dtype="integer"),
+                ColumnSchema(name="b", dtype="integer"),
+            ]
+        ),
+    }
+    bundle = InputBundle(
+        inputs={name: InputSpec(input_schema=schema) for name, schema in schemas.items()},
+        relationships=[
+            KeyOverlap(
+                left=KeyRef(input="left", columns=["a"]),
+                right=KeyRef(input="right", columns=["a"]),
+            ),
+            KeyOverlap(
+                left=KeyRef(input="left", columns=["a", "b"]),
+                right=KeyRef(input="right", columns=["a", "b"]),
+            ),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="overlapping non-identical key references"):
+        validate_bundle_schemas(bundle, schemas)
+
+
+def test_bundle_rejects_category_outside_concrete_integer_dtype() -> None:
+    left = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="key",
+                dtype="int8",
+                nullable=False,
+                categories=[1_000],
+            )
+        ],
+        min_rows=1,
+    )
+    right = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="key",
+                dtype="int64",
+                nullable=False,
+                categories=[1_000],
+            )
+        ],
+        min_rows=1,
+    )
+    bundle, schemas = _two_input_bundle(
+        left,
+        right,
+        KeyOverlap(
+            left=KeyRef(input="left", columns=["key"]),
+            right=KeyRef(input="right", columns=["key"]),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="no values representable"):
+        validate_bundle_schemas(bundle, schemas)
+
+
+def test_bundle_rejects_foreign_key_cycle() -> None:
+    schemas = {
+        name: FrameSchema(columns=[ColumnSchema(name="key", dtype="integer")])
+        for name in ("left", "right")
+    }
+    refs = {name: KeyRef(input=name, columns=["key"]) for name in schemas}
+    bundle = InputBundle(
+        inputs={name: InputSpec(input_schema=schema) for name, schema in schemas.items()},
+        relationships=[
+            ForeignKey(child=refs["left"], parent=refs["right"]),
+            ForeignKey(child=refs["right"], parent=refs["left"]),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="cannot contain a cycle"):
+        validate_bundle_schemas(bundle, schemas)
+
+
+def test_equal_row_count_rejects_a_schema_with_no_representable_rows() -> None:
+    left = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="key",
+                dtype="int8",
+                nullable=False,
+                categories=[1_000],
+            )
+        ],
+        min_rows=0,
+        max_rows=2,
+    )
+    right = FrameSchema(
+        columns=[ColumnSchema(name="key", dtype="int8", nullable=False)],
+        min_rows=1,
+        max_rows=2,
+    )
+    bundle, schemas = _two_input_bundle(
+        left,
+        right,
+        EqualRowCount(inputs=["left", "right"]),
+    )
+
+    with pytest.raises(ValueError, match="incompatible row ranges"):
+        validate_bundle_schemas(bundle, schemas)
+
+
+def test_overlap_rejects_empty_transitive_foreign_key_parent() -> None:
+    schemas = {
+        "child": FrameSchema(
+            columns=[
+                ColumnSchema(
+                    name="key",
+                    dtype="string",
+                    nullable=True,
+                    categories=["shared", None],
+                )
+            ],
+            min_rows=1,
+            max_rows=1,
+        ),
+        "parent": FrameSchema(
+            columns=[ColumnSchema(name="key", dtype="string", categories=["shared"])],
+            min_rows=0,
+            max_rows=0,
+        ),
+        "peer": FrameSchema(
+            columns=[ColumnSchema(name="key", dtype="string", categories=["shared"])],
+            min_rows=1,
+            max_rows=1,
+        ),
+    }
+    refs = {name: KeyRef(input=name, columns=["key"]) for name in schemas}
+    bundle = InputBundle(
+        inputs={name: InputSpec(input_schema=schema) for name, schema in schemas.items()},
+        relationships=[
+            ForeignKey(child=refs["child"], parent=refs["parent"], allow_nulls=True),
+            KeyOverlap(left=refs["child"], right=refs["peer"]),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="transitive foreign-key input"):
+        validate_bundle_schemas(bundle, schemas)
+
+
+def test_disjoint_overlap_edges_require_separate_rows_at_shared_input() -> None:
+    schemas = {
+        "left": FrameSchema(
+            columns=[ColumnSchema(name="key", dtype="string", categories=["left"])],
+            min_rows=1,
+            max_rows=1,
+        ),
+        "middle": FrameSchema(
+            columns=[ColumnSchema(name="key", dtype="string", categories=["left", "right"])],
+            min_rows=1,
+            max_rows=1,
+        ),
+        "right": FrameSchema(
+            columns=[ColumnSchema(name="key", dtype="string", categories=["right"])],
+            min_rows=1,
+            max_rows=1,
+        ),
+    }
+    refs = {name: KeyRef(input=name, columns=["key"]) for name in schemas}
+    bundle = InputBundle(
+        inputs={name: InputSpec(input_schema=schema) for name, schema in schemas.items()},
+        relationships=[
+            KeyOverlap(left=refs["left"], right=refs["middle"]),
+            KeyOverlap(left=refs["middle"], right=refs["right"]),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="more distinct keys than the row capacity"):
+        validate_bundle_schemas(bundle, schemas)

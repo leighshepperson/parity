@@ -1,0 +1,76 @@
+version = 1
+artifact_dir = ".parity-join"
+fail_fast = false
+
+[[cases]]
+name = "nullable-left-join"
+tags = ["input-bundle", "join", "null"]
+
+[cases.reference]
+target = "join_parity:pandas_left_join"
+adapter = "pandas"
+record_distributions = ["pandas"]
+
+[cases.candidate]
+target = "join_parity:polars_left_join"
+adapter = "polars"
+record_distributions = ["polars"]
+
+[cases.input_bundle]
+binding = "keyword"
+
+[cases.input_bundle.inputs.left.schema]
+min_rows = 1
+max_rows = 3
+
+[[cases.input_bundle.inputs.left.schema.columns]]
+name = "key"
+dtype = "int64"
+nullable = true
+minimum = 0
+maximum = 2
+
+[[cases.input_bundle.inputs.left.schema.columns]]
+name = "left_value"
+dtype = "int64"
+nullable = false
+minimum = 0
+maximum = 20
+
+[cases.input_bundle.inputs.right.schema]
+min_rows = 1
+max_rows = 3
+
+[[cases.input_bundle.inputs.right.schema.columns]]
+name = "key"
+dtype = "int64"
+nullable = true
+minimum = 0
+maximum = 2
+
+[[cases.input_bundle.inputs.right.schema.columns]]
+name = "right_value"
+dtype = "int64"
+nullable = false
+minimum = 0
+maximum = 20
+
+[[cases.input_bundle.relationships]]
+kind = "equal_row_count"
+inputs = ["left", "right"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 500
+max_findings = 1
+seed = 20260813
+adversarial_examples = false
+shrink = true
+derandomize = false
+
+[cases.performance]
+enabled = false

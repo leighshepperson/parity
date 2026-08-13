@@ -28,6 +28,7 @@ def _failure_payload(failure: ExampleResult) -> dict[str, Any]:
     return {
         "source": redact_text(failure.source),
         "status": failure.status.value,
+        "finding_signature": failure.finding_signature,
         "mismatch_counts": dict(sorted(kinds.items())),
         # Values and verbose mismatch details are intentionally artifact-only.
         "artifact": _artifact_name(failure.artifact),
@@ -40,6 +41,32 @@ def _failure_payload(failure: ExampleResult) -> dict[str, Any]:
     }
 
 
+def _ordered_failures(case: CaseResult) -> list[ExampleResult]:
+    """Return deterministic finding order independent of discovery order."""
+
+    return sorted(
+        case.failures,
+        key=lambda failure: (
+            failure.finding_signature is None,
+            failure.finding_signature or "",
+            failure.status.value,
+            failure.source,
+        ),
+    )
+
+
+def _finding_count(case: CaseResult) -> int:
+    """Derive the count from evidence so reports cannot contradict failures."""
+
+    return len(
+        {
+            failure.finding_signature
+            for failure in case.failures
+            if failure.finding_signature is not None
+        }
+    )
+
+
 def _case_payload(case: CaseResult) -> dict[str, Any]:
     return {
         "name": case.name,
@@ -47,7 +74,8 @@ def _case_payload(case: CaseResult) -> dict[str, Any]:
         "examples_run": case.examples_run,
         "deterministic_examples": case.deterministic_examples,
         "generated_examples": case.generated_examples,
-        "failures": [_failure_payload(failure) for failure in case.failures],
+        "findings_discovered": _finding_count(case),
+        "failures": [_failure_payload(failure) for failure in _ordered_failures(case)],
         "diagnoses": [
             {
                 "code": diagnosis.code,
@@ -69,7 +97,7 @@ def report_payload(result: SuiteResult) -> dict[str, Any]:
     """Return the stable, data-eliding JSON report contract."""
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": result.status.value,
         "cases": [_case_payload(case) for case in result.cases],
         "elapsed_seconds": result.elapsed_seconds,
@@ -114,7 +142,7 @@ def render_markdown(result: SuiteResult) -> str:
         f"**{result.status.value.upper()}** — {passed}/{len(result.cases)} cases passed "
         f"in {result.elapsed_seconds:.3f}s.",
         "",
-        "| Case | Status | Examples | Failures | Runtime ratio | Memory ratio |",
+        "| Case | Status | Examples | Findings | Runtime ratio | Memory ratio |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for case in result.cases:
@@ -126,7 +154,7 @@ def render_markdown(result: SuiteResult) -> str:
                     case.name.replace("|", "\\|"),
                     case.status.value,
                     str(case.examples_run),
-                    str(len(case.failures)),
+                    str(_finding_count(case)),
                     _ratio(performance.speed_ratio if performance else None),
                     _ratio(performance.memory_ratio if performance else None),
                 ]
@@ -147,16 +175,29 @@ def render_markdown(result: SuiteResult) -> str:
         lines.extend(["", "## Findings", ""])
         for case in failed_cases:
             counts = Counter(
-                mismatch.kind.value for failure in case.failures for mismatch in failure.mismatches
+                mismatch.kind.value
+                for failure in _ordered_failures(case)
+                for mismatch in failure.mismatches
             )
             finding = ", ".join(f"{count} {kind}" for kind, count in sorted(counts.items()))
             if not finding:
                 finding = case.status.value
             artifacts = sorted(
-                filter(None, (_artifact_name(failure.artifact) for failure in case.failures))
+                {
+                    artifact
+                    for failure in case.failures
+                    if (artifact := _artifact_name(failure.artifact)) is not None
+                }
             )
-            suffix = f"; artifact: `{artifacts[0]}`" if artifacts else ""
-            lines.append(f"- **{case.name}**: {finding}{suffix}")
+            signatures = _finding_count(case)
+            signature_label = (
+                f"; {signatures} distinct mismatch signature" + ("" if signatures == 1 else "s")
+                if signatures
+                else ""
+            )
+            lines.append(f"- **{case.name}**: {finding}{signature_label}")
+            for artifact in artifacts:
+                lines.append(f"  - artifact: `{artifact}`")
             for diagnosis in case.diagnoses:
                 lines.append(
                     f"  - {redact_text(diagnosis.title)} ({diagnosis.confidence}): "
@@ -200,7 +241,8 @@ def render_terminal(result: SuiteResult, *, color: bool = False, console: Any | 
     for case in result.cases:
         line = (
             f"  {status(case.status):<10} {case.name}  "
-            f"{case.examples_run} example(s), {len(case.failures)} failure(s)"
+            f"{case.examples_run} example(s), {_finding_count(case)} distinct "
+            "mismatch signature(s)"
         )
         if case.performance and case.performance.speed_ratio is not None:
             line += f", runtime {case.performance.speed_ratio:.2f}x"
@@ -208,7 +250,9 @@ def render_terminal(result: SuiteResult, *, color: bool = False, console: Any | 
         if warning := _provenance_warning(case):
             lines.append(f"             warning: {warning}")
         kinds = Counter(
-            mismatch.kind.value for failure in case.failures for mismatch in failure.mismatches
+            mismatch.kind.value
+            for failure in _ordered_failures(case)
+            for mismatch in failure.mismatches
         )
         if kinds:
             lines.append(
@@ -220,7 +264,7 @@ def render_terminal(result: SuiteResult, *, color: bool = False, console: Any | 
                 f"             diagnosis ({diagnosis.confidence}): {redact_text(diagnosis.title)}"
             )
         for artifact in filter(
-            None, (_artifact_name(failure.artifact) for failure in case.failures)
+            None, (_artifact_name(failure.artifact) for failure in _ordered_failures(case))
         ):
             lines.append(f"             artifact: {artifact}")
     rendered = "\n".join(lines) + "\n"

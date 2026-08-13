@@ -91,6 +91,10 @@ def check(
     max_examples: Annotated[
         int | None, typer.Option("--max-examples", min=1, help="Override generated examples")
     ] = None,
+    max_findings: Annotated[
+        int | None,
+        typer.Option("--max-findings", min=1, max=20, help="Override distinct findings"),
+    ] = None,
     performance: Annotated[
         bool, typer.Option("--performance/--no-performance", help="Run performance checks")
     ] = True,
@@ -111,6 +115,10 @@ def check(
     selected = set(case or [])
     requested_tags = set(tag or [])
     if requested_tags:
+        known_tags = {label for item in config.cases for label in item.tags}
+        unknown_tags = requested_tags - known_tags
+        if unknown_tags:
+            _fail(f"unknown tag(s): {', '.join(sorted(unknown_tags))}")
         selected.update(
             item.name for item in config.cases if requested_tags.intersection(item.tags)
         )
@@ -121,6 +129,8 @@ def check(
     for item in config.cases:
         if max_examples is not None:
             item.generation.max_examples = max_examples
+        if max_findings is not None:
+            item.generation.max_findings = max_findings
         if not performance:
             item.performance.enabled = False
 

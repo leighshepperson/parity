@@ -13,6 +13,8 @@ from parity.models import (
     CaseConfig,
     CaseProvenance,
     ExampleResult,
+    InputBundle,
+    InputSpec,
     Mismatch,
     MismatchKind,
     Status,
@@ -140,3 +142,105 @@ def test_artifact_keeps_lossless_arrow_when_parquet_cannot_represent_schema(
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
     assert "input.arrow" in manifest["files"]
     assert "input.parquet" not in manifest["files"]
+
+
+def test_artifact_persists_named_input_bundle_atomically(tmp_path: Path) -> None:
+    destination = ArtifactStore(tmp_path / "artifacts").write_failure(
+        "orders-join",
+        {
+            "orders": pa.table({"customer_id": [1, 2], "amount": [10, 20]}),
+            "customers": pa.table({"id": [1, 2], "name": ["A", "B"]}),
+        },
+        _result(),
+        source="generated:shrunk",
+    )
+
+    names = {path.name for path in destination.iterdir()}
+    assert names == {
+        "input-000.arrow",
+        "input-000.parquet",
+        "input-001.arrow",
+        "input-001.parquet",
+        "manifest.json",
+        "replay.json",
+        "result.json",
+    }
+    replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
+    assert replay["version"] == 3
+    assert replay["inputs"] == [
+        {"name": "orders", "file": "input-000.arrow"},
+        {"name": "customers", "file": "input-001.arrow"},
+    ]
+    assert replay["case"]["input_bundle"]["inputs"] == {
+        "orders": {"fixture": "input-000.arrow"},
+        "customers": {"fixture": "input-001.arrow"},
+    }
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == 2
+    assert set(manifest["files"]) == names - {"manifest.json"}
+    for name, metadata in manifest["files"].items():
+        content = (destination / name).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == metadata["sha256"]
+
+
+def test_artifact_rejects_empty_or_invalid_input_bundles(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    with pytest.raises(ValueError, match="two or three"):
+        store.write_failure("empty", {}, _result())
+    with pytest.raises(TypeError, match=r"pyarrow\.Table"):
+        store.write_failure("invalid", {"orders": object()}, _result())  # type: ignore[dict-item]
+    with pytest.raises(ValueError, match="two or three"):
+        store.write_failure("one", {"orders": pa.table({"x": [1]})}, _result())
+    with pytest.raises(ValueError, match="two or three"):
+        store.write_failure(
+            "four",
+            {name: pa.table({"x": [1]}) for name in ("one", "two", "three", "four")},
+            _result(),
+        )
+    with pytest.raises(TypeError, match="Arrow table or a map"):
+        store.write_failure(  # type: ignore[arg-type]
+            "sequence",
+            [pa.table({"x": [1]}), pa.table({"x": [2]})],
+            _result(),
+        )
+
+
+def test_configured_bundle_artifact_requires_exact_names_and_order_without_path_leaks(
+    tmp_path: Path,
+) -> None:
+    private_fixture = tmp_path.parent / "private-third.arrow"
+    case = CaseConfig(
+        name="strict-bundle",
+        reference=CallableSpec(target="old:transform"),
+        candidate=CallableSpec(target="new:transform"),
+        input_bundle=InputBundle(
+            inputs={
+                "zebra": InputSpec(fixture=tmp_path / "zebra.arrow"),
+                "alpha": InputSpec(fixture=tmp_path / "alpha.arrow"),
+                "third": InputSpec(fixture=private_fixture),
+            }
+        ),
+    )
+    store = ArtifactStore(tmp_path / "artifacts")
+    tables = {
+        "zebra": pa.table({"x": [1]}),
+        "alpha": pa.table({"x": [2]}),
+    }
+
+    with pytest.raises(ValueError, match="names and order"):
+        store.write_failure(case, tables, _result())
+    with pytest.raises(ValueError, match="names and order"):
+        store.write_failure(
+            case,
+            {
+                "alpha": tables["alpha"],
+                "zebra": tables["zebra"],
+                "third": pa.table({"x": [3]}),
+            },
+            _result(),
+        )
+
+    persisted_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "artifacts").rglob("*.json")
+    )
+    assert str(private_fixture) not in persisted_text

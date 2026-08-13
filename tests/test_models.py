@@ -8,6 +8,8 @@ from parity.models import (
     CaseConfig,
     ColumnSchema,
     FrameSchema,
+    InputBundle,
+    InputSpec,
     ParityConfig,
     Status,
     SuiteResult,
@@ -38,6 +40,78 @@ def test_frame_schema_rejects_unknown_composite_key_column() -> None:
             columns=[ColumnSchema(name="id", dtype="int64")],
             unique_together=[["missing"]],
         )
+
+
+@pytest.mark.parametrize(
+    ("groups", "message"),
+    [
+        ([[]], "cannot be empty"),
+        ([["id", "id"]], "within a unique_together group"),
+        ([["id"], ["id"]], "groups must be unique"),
+    ],
+)
+def test_frame_schema_rejects_degenerate_unique_together_groups(
+    groups: list[list[str]], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        FrameSchema(
+            columns=[ColumnSchema(name="id", dtype="int64")],
+            unique_together=groups,
+        )
+
+
+def test_column_categories_are_unique_and_respect_nullability() -> None:
+    with pytest.raises(ValidationError, match="unique values"):
+        ColumnSchema(name="group", dtype="string", categories=["a", "a"])
+    with pytest.raises(ValidationError, match="non-nullable"):
+        ColumnSchema(
+            name="group",
+            dtype="string",
+            nullable=False,
+            categories=["a", None],
+        )
+
+
+def test_input_bundle_rejects_partial_fixture_sets() -> None:
+    with pytest.raises(ValidationError, match="provided for every input or none"):
+        InputBundle(
+            inputs={
+                "left": InputSpec(fixture="left.csv"),
+                "right": InputSpec(input_schema=schema()),
+            }
+        )
+
+
+def test_input_bundle_requires_callable_safe_names() -> None:
+    with pytest.raises(ValidationError, match="non-keyword Python identifier"):
+        InputBundle(
+            inputs={
+                "valid": InputSpec(input_schema=schema()),
+                "class": InputSpec(input_schema=schema()),
+            }
+        )
+
+
+def test_keyword_bundle_rejects_ambiguous_static_arguments() -> None:
+    bundle = InputBundle(
+        inputs={
+            "left": InputSpec(input_schema=schema()),
+            "right": InputSpec(input_schema=schema()),
+        }
+    )
+    base = {
+        "name": "join",
+        "reference": CallableSpec(target="example:reference"),
+        "candidate": CallableSpec(target="example:candidate"),
+        "input_bundle": bundle,
+    }
+    with pytest.raises(ValidationError, match="cannot be combined with static_args"):
+        CaseConfig(**base, static_args=[1])
+    with pytest.raises(ValidationError, match="collide with static_kwargs"):
+        CaseConfig(**base, static_kwargs={"left": 1})
+
+    positional = bundle.model_copy(update={"binding": "positional"})
+    assert CaseConfig(**{**base, "input_bundle": positional}, static_args=[1]).static_args == [1]
 
 
 def test_case_requires_fixture_or_schema() -> None:

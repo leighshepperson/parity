@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
 import polars as pl
 import pyarrow as pa
+import pytest
 
-from parity.comparison import compare, compare_observations, compare_result
-from parity.models import ComparisonPolicy, MismatchKind
+from parity.comparison import compare, compare_observations, compare_result, mismatch_signature
+from parity.models import ComparisonPolicy, Mismatch, MismatchKind
 
 
 def test_cross_library_frames_are_compatible_by_default() -> None:
@@ -134,6 +140,140 @@ def test_observation_comparison_is_duck_typed_and_checks_mutation() -> None:
     )
     mismatches = compare_observations(left, right)
     assert [mismatch.kind for mismatch in mismatches] == [MismatchKind.MUTATION]
+
+
+def test_observation_comparison_reports_mutated_bundle_inputs_by_label() -> None:
+    returned = "ExecutionOutcome.RETURNED"
+    left = SimpleNamespace(
+        outcome=returned,
+        table=pa.table({"x": [1]}),
+        has_value=False,
+        mutated_input=True,
+        mutated_inputs=("orders",),
+    )
+    right = SimpleNamespace(
+        outcome=returned,
+        table=pa.table({"x": [1]}),
+        has_value=False,
+        mutated_input=True,
+        mutated_inputs=("customers",),
+    )
+
+    mismatches = compare_observations(left, right)
+
+    assert [mismatch.path for mismatch in mismatches] == [
+        "$inputs/customers",
+        "$inputs/orders",
+    ]
+    assert mismatches[0].details == {"input": "customers"}
+
+
+def test_observation_comparison_fails_closed_on_inconsistent_mutation_metadata() -> None:
+    returned = "ExecutionOutcome.RETURNED"
+    inconsistent = SimpleNamespace(
+        outcome=returned,
+        table=pa.table({"x": [1]}),
+        has_value=False,
+        mutated_input=False,
+        mutated_inputs=("orders",),
+    )
+    stable = SimpleNamespace(
+        outcome=returned,
+        table=pa.table({"x": [1]}),
+        has_value=False,
+        mutated_input=False,
+        mutated_inputs=(),
+    )
+
+    mismatches = compare_observations(inconsistent, stable)
+
+    assert mismatches[0].message == "input mutation metadata is inconsistent"
+    assert mismatches[0].path == "$inputs"
+
+
+def test_mismatch_signature_is_stable_across_values_indices_and_secondary_symptoms() -> None:
+    first = Mismatch(
+        kind=MismatchKind.VALUE,
+        message="numeric values differ beyond tolerance",
+        path="$[1].amount",
+        reference=10,
+        candidate=11,
+        details={"atol": 0.0},
+    )
+    another_witness = Mismatch(
+        kind=MismatchKind.VALUE,
+        message="numeric values differ beyond tolerance",
+        path="$[99].amount",
+        reference=999,
+        candidate=-1,
+        details={"atol": 100.0},
+    )
+    secondary = Mismatch(
+        kind=MismatchKind.VALUE,
+        message="values differ",
+        path="$[0].note",
+    )
+
+    assert mismatch_signature([first]) == mismatch_signature([another_witness])
+    assert mismatch_signature([first, secondary]) == mismatch_signature([first])
+    assert mismatch_signature([first]).startswith("ms1:")
+    assert len(mismatch_signature([first])) == 68
+
+
+def test_mismatch_signature_elides_field_names_and_keeps_primary_contract_distinctions() -> None:
+    amount = Mismatch(
+        kind=MismatchKind.VALUE,
+        message="values differ",
+        path="$[0].amount",
+    )
+    currency = amount.model_copy(update={"path": "$[0].currency"})
+    shape = Mismatch(kind=MismatchKind.SHAPE, message="row counts differ", path="$")
+
+    assert mismatch_signature([amount]) == mismatch_signature([currency])
+    assert mismatch_signature([amount, shape]) == mismatch_signature([shape, amount])
+
+
+def test_mismatch_signature_conservatively_groups_unknown_messages_and_rejects_empty() -> None:
+    first = Mismatch(kind=MismatchKind.VALUE, message="dynamic 123", path="$[0].x")
+    second = Mismatch(kind=MismatchKind.VALUE, message="dynamic 987", path="$[4].x")
+
+    assert mismatch_signature([first]) == mismatch_signature([second])
+    with pytest.raises(ValueError, match="at least one mismatch"):
+        mismatch_signature([])
+
+
+def test_mapping_signature_is_stable_across_python_hash_seeds() -> None:
+    script = textwrap.dedent(
+        """
+        from parity.comparison import compare, mismatch_signature
+
+        reference = {f"key-{index}": "left" for index in range(200)}
+        candidate = {f"key-{index}": "right" for index in range(200)}
+        reference["rare-boolean"] = True
+        candidate["rare-boolean"] = 1
+        print(mismatch_signature(compare(reference, candidate)))
+        """
+    )
+    project_root = Path(__file__).parents[1]
+    signatures = []
+    for hash_seed in ("1", "3"):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = hash_seed
+        environment["PYTHONPATH"] = os.pathsep.join(
+            filter(None, (str(project_root / "src"), environment.get("PYTHONPATH")))
+        )
+        signatures.append(
+            subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=project_root,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        )
+
+    assert signatures[0] == signatures[1]
 
 
 def test_shape_and_column_set_mismatches_are_not_generic_values() -> None:

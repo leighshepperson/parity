@@ -36,7 +36,7 @@ def _runtime(
 
 
 def test_public_version_uses_single_source() -> None:
-    assert __version__ == source_version == "0.2.0"
+    assert __version__ == source_version == "0.4.0"
 
 
 def test_distribution_names_are_normalized_and_bounded() -> None:
@@ -212,3 +212,44 @@ def test_effective_config_hash_is_stable_data_safe_and_semantic(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="unknown selected"):
         effective_config_sha256(config(first_root, "x"), selected_cases={"missing"})
+
+
+def test_effective_config_hash_preserves_positional_bundle_order() -> None:
+    def contract(names: tuple[str, str]) -> dict[str, object]:
+        return {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "join",
+                    "input_bundle": {
+                        "binding": "positional",
+                        "inputs": {
+                            name: {"schema": {"columns": [{"name": "x", "dtype": "int64"}]}}
+                            for name in names
+                        },
+                    },
+                }
+            ],
+        }
+
+    assert effective_config_sha256(contract(("left", "right"))) != effective_config_sha256(
+        contract(("right", "left"))
+    )
+
+
+def test_effective_config_hash_does_not_treat_static_inputs_mapping_as_bundle_order() -> None:
+    def contract(items: tuple[tuple[str, int], ...]) -> dict[str, object]:
+        return {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "single",
+                    "fixture": "input.arrow",
+                    "static_kwargs": {"inputs": dict(items)},
+                }
+            ],
+        }
+
+    assert effective_config_sha256(contract((("z", 1), ("a", 2)))) == effective_config_sha256(
+        contract((("a", 2), ("z", 1)))
+    )

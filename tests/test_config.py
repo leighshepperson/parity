@@ -57,3 +57,73 @@ def test_load_config_reports_unknown_key(tmp_path: Path) -> None:
 def test_load_config_reports_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="configuration not found"):
         load_config(tmp_path / "missing.toml")
+
+
+def test_load_config_rejects_partial_input_bundle_fixtures(tmp_path: Path) -> None:
+    path = tmp_path / "parity.toml"
+    path.write_text(
+        """
+version = 1
+
+[[cases]]
+name = "join"
+
+[cases.reference]
+target = "transforms:legacy"
+
+[cases.candidate]
+target = "transforms:rewritten"
+
+[cases.input_bundle.inputs.left]
+fixture = "left.csv"
+
+[cases.input_bundle.inputs.right.schema]
+min_rows = 0
+max_rows = 2
+
+[[cases.input_bundle.inputs.right.schema.columns]]
+name = "id"
+dtype = "integer"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="provided for every input or none"):
+        load_config(path)
+
+
+def test_load_config_preserves_positional_bundle_order_and_resolves_fixtures(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "parity.toml"
+    path.write_text(
+        """
+version = 1
+
+[[cases]]
+name = "join"
+
+[cases.reference]
+target = "transforms:legacy"
+
+[cases.candidate]
+target = "transforms:rewritten"
+
+[cases.input_bundle]
+binding = "positional"
+
+[cases.input_bundle.inputs.zebra]
+fixture = "fixtures/zebra.csv"
+
+[cases.input_bundle.inputs.alpha]
+fixture = "fixtures/alpha.csv"
+""",
+        encoding="utf-8",
+    )
+
+    bundle = load_config(path).cases[0].input_bundle
+
+    assert bundle is not None
+    assert list(bundle.inputs) == ["zebra", "alpha"]
+    assert bundle.inputs["zebra"].fixture == (tmp_path / "fixtures/zebra.csv").resolve()
+    assert bundle.inputs["alpha"].fixture == (tmp_path / "fixtures/alpha.csv").resolve()

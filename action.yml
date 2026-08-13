@@ -23,6 +23,10 @@ inputs:
     description: Optional generated-example override
     required: false
     default: ""
+  max-findings:
+    description: Optional distinct mismatch-signature override
+    required: false
+    default: ""
   performance:
     description: Run configured performance checks (true or false)
     required: false
@@ -98,6 +102,7 @@ runs:
         PARITY_CASES: ${{ inputs.cases }}
         PARITY_TAGS: ${{ inputs.tags }}
         PARITY_MAX_EXAMPLES: ${{ inputs.max-examples }}
+        PARITY_MAX_FINDINGS: ${{ inputs.max-findings }}
         PARITY_PERFORMANCE: ${{ inputs.performance }}
         PARITY_ARTIFACT_PATH: ${{ inputs.artifact-path }}
       run: |
@@ -123,6 +128,7 @@ runs:
         done
 
         [[ -n "$PARITY_MAX_EXAMPLES" ]] && command+=(--max-examples "$PARITY_MAX_EXAMPLES")
+        [[ -n "$PARITY_MAX_FINDINGS" ]] && command+=(--max-findings "$PARITY_MAX_FINDINGS")
         if [[ "$PARITY_PERFORMANCE" == "false" ]]; then
           command+=(--no-performance)
         elif [[ "$PARITY_PERFORMANCE" != "true" ]]; then
