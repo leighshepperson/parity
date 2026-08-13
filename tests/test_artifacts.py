@@ -22,7 +22,7 @@ from parity.models import (
     MismatchKind,
     Status,
 )
-from parity.provenance import collect_runtime_provenance
+from parity.provenance import collect_runtime_provenance, effective_config_sha256
 
 
 def _case(tmp_path: Path) -> CaseConfig:
@@ -153,6 +153,16 @@ def test_artifact_preserves_project_virtualenv_python_entrypoint(tmp_path: Path)
         fixture=tmp_path / "source.arrow",
     )
 
+    config_sha256 = effective_config_sha256(
+        {"version": 1, "cases": [case.model_dump(mode="python", by_alias=True)]}
+    )
+    alternate = case.model_copy(deep=True)
+    alternate.candidate.python = tmp_path / ".venv-other" / "bin" / "python"
+    alternate_hash = effective_config_sha256(
+        {"version": 1, "cases": [alternate.model_dump(mode="python", by_alias=True)]}
+    )
+    assert config_sha256 != alternate_hash
+
     old_directory = Path.cwd()
     try:
         os.chdir(tmp_path)
@@ -161,7 +171,7 @@ def test_artifact_preserves_project_virtualenv_python_entrypoint(tmp_path: Path)
             pa.table({"id": [1]}),
             _result(),
             runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
-            config_sha256="d" * 64,
+            config_sha256=config_sha256,
         )
     finally:
         os.chdir(old_directory)
@@ -169,6 +179,7 @@ def test_artifact_preserves_project_virtualenv_python_entrypoint(tmp_path: Path)
     replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
     assert replay["case"]["reference"]["python"] == ".venv/bin/python"
     assert replay["case"]["candidate"]["python"] == ".venv/bin/python"
+    assert replay["config_sha256"] == config_sha256
 
 
 def test_artifact_rejects_malformed_config_fingerprint(tmp_path: Path) -> None:

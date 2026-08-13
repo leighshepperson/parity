@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import sys
 from pathlib import Path
 
 import pytest
@@ -212,6 +213,98 @@ def test_effective_config_hash_is_stable_data_safe_and_semantic(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="unknown selected"):
         effective_config_sha256(config(first_root, "x"), selected_cases={"missing"})
+
+
+def test_effective_config_hash_preserves_project_python_entrypoint_identity(
+    tmp_path: Path,
+) -> None:
+    def config(root: Path, reference_name: str, candidate_name: str) -> dict[str, object]:
+        for name in {reference_name, candidate_name}:
+            interpreter = root / name / "bin" / "python"
+            interpreter.parent.mkdir(parents=True, exist_ok=True)
+            if not interpreter.exists():
+                interpreter.symlink_to(sys.executable)
+        return {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "versions",
+                    "fixture": root / "fixture.arrow",
+                    "reference": {
+                        "target": "project.transform:run",
+                        "python": root / reference_name / "bin" / "python",
+                        "workdir": root,
+                    },
+                    "candidate": {
+                        "target": "project.transform:run",
+                        "python": root / candidate_name / "bin" / "python",
+                        "workdir": root,
+                    },
+                }
+            ],
+        }
+
+    first_root = tmp_path / "first"
+    moved_root = tmp_path / "moved"
+    distinct = effective_config_sha256(config(first_root, ".venv-old", ".venv-new"))
+    swapped = effective_config_sha256(config(first_root, ".venv-new", ".venv-old"))
+    same = effective_config_sha256(config(first_root, ".venv-old", ".venv-old"))
+    moved = effective_config_sha256(config(moved_root, ".venv-old", ".venv-new"))
+
+    assert distinct != swapped
+    assert distinct != same
+    assert distinct == moved
+
+
+def test_effective_config_hash_omits_external_python_path_identity(tmp_path: Path) -> None:
+    def contract(python: Path) -> dict[str, object]:
+        return {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "external",
+                    "reference": {
+                        "target": "project:run",
+                        "python": python,
+                        "workdir": tmp_path,
+                    },
+                    "candidate": {"target": "project:run", "workdir": tmp_path},
+                }
+            ],
+        }
+
+    assert effective_config_sha256(contract(Path("/private/one/python"))) == (
+        effective_config_sha256(contract(Path("/different/private/python")))
+    )
+
+
+def test_effective_config_hash_uses_side_workdir_for_python_identity(tmp_path: Path) -> None:
+    def contract(root: Path, python_name: str) -> dict[str, object]:
+        workdir = root / "worker"
+        return {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "worker",
+                    "reference": {
+                        "target": "project:run",
+                        "python": workdir / python_name / "bin" / "python",
+                        "workdir": workdir,
+                    },
+                    "candidate": {
+                        "target": "project:run",
+                        "workdir": root / "different-worker",
+                    },
+                }
+            ],
+        }
+
+    first = effective_config_sha256(contract(tmp_path / "first", ".venv-a"))
+    changed = effective_config_sha256(contract(tmp_path / "first", ".venv-b"))
+    moved = effective_config_sha256(contract(tmp_path / "moved", ".venv-a"))
+
+    assert first != changed
+    assert first == moved
 
 
 def test_effective_config_hash_preserves_positional_bundle_order() -> None:

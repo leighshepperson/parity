@@ -10,14 +10,27 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from parity.provenance import normalize_distribution_names
+from parity.targets import IMPORT_TARGET
 
-_TARGET = re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_][\w.]*$")
 _CASE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _ADAPTERS = frozenset({"auto", "pandas", "polars", "arrow"})
 
 
+def _lexists(path: Path) -> bool:
+    """Return whether a directory entry exists, including dangling symlinks."""
+
+    return os.path.lexists(path)
+
+
+def _validate_replaceable_destination(path: Path) -> None:
+    """Reject directory and special-file destinations before any forced write."""
+
+    if _lexists(path) and not (path.is_file() or path.is_symlink()):
+        raise ValueError(f"destination is not a replaceable file or symlink: {path}")
+
+
 def _validate_target(label: str, target: str) -> None:
-    if not _TARGET.fullmatch(target):
+    if not IMPORT_TARGET.fullmatch(target):
         raise ValueError(f"{label} must be an import target such as package.module:function")
 
 
@@ -42,8 +55,8 @@ def _toml_array(values: Sequence[str]) -> str:
     return "[" + ", ".join(_toml_string(value) for value in values) + "]"
 
 
-def _atomic_write_text(destination: Path, content: str) -> None:
-    """Replace one file atomically after fully writing a private sibling."""
+def _atomic_write_text(destination: Path, content: str, *, force: bool) -> None:
+    """Publish one complete file without racing the no-overwrite contract."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -55,7 +68,19 @@ def _atomic_write_text(destination: Path, content: str) -> None:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, destination)
+        if force:
+            os.replace(temporary, destination)
+        else:
+            # A hard link atomically publishes the fully-written inode only
+            # when destination is absent. Concurrent creators cannot replace
+            # one another between a preflight exists() check and publication.
+            try:
+                os.link(temporary, destination)
+            except FileExistsError:
+                raise FileExistsError(
+                    f"refusing to overwrite existing configuration: {destination}"
+                ) from None
+            temporary.unlink()
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
@@ -195,8 +220,10 @@ def write_config_template(
     """Write a generated configuration without silently replacing user work."""
 
     destination = Path(path)
-    if destination.exists() and not force:
+    if _lexists(destination) and not force:
         raise FileExistsError(f"refusing to overwrite existing configuration: {destination}")
+    if force:
+        _validate_replaceable_destination(destination)
     _atomic_write_text(
         destination,
         render_config_template(
@@ -204,6 +231,7 @@ def write_config_template(
             candidate=candidate,
             case_name=case_name,
         ),
+        force=force,
     )
     return destination
 
@@ -218,6 +246,7 @@ def render_project_config(
     candidate_adapter: str = "auto",
     reference_python: str | None = None,
     candidate_python: str | None = None,
+    workdir: str | None = None,
     record_distributions: Sequence[str] = (),
     row_keys: Sequence[str] = (),
 ) -> str:
@@ -252,6 +281,8 @@ def render_project_config(
         lines.append(f"adapter = {_toml_string(reference_adapter)}")
     if reference_python is not None:
         lines.append(f"python = {_toml_string(reference_python)}")
+    if workdir is not None:
+        lines.append(f"workdir = {_toml_string(workdir)}")
     if distributions:
         lines.append(f"record_distributions = {_toml_array(distributions)}")
 
@@ -266,6 +297,8 @@ def render_project_config(
         lines.append(f"adapter = {_toml_string(candidate_adapter)}")
     if candidate_python is not None:
         lines.append(f"python = {_toml_string(candidate_python)}")
+    if workdir is not None:
+        lines.append(f"workdir = {_toml_string(workdir)}")
     if distributions:
         lines.append(f"record_distributions = {_toml_array(distributions)}")
     if row_keys:
@@ -301,8 +334,10 @@ def write_project_config(
     from parity.adapters import load_fixture
 
     destination = Path(path)
-    if destination.exists() and not force:
+    if _lexists(destination) and not force:
         raise FileExistsError(f"refusing to overwrite existing configuration: {destination}")
+    if force:
+        _validate_replaceable_destination(destination)
 
     fixture_path = Path(fixture)
     load_fixture(fixture_path)
@@ -313,6 +348,8 @@ def write_project_config(
     for label, python_path in python_paths.items():
         if python_path is not None and not python_path.is_file():
             raise ValueError(f"{label} Python executable is not a file")
+        if os.name != "nt" and python_path is not None and not os.access(python_path, os.X_OK):
+            raise ValueError(f"{label} Python executable is not executable")
 
     content = render_project_config(
         reference=reference,
@@ -331,10 +368,15 @@ def write_project_config(
             if python_paths["candidate"] is not None
             else None
         ),
+        workdir=(
+            _relative_config_path(Path.cwd(), destination)
+            if Path.cwd().resolve() != destination.parent.resolve()
+            else None
+        ),
         record_distributions=record_distributions,
         row_keys=row_keys,
     )
-    _atomic_write_text(destination, content)
+    _atomic_write_text(destination, content, force=force)
     return destination
 
 
@@ -373,11 +415,14 @@ def write_starter(path: str | Path = "parity.toml", *, force: bool = False) -> l
 
     config_path = Path(path)
     example_path = config_path.parent / "parity_example.py"
-    existing = [item for item in (config_path, example_path) if item.exists()]
+    existing = [item for item in (config_path, example_path) if _lexists(item)]
     if existing and not force:
         raise FileExistsError(f"refusing to overwrite existing file: {existing[0]}")
-    _atomic_write_text(config_path, render_config_template())
-    _atomic_write_text(example_path, render_example_module())
+    if force:
+        for item in (config_path, example_path):
+            _validate_replaceable_destination(item)
+    _atomic_write_text(config_path, render_config_template(), force=force)
+    _atomic_write_text(example_path, render_example_module(), force=force)
     return [config_path, example_path]
 
 

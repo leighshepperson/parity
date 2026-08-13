@@ -263,6 +263,25 @@ def test_callable_pandas_input_defaults_to_arrow_and_rejects_unknown_modes() -> 
         )
 
 
+@pytest.mark.parametrize(
+    "target",
+    [
+        "pkg..module:run",
+        "pkg.:run",
+        ".pkg:run",
+        "pkg:attr..child",
+        "pkg:.run",
+        "pkg:run.",
+        "pkg:<locals>.run",
+    ],
+)
+def test_callable_target_requires_dotted_identifier_segments(target: str) -> None:
+    with pytest.raises(ValidationError, match="target"):
+        CallableSpec(target=target)
+
+    assert CallableSpec(target="pkg.module:Owner.run").target == "pkg.module:Owner.run"
+
+
 def test_callable_record_distributions_are_explicit_normalized_and_unique() -> None:
     spec = CallableSpec(
         target="example:reference",

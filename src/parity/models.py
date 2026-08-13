@@ -8,7 +8,15 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 from pydantic import JsonValue as JsonValue
 
 from parity._version import __version__
@@ -17,6 +25,7 @@ from parity.provenance import (
     RuntimeProvenance,
     normalize_distribution_names,
 )
+from parity.targets import IMPORT_TARGET_PATTERN
 
 AdapterName = Literal["auto", "pandas", "polars", "arrow"]
 PandasInput = Literal["arrow", "native"]
@@ -374,7 +383,7 @@ class InputBundle(StrictModel):
 class CallableSpec(StrictModel):
     """Importable implementation and the environment in which it should run."""
 
-    target: str = Field(pattern=r"^[A-Za-z_][\w.]*:[A-Za-z_][\w.]*$")
+    target: str = Field(pattern=IMPORT_TARGET_PATTERN)
     adapter: AdapterName = "auto"
     pandas_input: PandasInput = "arrow"
     python: Path | None = None
@@ -513,6 +522,7 @@ class ParityConfig(StrictModel):
     artifact_dir: Path = Path(".parity")
     cases: list[CaseConfig] = Field(min_length=1)
     fail_fast: bool = False
+    _base_directory: Path | None = PrivateAttr(default=None)
 
     @field_validator("cases")
     @classmethod

@@ -39,6 +39,7 @@ from parity.adapters import from_arrow as adapter_from_arrow
 from parity.adapters import to_arrow as adapter_to_arrow
 from parity.models import CallableSpec, JsonValue, PandasInput, RunMetrics
 from parity.provenance import RuntimeProvenance, collect_runtime_provenance, diff_runtime
+from parity.targets import IMPORT_TARGET
 
 _WORKER_PROTOCOL_VERSION = 3
 
@@ -146,7 +147,6 @@ class ExecutionError(RuntimeError):
     """Raised for invalid execution configuration, never for user exceptions."""
 
 
-_TARGET = re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_][\w.]*$")
 _ABSOLUTE_PATH = re.compile(r"(?<![\w.])(?:[A-Za-z]:[\\/][^\s:'\"]+|/(?:[^\s/'\"]+/)+[^\s:'\"]*)")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)\s*=\s*([^\s,;]+)"
@@ -261,7 +261,7 @@ def redact_text(text: str) -> str:
 def import_callable(target: str) -> Callable[..., Any]:
     """Import an explicit ``module:attribute`` target without using ``eval``."""
 
-    if not _TARGET.fullmatch(target):
+    if not IMPORT_TARGET.fullmatch(target):
         raise ExecutionError("callable target must be in module.path:function.path form")
     module_name, attribute_path = target.split(":", 1)
     try:

@@ -15,6 +15,7 @@ class ConfigError(ValueError):
 
 
 def _resolve_paths(config: ParityConfig, base: Path) -> ParityConfig:
+    config._base_directory = base.resolve()
     config.artifact_dir = (base / config.artifact_dir).resolve()
     for case in config.cases:
         if case.fixture is not None:

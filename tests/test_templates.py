@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import tomllib
 from pathlib import Path
 
@@ -122,6 +123,9 @@ def test_project_template_is_minimal_fixture_backed_and_allows_same_target() -> 
     ("kwargs", "message"),
     [
         ({"reference": "not a target"}, "reference must be"),
+        ({"reference": "pkg..module:run"}, "reference must be"),
+        ({"candidate": "pkg.:run"}, "candidate must be"),
+        ({"candidate": "pkg:attr..child"}, "candidate must be"),
         ({"candidate_adapter": "spark"}, "candidate_adapter must be"),
         ({"case_name": "bad name"}, "case_name may contain"),
         ({"row_keys": ["id", "id"]}, "row keys must be unique"),
@@ -188,6 +192,28 @@ def test_project_writer_preserves_distinct_virtualenv_python_symlinks(tmp_path: 
     assert case.reference.python != case.candidate.python
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable-bit contract")
+@pytest.mark.parametrize("side", ["reference", "candidate"])
+def test_project_writer_rejects_non_executable_python_paths(tmp_path: Path, side: str) -> None:
+    fixture = tmp_path / "input.parquet"
+    pq.write_table(pa.table({"id": [1]}), fixture)
+    python_path = tmp_path / f"{side}-python"
+    python_path.write_text("not an executable", encoding="utf-8")
+    python_path.chmod(0o600)
+    kwargs = {f"{side}_python": python_path}
+
+    with pytest.raises(ValueError, match=rf"{side} Python executable is not executable"):
+        write_project_config(
+            tmp_path / "parity.toml",
+            reference="project.old:run",
+            candidate="project.new:run",
+            fixture=fixture,
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    assert not (tmp_path / "parity.toml").exists()
+
+
 def test_project_writer_validates_before_replacing_existing_file(tmp_path: Path) -> None:
     destination = tmp_path / "parity.toml"
     destination.write_text("user work", encoding="utf-8")
@@ -229,3 +255,83 @@ def test_atomic_writer_leaves_existing_file_intact_when_replace_fails(
         write_config_template(destination, force=True)
     assert destination.read_text(encoding="utf-8") == "user work"
     assert list(tmp_path.glob(".parity.toml.*.tmp")) == []
+
+
+def test_no_overwrite_publication_is_atomic_between_concurrent_writers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "parity.toml"
+    barrier = threading.Barrier(2)
+    real_link = templates.os.link
+
+    def synchronized_link(source: Path, target: Path) -> None:
+        barrier.wait(timeout=5)
+        real_link(source, target)
+
+    monkeypatch.setattr(templates.os, "link", synchronized_link)
+    outcomes: list[str] = []
+
+    def write(reference: str) -> None:
+        try:
+            write_config_template(
+                destination,
+                reference=reference,
+                candidate="project:candidate",
+            )
+        except FileExistsError:
+            outcomes.append("refused")
+        else:
+            outcomes.append("created")
+
+    threads = [
+        threading.Thread(target=write, args=("first:reference",)),
+        threading.Thread(target=write, args=("second:reference",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert sorted(outcomes) == ["created", "refused"]
+    reference = tomllib.loads(destination.read_text(encoding="utf-8"))["cases"][0]["reference"][
+        "target"
+    ]
+    assert reference in {"first:reference", "second:reference"}
+    assert list(tmp_path.glob(".parity.toml.*.tmp")) == []
+
+
+@pytest.mark.parametrize("name", ["parity.toml", "parity_example.py"])
+def test_starter_refuses_dangling_destination_symlinks(tmp_path: Path, name: str) -> None:
+    dangling = tmp_path / name
+    dangling.symlink_to(tmp_path / "missing-target")
+
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        write_starter(tmp_path / "parity.toml")
+
+    assert dangling.is_symlink()
+    assert not dangling.exists()
+
+
+def test_config_writer_force_replaces_dangling_destination_symlink(tmp_path: Path) -> None:
+    destination = tmp_path / "parity.toml"
+    destination.symlink_to(tmp_path / "missing-target")
+
+    write_config_template(destination, force=True)
+
+    assert destination.is_file()
+    assert not destination.is_symlink()
+    assert "version = 1" in destination.read_text(encoding="utf-8")
+
+
+def test_starter_force_prevalidates_both_destinations_before_replacing(tmp_path: Path) -> None:
+    config = tmp_path / "parity.toml"
+    config.write_text("user config", encoding="utf-8")
+    example = tmp_path / "parity_example.py"
+    example.mkdir()
+
+    with pytest.raises(ValueError, match="not a replaceable file or symlink"):
+        write_starter(config, force=True)
+
+    assert config.read_text(encoding="utf-8") == "user config"
+    assert example.is_dir()

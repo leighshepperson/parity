@@ -91,7 +91,7 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
-| `target` | string | required | Import target `package.module:function`. |
+| `target` | string | required | Import target `package.module:function`; each dotted component must be a Python identifier. |
 | `adapter` | enum | `auto` | `auto`, `pandas`, `polars` or `arrow`. |
 | `pandas_input` | `arrow` / `native` | `arrow` | Pandas input materialization; ignored when the resolved adapter is not pandas. |
 | `python` | path | current Python | Interpreter for isolated execution. |

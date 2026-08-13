@@ -1064,7 +1064,11 @@ def run_suite(
     known = {case.name for case in config.cases}
     if selected_cases is not None and (unknown := selected_cases - known):
         raise ValueError(f"unknown case(s): {', '.join(sorted(unknown))}")
-    config_sha256 = effective_config_sha256(config, selected_cases=selected_cases)
+    config_sha256 = effective_config_sha256(
+        config,
+        selected_cases=selected_cases,
+        base_directory=config._base_directory,
+    )
     cases: list[CaseResult] = []
     store = ArtifactStore(config.artifact_dir)
     for case in config.cases:
@@ -1530,7 +1534,13 @@ def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> No
             if field == "python":
                 # A normal project venv ends in a symlink to the host's base
                 # Python. The project-local launch path is authoritative; its
-                # environment identity would be lost by dereferencing it.
+                # environment identity would be lost by dereferencing it. All
+                # parent directories must remain canonically inside the project;
+                # only the final executable symlink may target the host Python.
+                if not lexical.parent.resolve().is_relative_to(base):
+                    raise ReplayError(
+                        "replay python parent directories must stay inside the invocation directory"
+                    )
                 if not lexical.is_file():
                     raise ReplayError("replay python path must be an existing file")
                 spec[field] = lexical

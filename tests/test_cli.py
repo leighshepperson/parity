@@ -138,6 +138,10 @@ def test_init_project_mode_rejects_bad_adapter_and_fixture(tmp_path: Path) -> No
     assert adapter.exit_code == 2
     assert "reference_adapter must be one of" in adapter.stderr
 
+    malformed = runner.invoke(cli.app, [*common, "--reference", "pkg..module:run"])
+    assert malformed.exit_code == 2
+    assert "reference must be an import target" in malformed.stderr
+
     fixture.unlink()
     missing = runner.invoke(cli.app, common)
     assert missing.exit_code == 2
@@ -145,7 +149,7 @@ def test_init_project_mode_rejects_bad_adapter_and_fixture(tmp_path: Path) -> No
     assert not (tmp_path / "parity.toml").exists()
 
 
-def test_init_project_mode_output_runs_without_generated_demo(tmp_path: Path) -> None:
+def test_init_project_mode_output_runs_without_generated_demo(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "project"
     project.mkdir()
     (project / "project_transform.py").write_text(
@@ -155,6 +159,7 @@ def test_init_project_mode_output_runs_without_generated_demo(tmp_path: Path) ->
     fixture = project / "input.parquet"
     pq.write_table(pa.table({"id": [1, 2]}), fixture)
     config_path = project / "parity.toml"
+    monkeypatch.chdir(project)
     initialized = runner.invoke(
         cli.app,
         [
@@ -173,6 +178,59 @@ def test_init_project_mode_output_runs_without_generated_demo(tmp_path: Path) ->
         ],
     )
     assert initialized.exit_code == 0, initialized.output
+
+    checked = runner.invoke(
+        cli.app,
+        [
+            "check",
+            "--config",
+            str(config_path),
+            "--max-examples",
+            "2",
+            "--stability-repeats",
+            "1",
+            "--no-performance",
+        ],
+    )
+    assert checked.exit_code == 0, checked.output
+
+
+def test_init_nested_project_config_runs_targets_from_invocation_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = tmp_path / "project"
+    migrations = project / "migrations"
+    migrations.mkdir(parents=True)
+    (project / "project_transform.py").write_text(
+        "def transform(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
+    fixture = project / "input.parquet"
+    pq.write_table(pa.table({"id": [1, 2]}), fixture)
+    config_path = migrations / "parity.toml"
+    monkeypatch.chdir(project)
+
+    initialized = runner.invoke(
+        cli.app,
+        [
+            "init",
+            str(config_path),
+            "--reference",
+            "project_transform:transform",
+            "--candidate",
+            "project_transform:transform",
+            "--fixture",
+            str(fixture),
+            "--reference-adapter",
+            "arrow",
+            "--candidate-adapter",
+            "arrow",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+    raw = tomllib.loads(config_path.read_text(encoding="utf-8"))["cases"][0]
+    assert raw["reference"]["workdir"] == ".."
+    assert raw["candidate"]["workdir"] == ".."
 
     checked = runner.invoke(
         cli.app,

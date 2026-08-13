@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from parity.config import ConfigError, load_config
+from parity.provenance import effective_config_sha256
 
 VALID = """
 version = 1
@@ -155,9 +156,15 @@ python = "new/bin/python"
         encoding="utf-8",
     )
 
-    case = load_config(config_path).cases[0]
+    config = load_config(config_path)
+    case = config.cases[0]
 
     assert case.reference.python == tmp_path / "old" / "bin" / "python"
     assert case.candidate.python == tmp_path / "new" / "bin" / "python"
     assert case.reference.python != case.candidate.python
     assert case.reference.python.resolve() == case.candidate.python.resolve()
+
+    distinct_hash = effective_config_sha256(config, base_directory=tmp_path)
+    case.candidate.python = case.reference.python
+    same_hash = effective_config_sha256(config, base_directory=tmp_path)
+    assert distinct_hash != same_hash
