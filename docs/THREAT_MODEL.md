@@ -7,8 +7,8 @@ user. The primary deployment is a trusted engineering repository running reviewe
 Reference/candidate defects are expected; actively malicious callables require an external sandbox.
 
 This model covers local core, workers, configuration, fixtures, reports, counterexample artifacts,
-the composite GitHub Action and package supply chain. A future hosted coordinator is outside the
-current trust boundary.
+the composite GitHub Action and package supply chain. Hosted coordinators are outside the current
+trust boundary.
 
 ## Assets
 

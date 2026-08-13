@@ -9,7 +9,7 @@ grounded in observable behaviour.
 
 ## Clean-room requirement
 
-Contribute only work you are entitled to contribute. Do not paste employer/customer code, private
+Contribute only work you are entitled to contribute. Do not paste employer or third-party code, private
 schemas, production data, internal benchmarks, proprietary prompts or unpublished documentation
 into commits, issues or AI tools. Use generic domains and artificial values. A contribution based on
 public behaviour should cite the public source in `docs/PRIOR_ART.md` or its fault-corpus note.
