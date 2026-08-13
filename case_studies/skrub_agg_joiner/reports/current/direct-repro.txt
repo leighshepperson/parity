@@ -1,0 +1,67 @@
+
+## Pinned target and versions
+target_sha256=ece034198b746e0d08e34c0e62ba2c892ac6be04d5710ce9c57d9ec967b51b7b
+skrub=0.11.dev0
+scikit-learn=1.9.0
+pandas=3.0.5
+polars=1.43.2
+pyarrow=25.0.1
+numpy=2.5.2
+
+## Durable finding: null grouping keys
+pandas:
+  key  value_count  value_sum  value_mean
+0   A            2        4.0         2.0
+polars:
+shape: (2, 4)
+┌──────┬─────────────┬───────────┬────────────┐
+│ key  ┆ value_count ┆ value_sum ┆ value_mean │
+│ ---  ┆ ---         ┆ ---       ┆ ---        │
+│ str  ┆ u32         ┆ f64       ┆ f64        │
+╞══════╪═════════════╪═══════════╪════════════╡
+│ A    ┆ 2           ┆ 4.0       ┆ 2.0        │
+│ null ┆ 1           ┆ 2.0       ┆ 2.0        │
+└──────┴─────────────┴───────────┴────────────┘
+
+## Durable finding: tied mode through public AggJoiner
+pandas:
+  key label label_mode
+0   A     x     [x, y]
+1   A     y     [x, y]
+2   A     x     [x, y]
+3   A     y     [x, y]
+polars:
+shape: (4, 3)
+┌─────┬───────┬────────────┐
+│ key ┆ label ┆ label_mode │
+│ --- ┆ ---   ┆ ---        │
+│ str ┆ str   ┆ str        │
+╞═════╪═══════╪════════════╡
+│ A   ┆ x     ┆ y          │
+│ A   ┆ y     ┆ y          │
+│ A   ┆ x     ┆ y          │
+│ A   ┆ y     ┆ y          │
+└─────┴───────┴────────────┘
+polars choices across 20 identical evaluations: ['y', 'y', 'x', 'x', 'y', 'y', 'x', 'x', 'y', 'x', 'y', 'x', 'x', 'y', 'y', 'x', 'y', 'x', 'x', 'x']
+
+## Version-sensitive finding: IEEE NaN through public AggJoiner
+pandas:
+  key  value  value_count  value_sum  value_mean
+0   A    1.0            1        1.0         1.0
+1   A    NaN            1        1.0         1.0
+2   B    NaN            1        2.0         2.0
+3   B    2.0            1        2.0         2.0
+polars:
+shape: (4, 5)
+┌─────┬───────┬─────────────┬───────────┬────────────┐
+│ key ┆ value ┆ value_count ┆ value_sum ┆ value_mean │
+│ --- ┆ ---   ┆ ---         ┆ ---       ┆ ---        │
+│ str ┆ f64   ┆ u32         ┆ f64       ┆ f64        │
+╞═════╪═══════╪═════════════╪═══════════╪════════════╡
+│ A   ┆ 1.0   ┆ 2           ┆ NaN       ┆ NaN        │
+│ A   ┆ NaN   ┆ 2           ┆ NaN       ┆ NaN        │
+│ B   ┆ NaN   ┆ 2           ┆ NaN       ┆ NaN        │
+│ B   ┆ 2.0   ┆ 2           ┆ NaN       ┆ NaN        │
+└─────┴───────┴─────────────┴───────────┴────────────┘
+
+All direct assertions reproduced.

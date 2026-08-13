@@ -27,12 +27,14 @@ def test_worker_file_protocol(tmp_path: Path, monkeypatch) -> None:
     request_path.write_text(
         json.dumps(
             {
+                "protocol_version": 2,
                 "spec": {"target": "worker_transform:transform", "adapter": "pandas"},
                 "input": str(input_path),
                 "output_arrow": str(output_path),
                 "output_json": str(tmp_path / "output.json"),
                 "static_args": [3],
                 "static_kwargs": {},
+                "expected_runtime": None,
             }
         ),
         encoding="utf-8",
@@ -40,6 +42,8 @@ def test_worker_file_protocol(tmp_path: Path, monkeypatch) -> None:
     run_request(request_path, response_path)
     response = json.loads(response_path.read_text(encoding="utf-8"))
     assert response["outcome"] == "returned"
+    assert response["protocol_version"] == 2
+    assert response["runtime"]["python_implementation"]
     assert response["has_table"] is True
     assert "table" not in response
     assert _read_arrow(output_path).column("x").to_pylist() == [4, 5]

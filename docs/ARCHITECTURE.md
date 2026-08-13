@@ -65,8 +65,9 @@ because sample inference cannot know business bounds or invariants.
 
 Callables are observed rather than invoked directly by the comparator. An observation records
 returned value or exception, elapsed time, peak RSS, mutation state, timeout/worker status and safe
-diagnostic metadata. Configured Python executables and working directories support A/B dependency
-environments.
+diagnostic metadata. It also records bounded runtime provenance from inside that worker: Python,
+platform, Parity, core dataframe dependencies and explicitly requested target distributions.
+Configured Python executables and working directories support A/B dependency environments.
 
 Configured campaigns keep two worker sessions alive: one for the reference and one for the
 candidate. This removes interpreter startup from every generated example while preserving a crash
@@ -121,6 +122,12 @@ directory are deliberately non-replayable rather than replaced with a potentiall
 same-named module. Reports are separate projections that omit frame and value data. Artifact writes
 use a temporary directory and final rename so interrupted runs do not look complete.
 
+Replay contract version 2 binds the saved case to both worker runtime fingerprints and a data-safe
+effective-configuration hash. Replay probes both workers before target import and blocks both
+callables on drift. Version 1 artifacts are still accepted and are reported as unverified. The
+manifest remains version 1 because its integrity envelope is unchanged; JSON reports use schema
+version 2 to add suite and per-case provenance.
+
 ## Extension seams
 
 - **Engine adapter:** Arrow conversion plus environment/runtime capability description.
@@ -139,6 +146,6 @@ Three independently versioned contracts matter:
 2. Pydantic result/report schema and package version.
 3. Counterexample manifest/replay artifact version.
 
-Before `1.0`, breaking changes may occur with release notes and migration guidance. Long-term replay
-requires storing artifacts together with an environment lockfile or container digest; source and
-dependency drift can otherwise change the observed result.
+Before `1.0`, breaking changes may occur with release notes and migration guidance. Runtime
+fingerprints detect drift but are not environment lockfiles or container attestations; projects
+should still pin dependencies for release gates.

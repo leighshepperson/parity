@@ -33,6 +33,36 @@ pytest -k generation --maxfail=1
 ruff check src/parity tests
 ```
 
+## Dependency compatibility
+
+Pull requests run the suite both across every supported Python version and against the lowest
+direct-dependency set currently validated on Python 3.11. The exact direct floor is recorded in
+`.github/constraints/minimum-py311.txt`; update that file deliberately when a lower bound changes,
+and verify the complete suite before claiming the new bound.
+
+The `Dependency drift` workflow checks pandas, Polars and PyArrow independently. Stable releases
+run weekly from the validated direct floor, advancing one package at a time. Transitive packages
+are resolved at install time, so their versions should also be captured from the failing job.
+Prereleases run monthly and
+are non-blocking early warnings. Both jobs skip performance tests and extended campaigns, so a
+failure identifies a semantic or compatibility change rather than machine-speed noise.
+
+Run the direct floor locally with Python 3.11:
+
+```bash
+python -m pip install --only-binary=:all: \
+  --requirement .github/constraints/minimum-py311.txt
+python -m pip install --no-deps --editable .
+python -m pip check
+pytest -m "not slow" --ignore=tests/test_performance.py
+```
+
+When a drift lane fails, reproduce it by changing only the named dependency from the direct
+floor. Record the Python, NumPy, pandas, Polars and PyArrow versions before deciding whether the
+result is a Parity regression, an adapter/interoperability issue or an upstream behaviour change.
+Do not collapse null and NaN differences globally to make a matrix green; encode any accepted semantic
+change in an explicit comparison policy and a focused regression test.
+
 ## Repository map
 
 ```text
@@ -43,6 +73,7 @@ src/parity/
   schema.py          portable schema inference/materialisation
   generation.py      deterministic cases and Hypothesis strategies
   execution.py       observations and callable invocation
+  provenance.py      bounded runtime identities and safe config fingerprints
   worker.py          isolated worker protocol
   session_worker.py  persistent isolated worker protocol
   comparison.py      semantic equivalence policies

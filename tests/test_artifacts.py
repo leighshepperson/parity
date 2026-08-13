@@ -11,11 +11,13 @@ from parity.artifacts import ArtifactStore
 from parity.models import (
     CallableSpec,
     CaseConfig,
+    CaseProvenance,
     ExampleResult,
     Mismatch,
     MismatchKind,
     Status,
 )
+from parity.provenance import collect_runtime_provenance
 
 
 def _case(tmp_path: Path) -> CaseConfig:
@@ -68,6 +70,8 @@ def test_artifact_campaign_is_complete_replayable_and_hashed(tmp_path: Path) -> 
         assert len(content) == metadata["bytes"]
     replay_text = (destination / "replay.json").read_text(encoding="utf-8")
     replay = json.loads(replay_text)
+    assert replay["version"] == 1
+    assert "expected_runtime" not in replay
     assert replay["command"] == ["parity", "replay", "<artifact-path>"]
     assert replay["working_directory"] == "original invocation directory"
     assert replay["path_base"] == "invocation_cwd"
@@ -78,6 +82,37 @@ def test_artifact_campaign_is_complete_replayable_and_hashed(tmp_path: Path) -> 
     assert "do-not-store" not in replay_text
     assert "also-secret" not in replay_text
     assert str(tmp_path) not in replay_text
+
+
+def test_artifact_uses_v2_only_with_complete_runtime_and_config_contract(
+    tmp_path: Path,
+) -> None:
+    runtime = collect_runtime_provenance(["definitely-not-installed-artifact-probe"])
+    destination = ArtifactStore(tmp_path / "artifacts").write_failure(
+        "complete-runtime",
+        pa.table({"x": [1]}),
+        _result(),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="a" * 64,
+    )
+
+    replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
+    assert replay["version"] == 2
+    assert replay["config_sha256"] == "a" * 64
+    assert replay["expected_runtime"]["reference"]["python_version"]
+    assert replay["expected_runtime"]["candidate"]["distributions"]
+
+
+def test_artifact_rejects_malformed_config_fingerprint(tmp_path: Path) -> None:
+    runtime = collect_runtime_provenance()
+    with pytest.raises(ValueError, match="config_sha256"):
+        ArtifactStore(tmp_path / "artifacts").write_failure(
+            "bad-fingerprint",
+            pa.table({"x": [1]}),
+            _result(),
+            runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+            config_sha256="bad",
+        )
 
 
 def test_artifact_failure_leaves_no_partial_campaign(tmp_path: Path, monkeypatch) -> None:

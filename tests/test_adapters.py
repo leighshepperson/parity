@@ -60,6 +60,27 @@ def test_pandas_adapter_preserves_nan_distinct_from_nullable_null() -> None:
     assert mixed_table.column("x").to_pylist() == ["present", None]
 
 
+def test_pandas_adapter_normalizes_nested_extension_array_cells() -> None:
+    nested = pd.array(["first", "second"], dtype="string[pyarrow]")
+    frame = pd.DataFrame({"key": ["group"], "modes": pd.Series([nested], dtype=object)})
+
+    table = to_arrow(frame)
+
+    assert table.schema.field("modes").type == pa.list_(pa.string())
+    assert table.to_pylist() == [{"key": "group", "modes": ["first", "second"]}]
+
+
+def test_nested_cell_normalization_does_not_assume_unique_column_names() -> None:
+    nested = pd.array(["first", "second"], dtype="string[pyarrow]")
+    frame = pd.DataFrame([[nested, "plain"]], columns=["value", "value"])
+
+    with pytest.raises(ValueError, match="Duplicate column names"):
+        # The existing public Arrow conversion rejects duplicate names, but
+        # Parity's normalization must not fail earlier by treating one selected
+        # duplicate as a Series when pandas returns a DataFrame.
+        to_arrow(frame)
+
+
 def test_registry_rejects_unknown_and_duplicate() -> None:
     assert available_adapters() == ("arrow", "pandas", "polars")
     with pytest.raises(AdapterError, match="unknown adapter"):

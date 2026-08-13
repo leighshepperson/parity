@@ -1,0 +1,17 @@
+# Stable dependency lane exercised on 2026-08-13 with CPython 3.12.
+skrub @ git+https://github.com/skrub-data/skrub.git@55dc7f45e140ccb76e768e3e4b4193f4eac3d5aa
+hypothesis==6.165.5
+jinja2==3.1.6
+matplotlib==3.11.1
+numpy==2.5.2
+pandas==3.0.5
+polars==1.43.2
+psutil==7.2.2
+pyarrow==25.0.1
+pydantic==2.13.4
+pydot==4.0.1
+requests==2.34.2
+rich==15.0.0
+scikit-learn==1.9.0
+scipy==1.18.0
+typer==0.27.1

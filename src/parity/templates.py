@@ -42,10 +42,14 @@ tags = ["migration", "critical"]
 [cases.reference]
 target = "{reference}"
 adapter = "pandas"
+pandas_input = "arrow"
+record_distributions = []
 
 [cases.candidate]
 target = "{candidate}"
 adapter = "polars"
+pandas_input = "arrow"
+record_distributions = []
 
 # A case needs a fixture, a generated schema, or both. This generated schema
 # deliberately includes nulls, signed values and floating-point edge cases.
@@ -77,6 +81,7 @@ dtype = "compatible"
 names = "strict"
 null_equal = true
 nan_equal = true
+null_nan_equal = false
 signed_zero_equal = true
 check_exceptions = true
 check_input_mutation = true

@@ -19,6 +19,8 @@ engine-neutral so the same approach can cover other dataframe, numerical and dep
 - Cross-engine comparison of shape, columns, rows, dtypes, nulls, NaNs, signed zero, numeric
   tolerances, datetimes, returned exceptions and input mutation.
 - Isolated execution with per-case timeouts and separate Python environments when configured.
+- Per-worker Python, platform and dependency provenance, including explicitly named target
+  distributions, so dependency drift is distinguishable from semantic drift.
 - Reproducible Arrow counterexamples, plus Parquet when representable, with a manifest and replay
   command.
 - Median runtime and peak-memory comparisons with optional regression gates.
@@ -54,10 +56,12 @@ tags = ["critical", "migration"]
 [cases.reference]
 target = "orders.pandas_impl:transform"
 adapter = "pandas"
+record_distributions = ["orders-lib"]
 
 [cases.candidate]
 target = "orders.polars_impl:transform"
 adapter = "polars"
+record_distributions = ["orders-lib"]
 
 [cases.comparison]
 row_order = "ignore"
@@ -77,6 +81,11 @@ max_slowdown = 1.25
 max_memory_ratio = 1.5
 fail_on_regression = false
 ```
+
+Pandas callables receive Arrow-backed extension dtypes by default. If legacy code specifically
+expects pandas' conventional NumPy/object dtypes, set `pandas_input = "native"` in that callable's
+table. Native materialization can widen nullable integers and collapse null with IEEE NaN, so the
+choice is saved in replay artifacts as part of the input contract.
 
 Run one case, a tag, or the whole suite:
 
@@ -102,6 +111,11 @@ Reproduce it without regenerating inputs:
 ```bash
 parity replay .parity/orders/20260813T184205Z-a18d7e91
 ```
+
+New artifacts bind replay to the Python and dependency versions observed inside both workers.
+Parity probes both environments before importing either callable and returns an error if that
+runtime contract drifted. Older artifacts remain replayable, but are visibly marked unverified
+because they did not record an environment contract.
 
 Exit code `0` means every selected case passed, `1` means a semantic or enforced performance
 failure, and `2` means configuration or execution error.
@@ -228,13 +242,14 @@ the [threat model](docs/THREAT_MODEL.md).
 - [Architecture and artifact contracts](docs/ARCHITECTURE.md)
 - [Fault corpus](docs/FAULT_CORPUS.md)
 - [Real-world case study: pyjanitor `complete()`](case_studies/pyjanitor_complete/README.md)
+- [Version-matrix case study: skrub `AggJoiner`](case_studies/skrub_agg_joiner/README.md)
 - [Development and contribution guide](docs/DEVELOPMENT.md)
 - [Technical roadmap](docs/ROADMAP.md)
 - [Clean-room provenance](docs/CLEAN_ROOM.md) and [public prior art](docs/PRIOR_ART.md)
 
 ## Development status
 
-Parity `0.1` is an alpha: useful on real migrations, but its configuration and artifact contracts
+Parity `0.2` is an alpha: useful on real migrations, but its configuration and artifact contracts
 may evolve before `1.0`. Issues and small, synthetic reproduction cases are welcome.
 
 Licensed under the [Apache License 2.0](LICENSE).

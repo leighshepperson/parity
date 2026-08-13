@@ -69,11 +69,39 @@ def test_compatible_dtype_accepts_all_null_inferred_against_typed_nulls() -> Non
     assert compare(inferred_null, typed_null, ComparisonPolicy(dtype="strict"))
 
 
+def test_null_nan_equivalence_applies_to_compatible_all_missing_dtype() -> None:
+    inferred_null = pa.table({"value": pa.nulls(1)})
+    floating_nan = pa.table(
+        {"value": pa.array([float("nan")], type=pa.float64(), from_pandas=False)}
+    )
+
+    assert compare(inferred_null, floating_nan)
+    assert (
+        compare(
+            inferred_null,
+            floating_nan,
+            ComparisonPolicy(dtype="compatible", null_nan_equal=True),
+        )
+        == []
+    )
+
+
 def test_null_nan_and_signed_zero_policies() -> None:
     assert compare(None, None) == []
     assert compare(None, None, ComparisonPolicy(null_equal=False))
     assert compare(float("nan"), float("nan")) == []
     assert compare(float("nan"), float("nan"), ComparisonPolicy(nan_equal=False))
+    assert compare(None, float("nan"))
+    assert compare(None, float("nan"), ComparisonPolicy(null_nan_equal=True)) == []
+    assert compare(float("nan"), None, ComparisonPolicy(null_nan_equal=True)) == []
+    # Cross-kind equivalence does not override the policies for two values of
+    # the same missing kind.
+    assert compare(None, None, ComparisonPolicy(null_nan_equal=True, null_equal=False))
+    assert compare(
+        float("nan"),
+        float("nan"),
+        ComparisonPolicy(null_nan_equal=True, nan_equal=False),
+    )
     assert compare(0.0, -0.0) == []
     assert compare(0.0, -0.0, ComparisonPolicy(signed_zero_equal=False))
 

@@ -1,0 +1,344 @@
+"""Data-safe runtime and effective-configuration provenance.
+
+Runtime provenance is deliberately collected from inside each execution
+environment.  It contains only bounded platform labels and versions for a
+small, explicit set of Python distributions; it never inspects environment
+values, paths, hostnames, command lines, or installed packages in bulk.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.metadata
+import json
+import math
+import platform
+import re
+from collections.abc import Iterable, Mapping, Sequence
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from parity._version import __version__
+
+MAX_RECORDED_DISTRIBUTIONS = 64
+MAX_DISTRIBUTION_NAME_LENGTH = 128
+CORE_DISTRIBUTIONS = ("hypothesis", "numpy", "pandas", "polars", "pyarrow")
+
+_DISTRIBUTION_NAME = re.compile(
+    rf"^[A-Za-z0-9](?:[A-Za-z0-9._-]{{0,{MAX_DISTRIBUTION_NAME_LENGTH - 2}}}"
+    r"[A-Za-z0-9])?$"
+)
+_DISTRIBUTION_SEPARATOR = re.compile(r"[-_.]+")
+_SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+!~-]{0,127}$")
+_SAFE_RUNTIME_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}$")
+_SECRET_KEY = re.compile(
+    r"(?i)(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|credential)"
+)
+_OMIT = object()
+
+
+class _StrictFrozenModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class DistributionProvenance(_StrictFrozenModel):
+    """Version status for one normalized Python distribution name."""
+
+    name: str = Field(min_length=1, max_length=MAX_DISTRIBUTION_NAME_LENGTH)
+    status: Literal["installed", "missing", "unavailable"]
+    version: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("name")
+    @classmethod
+    def validate_normalized_name(cls, name: str) -> str:
+        normalized = normalize_distribution_name(name)
+        if name != normalized:
+            raise ValueError(f"distribution name must be normalized as {normalized!r}")
+        return name
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, version: str | None) -> str | None:
+        if version is not None and not _SAFE_VERSION.fullmatch(version):
+            raise ValueError("distribution version contains unsupported characters")
+        return version
+
+    @model_validator(mode="after")
+    def validate_status_and_version(self) -> DistributionProvenance:
+        if self.status == "installed" and self.version is None:
+            raise ValueError("an installed distribution requires a version")
+        if self.status != "installed" and self.version is not None:
+            raise ValueError("only an installed distribution may have a version")
+        return self
+
+
+class RuntimeProvenance(_StrictFrozenModel):
+    """Bounded, path-free identity of one Python execution environment."""
+
+    python_implementation: str = Field(min_length=1, max_length=64)
+    python_version: str = Field(min_length=1, max_length=64)
+    platform_system: str = Field(min_length=1, max_length=64)
+    platform_machine: str = Field(min_length=1, max_length=64)
+    parity_version: str = Field(min_length=1, max_length=128)
+    distributions: tuple[DistributionProvenance, ...] = ()
+
+    @field_validator(
+        "python_implementation",
+        "python_version",
+        "platform_system",
+        "platform_machine",
+        "parity_version",
+    )
+    @classmethod
+    def validate_safe_label(cls, label: str) -> str:
+        if not _SAFE_RUNTIME_LABEL.fullmatch(label):
+            raise ValueError("runtime label contains unsupported characters")
+        return label
+
+    @field_validator("distributions")
+    @classmethod
+    def validate_distributions(
+        cls, distributions: tuple[DistributionProvenance, ...]
+    ) -> tuple[DistributionProvenance, ...]:
+        maximum = len(CORE_DISTRIBUTIONS) + MAX_RECORDED_DISTRIBUTIONS
+        if len(distributions) > maximum:
+            raise ValueError(f"at most {maximum} runtime distributions may be recorded")
+        names = [distribution.name for distribution in distributions]
+        if names != sorted(names):
+            raise ValueError("runtime distributions must be sorted by name")
+        if len(names) != len(set(names)):
+            raise ValueError("runtime distribution names must be unique")
+        return distributions
+
+
+def normalize_distribution_name(name: str) -> str:
+    """Validate and normalize one explicit distribution name.
+
+    Distribution names, unlike import-package names, are the identifiers
+    accepted by :mod:`importlib.metadata`.  The normalization matches the
+    separator and case rules used by Python package indexes.
+    """
+
+    if not isinstance(name, str):
+        raise TypeError("distribution names must be strings")
+    if not _DISTRIBUTION_NAME.fullmatch(name):
+        raise ValueError(
+            "distribution names must contain only ASCII letters, digits, '.', '_' or '-' "
+            "and start and end with a letter or digit"
+        )
+    return _DISTRIBUTION_SEPARATOR.sub("-", name).lower()
+
+
+def normalize_distribution_names(names: Iterable[str]) -> tuple[str, ...]:
+    """Return sorted, unique normalized names for an explicit recording list."""
+
+    if isinstance(names, (str, bytes)):
+        raise TypeError("recorded distributions must be an iterable of names, not a string")
+    normalized: set[str] = set()
+    for name in names:
+        canonical = normalize_distribution_name(name)
+        if canonical in normalized:
+            raise ValueError(f"duplicate distribution name after normalization: {canonical}")
+        normalized.add(canonical)
+        if len(normalized) > MAX_RECORDED_DISTRIBUTIONS:
+            raise ValueError(
+                f"at most {MAX_RECORDED_DISTRIBUTIONS} explicit distributions may be recorded"
+            )
+    return tuple(sorted(normalized))
+
+
+def _safe_runtime_label(value: str) -> str:
+    return value if _SAFE_RUNTIME_LABEL.fullmatch(value) else "unknown"
+
+
+def _distribution_provenance(name: str) -> DistributionProvenance:
+    try:
+        version = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return DistributionProvenance(name=name, status="missing")
+    except Exception:
+        # Metadata backends can be extended by the environment.  Their raw
+        # exceptions may contain paths or other local details, so only the
+        # bounded status crosses the provenance boundary.
+        return DistributionProvenance(name=name, status="unavailable")
+    if not isinstance(version, str) or not _SAFE_VERSION.fullmatch(version):
+        return DistributionProvenance(name=name, status="unavailable")
+    return DistributionProvenance(name=name, status="installed", version=version)
+
+
+@lru_cache(maxsize=128)
+def _collect_runtime_provenance_cached(
+    explicit_distributions: tuple[str, ...],
+) -> RuntimeProvenance:
+    names = tuple(sorted(set(CORE_DISTRIBUTIONS).union(explicit_distributions)))
+    return RuntimeProvenance(
+        python_implementation=_safe_runtime_label(platform.python_implementation()),
+        python_version=_safe_runtime_label(platform.python_version()),
+        platform_system=_safe_runtime_label(platform.system()),
+        platform_machine=_safe_runtime_label(platform.machine()),
+        parity_version=_safe_runtime_label(__version__),
+        distributions=tuple(_distribution_provenance(name) for name in names),
+    )
+
+
+def collect_runtime_provenance(
+    record_distributions: Iterable[str] = (),
+) -> RuntimeProvenance:
+    """Collect data-safe provenance for this interpreter.
+
+    Core dataframe dependencies are always included.  Additional target
+    distributions must be named explicitly, avoiding a broad and potentially
+    sensitive inventory of everything installed in the environment.
+    """
+
+    explicit = normalize_distribution_names(record_distributions)
+    return _collect_runtime_provenance_cached(explicit)
+
+
+def diff_runtime(expected: RuntimeProvenance, actual: RuntimeProvenance) -> tuple[str, ...]:
+    """Return stable, value-free paths for runtime-provenance differences."""
+
+    differences: list[str] = []
+    for field in (
+        "python_implementation",
+        "python_version",
+        "platform_system",
+        "platform_machine",
+        "parity_version",
+    ):
+        if getattr(expected, field) != getattr(actual, field):
+            differences.append(field)
+    expected_distributions = {item.name: item for item in expected.distributions}
+    actual_distributions = {item.name: item for item in actual.distributions}
+    for name in sorted(set(expected_distributions).union(actual_distributions)):
+        if expected_distributions.get(name) != actual_distributions.get(name):
+            differences.append(f"distributions.{name}")
+    return tuple(differences)
+
+
+def _canonical_path(path: Path, base_directory: Path | None) -> dict[str, str]:
+    if not path.is_absolute():
+        return {"$path": path.as_posix()}
+    if base_directory is not None:
+        try:
+            relative = path.resolve().relative_to(base_directory.resolve())
+        except (OSError, ValueError):
+            pass
+        else:
+            return {"$path": relative.as_posix()}
+    # External absolute locations are execution details and can contain user
+    # names or workspace identifiers.  Their values are intentionally neither
+    # retained nor hashed.
+    return {"$path": "<external>"}
+
+
+def _canonical_value(
+    value: Any,
+    *,
+    key: str | None = None,
+    base_directory: Path | None = None,
+) -> Any:
+    if key == "artifact_dir":
+        return _OMIT
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="python", by_alias=True)
+    if key == "environment" and isinstance(value, Mapping):
+        return {str(item): "<redacted>" for item in sorted(value, key=str)}
+    if key and _SECRET_KEY.search(key):
+        return "<redacted>"
+    if isinstance(value, Path):
+        return _canonical_path(value, base_directory)
+    if isinstance(value, Mapping):
+        canonical: dict[str, Any] = {}
+        for item_key in sorted(value, key=str):
+            item_name = str(item_key)
+            item = _canonical_value(value[item_key], key=item_name, base_directory=base_directory)
+            if item is not _OMIT:
+                canonical[item_name] = item
+        return canonical
+    if isinstance(value, (set, frozenset)):
+        items = [_canonical_value(item, base_directory=base_directory) for item in value]
+        return sorted(
+            items,
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_canonical_value(item, base_directory=base_directory) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        if math.isnan(value):
+            return {"$float": "nan"}
+        return {"$float": "infinity" if value > 0 else "-infinity"}
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    # Configuration is normally constrained to Pydantic/JSON values.  A type
+    # marker keeps programmatic extensions deterministic without stringifying
+    # an object whose repr could expose data or a path.
+    return {"$type": f"{type(value).__module__}.{type(value).__qualname__}"}
+
+
+def effective_config_sha256(
+    config: BaseModel | Mapping[str, Any],
+    *,
+    selected_cases: set[str] | None = None,
+    base_directory: str | Path | None = None,
+) -> str:
+    """Hash the effective, data-safe verification contract.
+
+    ``artifact_dir`` is excluded because it does not affect observations.
+    Environment and secret-like values are replaced before hashing.  When a
+    base directory is supplied, project-local paths are normalized relative to
+    it; external absolute paths collapse to a non-sensitive marker.
+    """
+
+    raw: Any
+    if isinstance(config, BaseModel):
+        raw = config.model_dump(mode="python", by_alias=True)
+    else:
+        raw = dict(config)
+    if not isinstance(raw, dict):  # pragma: no cover - defensive type narrowing
+        raise TypeError("config must serialize to a mapping")
+
+    if selected_cases is not None:
+        cases = raw.get("cases")
+        if not isinstance(cases, list):
+            raise ValueError("selected cases require a top-level cases list")
+        known = {
+            case.get("name")
+            for case in cases
+            if isinstance(case, Mapping) and isinstance(case.get("name"), str)
+        }
+        unknown = selected_cases - known
+        if unknown:
+            raise ValueError(f"unknown selected case(s): {', '.join(sorted(unknown))}")
+        raw["cases"] = [
+            case
+            for case in cases
+            if isinstance(case, Mapping) and case.get("name") in selected_cases
+        ]
+
+    base = Path(base_directory) if base_directory is not None else None
+    canonical = _canonical_value(raw, base_directory=base)
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+__all__ = [
+    "CORE_DISTRIBUTIONS",
+    "MAX_RECORDED_DISTRIBUTIONS",
+    "DistributionProvenance",
+    "RuntimeProvenance",
+    "collect_runtime_provenance",
+    "diff_runtime",
+    "effective_config_sha256",
+    "normalize_distribution_name",
+    "normalize_distribution_names",
+]

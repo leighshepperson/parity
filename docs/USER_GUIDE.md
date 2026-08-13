@@ -52,6 +52,7 @@ Choose row order, column order, dtype rules and numerical tolerance from the con
 - Use `row_order = "ignore"` only when rows are genuinely a bag. Duplicate rows are still counted.
 - Use `dtype = "strict"` when serialization width, categorical form or nullability matters.
 - Use `dtype = "compatible"` when an integer is an integer regardless of storage width.
+- Use `null_nan_equal = true` only when a null and an IEEE NaN are interchangeable outcomes.
 - Set tolerances from numerical analysis or business limits, not from the first failing example.
 - Exclude a column only when it is explicitly non-semantic, such as a generated trace identifier.
 
@@ -69,6 +70,12 @@ On failure, read the mismatch and diagnosis, then replay the preserved input:
 ```bash
 parity replay .parity/orders/<timestamp>-<hash>
 ```
+
+Current artifacts record the runtime observed inside each worker. Replay first probes both workers
+without importing the configured targets. If Python, Parity, platform or a recorded distribution
+drifted, neither callable runs and replay returns an error. A legacy artifact without provenance is
+still usable, but terminal and Markdown reports mark it unverified rather than claiming an exact
+reproduction.
 
 The minimized Arrow input is the authority. A Parquet convenience copy is also written when its
 format can represent the input schema. A diagnosis is a deterministic hypothesis, not an automatic
@@ -106,14 +113,17 @@ positional argument, followed by `static_args` and `static_kwargs` from the case
 [cases.reference]
 target = "legacy.orders:transform"
 adapter = "pandas"
+pandas_input = "native"
 python = ".venv-legacy/bin/python"
 workdir = "."
+record_distributions = ["orders-lib", "scikit-learn"]
 
 [cases.candidate]
 target = "rewrite.orders:transform"
 adapter = "polars"
 python = ".venv-candidate/bin/python"
 workdir = "."
+record_distributions = ["orders-lib", "scikit-learn"]
 
 static_args = ["GBP"]
 static_kwargs = { include_tax = true }
@@ -123,8 +133,25 @@ static_kwargs = { include_tax = true }
 adapters make reviews and errors clearer. A distinct `python` executable lets Parity compare
 dependency versions or environments without loading both into one interpreter.
 
+Parity records core dataframe dependencies automatically. Add the library under test and any
+dependency whose version is part of the migration contract with `record_distributions`. The two
+sides are collected independently, so a reference environment can legitimately report a different
+version from the candidate environment. Reports never contain environment values, executable
+paths, hostnames or a broad `pip freeze` inventory.
+
+Pandas callables receive Arrow-backed pandas dtypes by default because that preserves the canonical
+input's nullable integers and its distinction between null and IEEE NaN. Set
+`pandas_input = "native"` only when an implementation relies on pandas' conventional
+NumPy/object materialization. Native conversion can widen nullable integers and merge null with
+NaN, and its exact dtypes can change between pandas versions. The selected mode is part of the
+callable contract saved in failure replays; runs made with different modes are not the same input
+contract.
+
 The live Python API has the matching `reference_adapter` and `candidate_adapter` keyword
-arguments. Set them explicitly for unannotated functions that consume different dataframe types:
+arguments, plus `reference_pandas_input` and `candidate_pandas_input`. Set them explicitly for
+unannotated functions that consume different dataframe types or pandas dtype conventions. The
+matching `reference_distributions` and `candidate_distributions` arguments record target package
+versions for live checks:
 
 ```python
 result = parity.verify(
@@ -133,6 +160,9 @@ result = parity.verify(
     fixture=sample,
     reference_adapter="pandas",
     candidate_adapter="polars",
+    reference_pandas_input="native",
+    reference_distributions=["orders-lib"],
+    candidate_distributions=["orders-lib"],
 )
 ```
 

@@ -21,10 +21,9 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          import tomllib
-          from pathlib import Path
+          import runpy
 
-          package_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          package_version = runpy.run_path("src/parity/_version.py")["__version__"]
           expected_tag = f"v{package_version}"
           actual_tag = os.environ["RELEASE_TAG"]
           if actual_tag != expected_tag:

@@ -1,0 +1,18 @@
+# Lowest mutually validated versions used by this study on CPython 3.11.
+skrub @ git+https://github.com/skrub-data/skrub.git@55dc7f45e140ccb76e768e3e4b4193f4eac3d5aa
+click==8.2.1
+hypothesis==6.130.0
+jinja2==3.1.2
+matplotlib==3.6.3
+numpy==1.26.0
+pandas==2.1.0
+polars==1.5.0
+psutil==5.9.8
+pyarrow==16.0.0
+pydantic==2.7.0
+pydot==2.0.0
+requests==2.27.1
+rich==13.7.0
+scikit-learn==1.4.2
+scipy==1.10.1
+typer==0.16.1
