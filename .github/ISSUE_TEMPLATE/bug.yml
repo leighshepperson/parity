@@ -1,0 +1,39 @@
+name: Bug report
+description: Report reproducible incorrect behaviour without sharing sensitive data
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not upload private source, customer data, credentials or unredacted artifacts.
+  - type: input
+    id: version
+    attributes:
+      label: Parity version
+      placeholder: Output of `parity version`
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction
+      description: Provide the smallest self-contained public/synthetic example.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Environment
+      description: Paste `parity doctor --json` after checking that paths are safe to share.

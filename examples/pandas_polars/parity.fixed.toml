@@ -1,0 +1,152 @@
+# Passing counterparts to the public fault corpus.
+version = 1
+artifact_dir = "../../.parity/fixed-corpus"
+fail_fast = false
+
+[[cases]]
+name = "null-join-fixed"
+fixture = "fixtures/null_join.parquet"
+[cases.reference]
+target = "faults:join_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "corrected:join_fixed"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 6
+[[cases.schema.columns]]
+name = "customer_id"
+dtype = "int64"
+nullable = true
+minimum = 0
+maximum = 20
+examples = [1, 2]
+[cases.comparison]
+row_order = "ignore"
+dtype = "compatible"
+[cases.generation]
+max_examples = 3
+seed = 201
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "groupby-null-fixed"
+fixture = "fixtures/groupby_null.parquet"
+[cases.reference]
+target = "faults:groupby_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "corrected:groupby_fixed"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 6
+[[cases.schema.columns]]
+name = "region"
+dtype = "string"
+nullable = true
+categories = ["north", "south"]
+[[cases.schema.columns]]
+name = "amount"
+dtype = "float64"
+nullable = true
+minimum = -100.0
+maximum = 100.0
+examples = [0.0, -0.0, 5.0]
+[cases.comparison]
+row_order = "ignore"
+dtype = "compatible"
+[cases.generation]
+max_examples = 3
+seed = 202
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "timezone-day-fixed"
+fixture = "fixtures/timezone_day.parquet"
+[cases.reference]
+target = "faults:timezone_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "corrected:timezone_fixed"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 6
+[[cases.schema.columns]]
+name = "event_at"
+dtype = "string"
+nullable = false
+categories = ["2026-01-01T01:30:00Z", "2026-06-01T03:30:00Z", "2026-06-01T18:00:00Z"]
+[cases.comparison]
+dtype = "compatible"
+[cases.generation]
+max_examples = 3
+seed = 203
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "dtype-width-fixed"
+fixture = "fixtures/dtype_width.parquet"
+[cases.reference]
+target = "faults:dtype_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "corrected:dtype_fixed"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 6
+[[cases.schema.columns]]
+name = "quantity"
+dtype = "int64"
+nullable = true
+minimum = -256
+maximum = 512
+examples = [-129, -128, 127, 128, 255]
+[cases.comparison]
+dtype = "compatible"
+[cases.generation]
+max_examples = 3
+seed = 204
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "stable-order-fixed"
+fixture = "fixtures/stable_order.parquet"
+[cases.reference]
+target = "faults:ordering_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "corrected:ordering_fixed"
+adapter = "polars"
+[cases.schema]
+min_rows = 2
+max_rows = 12
+[[cases.schema.columns]]
+name = "record_id"
+dtype = "int64"
+nullable = false
+unique = true
+minimum = 0
+maximum = 1000
+[[cases.schema.columns]]
+name = "priority"
+dtype = "int64"
+nullable = false
+minimum = 0
+maximum = 2
+examples = [0, 1, 2]
+[cases.comparison]
+row_order = "strict"
+dtype = "compatible"
+[cases.generation]
+max_examples = 3
+seed = 205
+[cases.performance]
+enabled = false

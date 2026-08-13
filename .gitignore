@@ -1,0 +1,16 @@
+.coverage
+coverage.xml
+htmlcov/
+coverage.xml
+.hypothesis/
+.mypy_cache/
+.parity/
+.parity-pyjanitor-final/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+build/
+dist/
+*.egg-info/
+*.py[cod]

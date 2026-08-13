@@ -1,0 +1,159 @@
+name: Parity semantic verification
+description: Compare reference and candidate computations, preserve counterexamples, and gate CI
+author: Leigh Shepperson
+
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  config:
+    description: Path to parity.toml, relative to the caller's repository
+    required: false
+    default: parity.toml
+  cases:
+    description: Optional comma-separated case names
+    required: false
+    default: ""
+  tags:
+    description: Optional comma-separated tags
+    required: false
+    default: ""
+  max-examples:
+    description: Optional generated-example override
+    required: false
+    default: ""
+  performance:
+    description: Run configured performance checks (true or false)
+    required: false
+    default: "true"
+  python-version:
+    description: Python version used to run Parity
+    required: false
+    default: "3.12"
+  parity-version:
+    description: Optional parity-check release; blank installs the same source revision as this action
+    required: false
+    default: ""
+  artifact-path:
+    description: Report and counterexample path to upload
+    required: false
+    default: .parity
+  upload-artifact:
+    description: Upload reports and raw counterexamples even when verification fails (opt in)
+    required: false
+    default: "false"
+  artifact-name:
+    description: GitHub artifact name
+    required: false
+    default: parity-report
+  retention-days:
+    description: GitHub artifact retention in days
+    required: false
+    default: "14"
+
+outputs:
+  exit-code:
+    description: 0 passed, 1 differed, 2 configuration or execution error
+    value: ${{ steps.run.outputs.exit-code }}
+  result-json:
+    description: Path to the redacted JSON report
+    value: ${{ steps.run.outputs.result-json }}
+  junit-xml:
+    description: Path to the JUnit report
+    value: ${{ steps.run.outputs.junit-xml }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+
+    - name: Install Parity
+      shell: bash
+      env:
+        PARITY_ACTION_PATH: ${{ github.action_path }}
+        PARITY_VERSION: ${{ inputs.parity-version }}
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+        if [[ -z "$PARITY_VERSION" ]]; then
+          python -m pip install "$PARITY_ACTION_PATH"
+        else
+          if [[ ! "$PARITY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9.-]+)?$ ]]; then
+            echo "Invalid parity-version: $PARITY_VERSION" >&2
+            exit 2
+          fi
+          python -m pip install "parity-check==$PARITY_VERSION"
+        fi
+
+    - name: Run semantic verification
+      id: run
+      shell: bash
+      env:
+        PARITY_CONFIG: ${{ inputs.config }}
+        PARITY_CASES: ${{ inputs.cases }}
+        PARITY_TAGS: ${{ inputs.tags }}
+        PARITY_MAX_EXAMPLES: ${{ inputs.max-examples }}
+        PARITY_PERFORMANCE: ${{ inputs.performance }}
+        PARITY_ARTIFACT_PATH: ${{ inputs.artifact-path }}
+      run: |
+        set -uo pipefail
+        mkdir -p "$PARITY_ARTIFACT_PATH"
+        result_json="$PARITY_ARTIFACT_PATH/report.json"
+        junit_xml="$PARITY_ARTIFACT_PATH/junit.xml"
+        markdown="$PARITY_ARTIFACT_PATH/summary.md"
+        command=(parity check --config "$PARITY_CONFIG" --json "$result_json" --junit "$junit_xml" --markdown "$markdown")
+
+        IFS=',' read -ra selected_cases <<< "$PARITY_CASES"
+        for item in "${selected_cases[@]}"; do
+          item="${item#"${item%%[![:space:]]*}"}"
+          item="${item%"${item##*[![:space:]]}"}"
+          [[ -n "$item" ]] && command+=(--case "$item")
+        done
+
+        IFS=',' read -ra selected_tags <<< "$PARITY_TAGS"
+        for item in "${selected_tags[@]}"; do
+          item="${item#"${item%%[![:space:]]*}"}"
+          item="${item%"${item##*[![:space:]]}"}"
+          [[ -n "$item" ]] && command+=(--tag "$item")
+        done
+
+        [[ -n "$PARITY_MAX_EXAMPLES" ]] && command+=(--max-examples "$PARITY_MAX_EXAMPLES")
+        if [[ "$PARITY_PERFORMANCE" == "false" ]]; then
+          command+=(--no-performance)
+        elif [[ "$PARITY_PERFORMANCE" != "true" ]]; then
+          echo "performance must be true or false" >&2
+          status=2
+          echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+          echo "result-json=$result_json" >> "$GITHUB_OUTPUT"
+          echo "junit-xml=$junit_xml" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        "${command[@]}"
+        status=$?
+        echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+        echo "result-json=$result_json" >> "$GITHUB_OUTPUT"
+        echo "junit-xml=$junit_xml" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - name: Upload Parity evidence
+      if: ${{ always() && inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.artifact-path }}
+        if-no-files-found: warn
+        include-hidden-files: true
+        retention-days: ${{ inputs.retention-days }}
+
+    - name: Enforce result
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PARITY_EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+      run: exit "${PARITY_EXIT_CODE:-2}"
