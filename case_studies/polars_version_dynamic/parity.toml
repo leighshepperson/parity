@@ -1,0 +1,37 @@
+version = 1
+artifact_dir = ".parity-polars-versions"
+fail_fast = false
+
+[[cases]]
+name = "group-by-dynamic-default-offset"
+fixture = "fixtures/boundary.json"
+tags = ["cross-version", "finding", "polars", "version-drift"]
+
+[cases.reference]
+target = "polars_version_parity:dynamic_window"
+adapter = "polars"
+python = "environments/reference/.venv/bin/python"
+record_distributions = ["numpy", "polars", "pyarrow"]
+
+[cases.candidate]
+target = "polars_version_parity:dynamic_window"
+adapter = "polars"
+python = "environments/candidate/.venv/bin/python"
+record_distributions = ["numpy", "polars", "pyarrow"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+max_findings = 1
+stability_repeats = 2
+seed = 20260814
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false

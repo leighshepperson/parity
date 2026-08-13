@@ -1,0 +1,9 @@
+{
+  "columns": [
+    "segment",
+    "value"
+  ],
+  "outcome": "returned",
+  "pandas_version": "2.3.3",
+  "row_count": 2
+}
