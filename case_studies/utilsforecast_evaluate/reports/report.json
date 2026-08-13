@@ -3,7 +3,7 @@
     {
       "deterministic_examples": 1,
       "diagnoses": [],
-      "elapsed_seconds": 0.613558113000181,
+      "elapsed_seconds": 0.7919493789995613,
       "examples_run": 2,
       "failures": [],
       "findings_discovered": 0,
@@ -41,7 +41,7 @@
             {
               "name": "pyarrow",
               "status": "installed",
-              "version": "23.0.0"
+              "version": "23.0.1"
             },
             {
               "name": "utilsforecast",
@@ -85,7 +85,7 @@
             {
               "name": "pyarrow",
               "status": "installed",
-              "version": "23.0.0"
+              "version": "23.0.1"
             },
             {
               "name": "utilsforecast",
@@ -104,7 +104,7 @@
       "status": "passed"
     }
   ],
-  "elapsed_seconds": 0.6669938889999685,
+  "elapsed_seconds": 0.8703974999989441,
   "parity_version": "0.7.0",
   "provenance": {
     "config_sha256": "ddcc751433faf6d77fb0d8a43e2780c11a672d9e974ddf5a99b45ea2333e02a0",
@@ -133,7 +133,7 @@
         {
           "name": "pyarrow",
           "status": "installed",
-          "version": "23.0.0"
+          "version": "23.0.1"
         }
       ],
       "parity_version": "0.7.0",

@@ -62,7 +62,7 @@ def test_utilsforecast_study_reproduction_is_exact_and_data_safe() -> None:
         "numpy==2.3.5",
         "pandas==2.3.3",
         "polars==1.31.0",
-        "pyarrow==23.0.0",
+        "pyarrow==23.0.1",
     ):
         assert pin in requirements
 
@@ -97,7 +97,7 @@ def test_utilsforecast_live_report_is_a_clean_pinned_pass() -> None:
             "numpy": "2.3.5",
             "pandas": "2.3.3",
             "polars": "1.31.0",
-            "pyarrow": "23.0.0",
+            "pyarrow": "23.0.1",
             "utilsforecast": "0.2.16",
         }
         assert all(versions[name] == version for name, version in expected.items())
