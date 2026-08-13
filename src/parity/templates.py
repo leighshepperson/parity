@@ -78,6 +78,7 @@ examples = [0.0, -0.0, 0.1]
 [cases.comparison]
 column_order = "strict"
 row_order = "ignore"
+row_keys = []
 dtype = "compatible"
 names = "strict"
 null_equal = true

@@ -7,6 +7,7 @@ from parity.models import (
     CallableSpec,
     CaseConfig,
     ColumnSchema,
+    ComparisonPolicy,
     FrameSchema,
     GenerationConfig,
     InputBundle,
@@ -95,6 +96,63 @@ def test_generation_stability_repeats_is_bounded() -> None:
         GenerationConfig(stability_repeats=0)
     with pytest.raises(ValidationError, match="less than or equal to 10"):
         GenerationConfig(stability_repeats=11)
+
+
+def test_keyed_row_alignment_contract_is_explicit_and_backward_compatible() -> None:
+    assert ComparisonPolicy().row_order == "strict"
+    assert ComparisonPolicy().row_keys == []
+    assert ComparisonPolicy(row_order="keyed", row_keys=["account", "date"]).row_keys == [
+        "account",
+        "date",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        ({"row_order": "keyed"}, "requires at least one row key"),
+        ({"row_keys": ["id"]}, "only be used with row_order='keyed'"),
+        (
+            {"row_order": "keyed", "row_keys": ["id", "id"]},
+            "row_keys must contain unique",
+        ),
+        (
+            {
+                "row_order": "keyed",
+                "row_keys": ["ID", "id"],
+                "names": "case_insensitive",
+            },
+            "row_keys must contain unique",
+        ),
+        (
+            {"row_order": "keyed", "row_keys": ["id"], "ignored_columns": ["id"]},
+            "cannot also be ignored",
+        ),
+        (
+            {
+                "row_order": "keyed",
+                "row_keys": ["ID"],
+                "ignored_columns": ["id"],
+                "names": "case_insensitive",
+            },
+            "cannot also be ignored",
+        ),
+        (
+            {
+                "row_order": "keyed",
+                "row_keys": ["id"],
+                "null_nan_equal": True,
+                "nan_equal": False,
+            },
+            "requires null_equal and nan_equal",
+        ),
+    ],
+)
+def test_keyed_row_alignment_rejects_ambiguous_policies(
+    policy: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        ComparisonPolicy.model_validate(policy)
 
 
 def test_frame_constraint_models_are_exported_from_public_package() -> None:

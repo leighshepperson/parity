@@ -18,6 +18,7 @@ def test_diagnoses_missing_value_dtype_difference() -> None:
 def test_diagnoses_unmatched_row_content_without_claiming_order() -> None:
     diagnoses = diagnose([Mismatch(kind=MismatchKind.ROW, message="row 0 differs", path="[0]")])
     assert [item.code for item in diagnoses] == ["row-content"]
+    assert "keyed or order-insensitive" in diagnoses[0].evidence[0]
 
 
 def test_diagnoses_explicit_row_order_evidence() -> None:

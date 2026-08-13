@@ -185,7 +185,9 @@ def _canonical_series(value: pd.Series | pl.Series) -> CanonicalSeries:
 def canonicalize(value: Any) -> Any:
     """Convert supported outputs to library-neutral Python structures."""
 
-    if isinstance(value, ExceptionInfo):
+    # Canonical values can re-enter recursively through mappings and sequences.
+    # Treat them as fixed points instead of expanding their dataclass fields.
+    if isinstance(value, (CanonicalFrame, CanonicalSeries, ExceptionInfo)):
         return value
     if isinstance(value, BaseException):
         return ExceptionInfo.from_exception(value)

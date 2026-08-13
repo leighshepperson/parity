@@ -1,0 +1,10 @@
+# utilsforecast 0.2.16 source, pinned to the exact upstream release commit.
+utilsforecast @ git+https://github.com/Nixtla/utilsforecast.git@ce2c7ddc7b71228ece21edf72ef9567d7467c0ab
+
+# Versions recorded by that commit's uv.lock for CPython 3.11+.
+narwhals==2.15.0
+numpy==2.3.5
+packaging==26.0
+pandas==2.3.3
+polars==1.31.0
+pyarrow==23.0.0

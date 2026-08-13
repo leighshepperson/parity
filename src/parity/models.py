@@ -397,7 +397,8 @@ class ComparisonPolicy(StrictModel):
     """Explicit definition of semantic equivalence."""
 
     column_order: Literal["strict", "ignore"] = "strict"
-    row_order: Literal["strict", "ignore"] = "strict"
+    row_order: Literal["strict", "ignore", "keyed"] = "strict"
+    row_keys: list[str] = Field(default_factory=list)
     dtype: Literal["strict", "compatible", "ignore"] = "compatible"
     names: Literal["strict", "case_insensitive"] = "strict"
     null_equal: bool = True
@@ -410,6 +411,36 @@ class ComparisonPolicy(StrictModel):
     atol: float = Field(default=0.0, ge=0)
     datetime_tolerance_ns: int = Field(default=0, ge=0)
     ignored_columns: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_row_alignment(self) -> ComparisonPolicy:
+        if any(not name for name in self.row_keys):
+            raise ValueError("row_keys cannot contain empty column names")
+        normalized_keys = [
+            name if self.names == "strict" else name.casefold() for name in self.row_keys
+        ]
+        if len(normalized_keys) != len(set(normalized_keys)):
+            raise ValueError("row_keys must contain unique column names")
+        if self.row_order == "keyed" and not self.row_keys:
+            raise ValueError("row_order='keyed' requires at least one row key")
+        if self.row_order != "keyed" and self.row_keys:
+            raise ValueError("row_keys can only be used with row_order='keyed'")
+
+        normalized_ignored = {
+            name if self.names == "strict" else name.casefold() for name in self.ignored_columns
+        }
+        overlap = sorted(set(normalized_keys) & normalized_ignored)
+        if overlap:
+            raise ValueError("row_keys cannot also be ignored columns")
+        if (
+            self.row_order == "keyed"
+            and self.null_nan_equal
+            and not (self.null_equal and self.nan_equal)
+        ):
+            raise ValueError(
+                "keyed null_nan_equal requires null_equal and nan_equal so keys are reflexive"
+            )
+        return self
 
 
 class GenerationConfig(StrictModel):

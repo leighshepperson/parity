@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import fractions
 import hashlib
 import json
 import math
 import re
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
@@ -80,6 +82,12 @@ _SIGNATURE_MESSAGE_CODES = {
     "row counts differ": "row-count",
     "reference row has no equivalent candidate row": "missing-candidate-row",
     "candidate contains an unmatched row": "unexpected-candidate-row",
+    "configured row key columns are unavailable": "row-key-columns",
+    "row keys are not unique": "duplicate-row-key",
+    "row key is not alignable under the comparison policy": "nonreflexive-row-key",
+    "reference row key has no candidate row": "missing-candidate-key",
+    "candidate row key has no reference row": "unexpected-candidate-key",
+    "row key contains a non-scalar value": "unsupported-row-key",
     "input mutation behaviour differs": "input-mutation",
 }
 _INDEXED_PATH = re.compile(r"\[(?:-?\d+|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")\]")
@@ -170,6 +178,14 @@ def _datetime_ns(value: Any) -> int | None:
         normalized = value.astype("datetime64[ns]").astype(np.int64)
         return int(cast(int, normalized))
     if isinstance(value, dt.datetime):
+        # pandas.Timestamp subclasses datetime but can carry nanoseconds that
+        # Python's datetime fields cannot represent.
+        try:
+            exact_value = getattr(value, "value", None)
+        except (OverflowError, ValueError):
+            exact_value = None
+        if isinstance(exact_value, (int, np.integer)):
+            return int(exact_value)
         datetime_value = value
         if datetime_value.tzinfo is not None:
             datetime_value = datetime_value.astimezone(dt.UTC).replace(tzinfo=None)
@@ -190,6 +206,13 @@ def _duration_ns(value: Any) -> int | None:
         normalized = value.astype("timedelta64[ns]").astype(np.int64)
         return int(cast(int, normalized))
     if isinstance(value, dt.timedelta):
+        # pandas.Timedelta has the same sub-microsecond issue as Timestamp.
+        try:
+            exact_value = getattr(value, "value", None)
+        except (OverflowError, ValueError):
+            exact_value = None
+        if isinstance(exact_value, (int, np.integer)):
+            return int(exact_value)
         duration_value = value
         return (
             duration_value.days * 86_400_000_000_000
@@ -588,6 +611,305 @@ def _row_equal(left: tuple[Any, ...], right: tuple[Any, ...], policy: Comparison
     )
 
 
+def _maximum_row_matching(
+    left_rows: tuple[tuple[Any, ...], ...],
+    right_rows: tuple[tuple[Any, ...], ...],
+    policy: ComparisonPolicy,
+) -> tuple[dict[int, int], dict[int, int]]:
+    """Return a deterministic maximum bipartite matching of equivalent rows."""
+
+    def bucket_key(row: tuple[Any, ...]) -> tuple[Any, ...]:
+        # Exact policy-aware identities make common identical and reordered
+        # frames linear. Every proposed pair is still verified by _row_equal;
+        # a bucket collision or tolerance-only match therefore cannot change
+        # semantics and merely falls through to the complete matcher below.
+        return tuple(
+            ("scalar", token)
+            if (token := _key_token(value, policy)) is not None
+            else ("fallback", _stable_mapping_key(value))
+            for value in row
+        )
+
+    left_match: dict[int, int] = {}
+    right_match: dict[int, int] = {}
+    buckets: dict[tuple[Any, ...], deque[int]] = {}
+    for right_index, right_row in enumerate(right_rows):
+        buckets.setdefault(bucket_key(right_row), deque()).append(right_index)
+    for left_index, left_row in enumerate(left_rows):
+        candidates = buckets.get(bucket_key(left_row))
+        if not candidates:
+            continue
+        right_index = candidates[0]
+        if _row_equal(left_row, right_rows[right_index], policy):
+            candidates.popleft()
+            left_match[left_index] = right_index
+            right_match[right_index] = left_index
+
+    if len(left_match) == min(len(left_rows), len(right_rows)):
+        return left_match, right_match
+
+    adjacency_cache: dict[int, list[int]] = {}
+
+    def adjacency(left_index: int) -> list[int]:
+        edges = adjacency_cache.get(left_index)
+        if edges is None:
+            left_row = left_rows[left_index]
+            edges = [
+                right_index
+                for right_index, right_row in enumerate(right_rows)
+                if _row_equal(left_row, right_row, policy)
+            ]
+            adjacency_cache[left_index] = edges
+        return edges
+
+    # Deterministic augmenting paths avoid greedy false negatives from
+    # overlapping tolerance windows. Breadth-first reconstruction is iterative,
+    # so large duplicate groups cannot exhaust Python's recursion limit. The
+    # deliberately unkeyed fallback can materialize O(left*right) edges in its
+    # worst ambiguous case; keyed alignment is the scalable linear option.
+    for root in range(len(left_rows)):
+        if root in left_match:
+            continue
+        queue = deque([root])
+        # A reached left vertex records the matched right edge that led to it;
+        # the root has no parent. Each right records its preceding left edge.
+        parent_left: dict[int, int | None] = {root: None}
+        parent_right: dict[int, int] = {}
+        free_right: int | None = None
+        while queue and free_right is None:
+            left_index = queue.popleft()
+            for right_index in adjacency(left_index):
+                if right_index in parent_right:
+                    continue
+                parent_right[right_index] = left_index
+                matched_left = right_match.get(right_index)
+                if matched_left is None:
+                    free_right = right_index
+                    break
+                if matched_left not in parent_left:
+                    parent_left[matched_left] = right_index
+                    queue.append(matched_left)
+        if free_right is None:
+            continue
+        right_index = free_right
+        while True:
+            left_index = parent_right[right_index]
+            previous_right = parent_left[left_index]
+            left_match[left_index] = right_index
+            right_match[right_index] = left_index
+            if previous_right is None:
+                break
+            right_index = previous_right
+    return left_match, right_match
+
+
+def _numeric_key(value: Any) -> tuple[str, int, int] | None:
+    """Return an exact cross-numeric identity without lossy float conversion."""
+
+    if isinstance(value, bool) or is_nan(value):
+        return None
+    if isinstance(value, (int, np.integer)):
+        fraction = fractions.Fraction(int(value), 1)
+    elif isinstance(value, (float, np.floating)):
+        try:
+            numerator, denominator = float(value).as_integer_ratio()
+        except (OverflowError, ValueError):
+            return None
+        fraction = fractions.Fraction(numerator, denominator)
+    elif isinstance(value, decimal.Decimal):
+        if not value.is_finite():
+            return None
+        fraction = fractions.Fraction(value)
+    else:
+        return None
+    return "number", fraction.numerator, fraction.denominator
+
+
+def _key_token(value: Any, policy: ComparisonPolicy) -> tuple[Any, ...] | None:
+    """Return an exact, hashable identity for one supported scalar key cell."""
+
+    if is_null(value):
+        if not policy.null_equal:
+            return None
+        return ("missing",) if policy.null_nan_equal else ("null",)
+    if is_nan(value):
+        if not policy.nan_equal:
+            return None
+        return ("missing",) if policy.null_nan_equal else ("nan",)
+    if isinstance(value, bool):
+        return "bool", value
+    # NumPy datetime and duration scalars are also np.number instances, so
+    # preserve their exact temporal identity before considering numeric keys.
+    datetime_value = _datetime_ns(value)
+    if datetime_value is not None:
+        return "datetime", datetime_value
+    duration_value = _duration_ns(value)
+    if duration_value is not None:
+        return "duration", duration_value
+    if isinstance(value, decimal.Decimal) and value.is_infinite():
+        return "number-infinity", "negative" if value.is_signed() else "positive"
+    if isinstance(value, (float, np.floating)) and math.isinf(float(value)):
+        return "number-infinity", "negative" if float(value) < 0 else "positive"
+    if numeric := _numeric_key(value):
+        if numeric[1] == 0 and not policy.signed_zero_equal:
+            try:
+                sign = math.copysign(1.0, float(value))
+            except (TypeError, ValueError, OverflowError):
+                sign = 1.0
+            return *numeric, "negative" if sign < 0 else "positive"
+        return numeric
+    if isinstance(value, dt.date):
+        return "date", value.toordinal()
+    if isinstance(value, dt.time):
+        return "time", value.isoformat()
+    if isinstance(value, str):
+        return "string", value
+    if isinstance(value, bytes):
+        return "bytes", value
+    if isinstance(
+        value,
+        (tuple, list, dict, set, frozenset, Mapping, CanonicalFrame, CanonicalSeries),
+    ):
+        return None
+    try:
+        hash(value)
+    except (TypeError, ValueError):
+        return None
+    return type(value).__module__, type(value).__qualname__, value
+
+
+def _keyed_frame_mismatches(
+    left_rows: tuple[tuple[Any, ...], ...],
+    right_rows: tuple[tuple[Any, ...], ...],
+    left_columns: list[Any],
+    policy: ComparisonPolicy,
+    path: str,
+    max_mismatches: int,
+) -> list[Mismatch]:
+    """Align unique rows by exact composite key, then compare their cells."""
+
+    column_keys = [_name_key(column.name, policy) for column in left_columns]
+    configured_keys = [_name_key(name, policy) for name in policy.row_keys]
+    if any(key not in column_keys for key in configured_keys):
+        return [
+            _mismatch(
+                MismatchKind.COLUMN,
+                "configured row key columns are unavailable",
+                path,
+                key_columns=policy.row_keys,
+            )
+        ]
+    key_indexes = tuple(column_keys.index(key) for key in configured_keys)
+
+    def side_path(side: str, row_index: int) -> str:
+        return f"${side}[{row_index}]" if path == "$" else f"{path}.{side}[{row_index}]"
+
+    def build_index(
+        rows: tuple[tuple[Any, ...], ...], side: str
+    ) -> tuple[dict[tuple[Any, ...], int], list[Mismatch]]:
+        index: dict[tuple[Any, ...], int] = {}
+        failures: list[Mismatch] = []
+        for row_index, row in enumerate(rows):
+            raw_key = tuple(row[column_index] for column_index in key_indexes)
+            tokens = tuple(_key_token(value, policy) for value in raw_key)
+            if any(token is None for token in tokens):
+                nested = any(
+                    isinstance(value, (tuple, list, dict, set, frozenset, Mapping))
+                    for value in raw_key
+                )
+                failures.append(
+                    _mismatch(
+                        MismatchKind.ROW,
+                        (
+                            "row key contains a non-scalar value"
+                            if nested
+                            else "row key is not alignable under the comparison policy"
+                        ),
+                        side_path(side, row_index),
+                        key_columns=policy.row_keys,
+                        row_index=row_index,
+                        side=side,
+                    )
+                )
+                continue
+            identity = cast(tuple[Any, ...], tokens)
+            previous = index.get(identity)
+            if previous is not None:
+                failures.append(
+                    _mismatch(
+                        MismatchKind.ROW,
+                        "row keys are not unique",
+                        side_path(side, row_index),
+                        key_columns=policy.row_keys,
+                        first_row=previous,
+                        duplicate_row=row_index,
+                        side=side,
+                    )
+                )
+            else:
+                index[identity] = row_index
+        return index, failures
+
+    left_by_key, left_failures = build_index(left_rows, "reference")
+    right_by_key, right_failures = build_index(right_rows, "candidate")
+    structural = [*left_failures, *right_failures]
+    if structural:
+        return structural[:max_mismatches]
+
+    mismatches: list[Mismatch] = []
+    for identity, left_index in left_by_key.items():
+        right_index = right_by_key.get(identity)
+        if right_index is None:
+            mismatches.append(
+                _mismatch(
+                    MismatchKind.ROW,
+                    "reference row key has no candidate row",
+                    f"{path}[{left_index}]",
+                    key_columns=policy.row_keys,
+                    reference_row=left_index,
+                )
+            )
+            if len(mismatches) >= max_mismatches:
+                return mismatches
+            continue
+        left_row = left_rows[left_index]
+        right_row = right_rows[right_index]
+        for column_index, (left, right) in enumerate(zip(left_row, right_row, strict=True)):
+            cell_mismatches = _value_mismatches(
+                left,
+                right,
+                policy,
+                f"{path}[{left_index}].{left_columns[column_index].name}",
+                max_mismatches=max_mismatches - len(mismatches),
+            )
+            for mismatch in cell_mismatches:
+                mismatch.details.update(
+                    {
+                        "alignment": "keyed",
+                        "key_columns": list(policy.row_keys),
+                        "reference_row": left_index,
+                        "candidate_row": right_index,
+                    }
+                )
+            mismatches.extend(cell_mismatches)
+            if len(mismatches) >= max_mismatches:
+                return mismatches
+    for identity, right_index in right_by_key.items():
+        if identity not in left_by_key:
+            mismatches.append(
+                _mismatch(
+                    MismatchKind.ROW,
+                    "candidate row key has no reference row",
+                    side_path("candidate", right_index),
+                    key_columns=policy.row_keys,
+                    candidate_row=right_index,
+                )
+            )
+            if len(mismatches) >= max_mismatches:
+                break
+    return mismatches[:max_mismatches]
+
+
 def _frame_mismatches(
     reference: CanonicalFrame,
     candidate: CanonicalFrame,
@@ -611,6 +933,18 @@ def _frame_mismatches(
                 [column.name for column in right_columns],
             )
         ]
+
+    if policy.row_order == "keyed":
+        configured_keys = {_name_key(name, policy) for name in policy.row_keys}
+        if not configured_keys <= set(left_keys) or not configured_keys <= set(right_keys):
+            return [
+                _mismatch(
+                    MismatchKind.COLUMN,
+                    "configured row key columns are unavailable",
+                    path,
+                    key_columns=policy.row_keys,
+                )
+            ]
 
     if set(left_keys) != set(right_keys):
         mismatches.append(
@@ -649,7 +983,9 @@ def _frame_mismatches(
     # this reports useful cell paths even when a prior order mismatch exists.
     right_by_key = {_name_key(column.name, policy): column for column in right_columns}
     right_columns = [right_by_key[key] for key in left_keys]
-    if reference.height != candidate.height:
+    # Keyed alignment can state exactly which identities are missing; a generic
+    # shape mismatch would hide that evidence under small mismatch caps.
+    if reference.height != candidate.height and policy.row_order != "keyed":
         mismatches.append(
             _mismatch(
                 MismatchKind.SHAPE,
@@ -673,17 +1009,11 @@ def _frame_mismatches(
         tuple(column.values[index] for column in right_columns) for index in range(candidate.height)
     )
     if policy.row_order == "ignore":
-        unmatched = list(enumerate(right_rows))
+        # Complete the semantic decision before applying the output cap. A
+        # contract-level mismatch above must not change whether rows can pair.
+        left_match, right_match = _maximum_row_matching(left_rows, right_rows, policy)
         for left_index, left_row in enumerate(left_rows):
-            match_position = next(
-                (
-                    position
-                    for position, (_, right_row) in enumerate(unmatched)
-                    if _row_equal(left_row, right_row, policy)
-                ),
-                None,
-            )
-            if match_position is None:
+            if left_index not in left_match:
                 mismatches.append(
                     _mismatch(
                         MismatchKind.ROW,
@@ -695,9 +1025,9 @@ def _frame_mismatches(
                 )
                 if len(mismatches) >= max_mismatches:
                     break
-            else:
-                unmatched.pop(match_position)
-        for right_index, right_row in unmatched:
+        for right_index, right_row in enumerate(right_rows):
+            if right_index in right_match:
+                continue
             if len(mismatches) >= max_mismatches:
                 break
             mismatches.append(
@@ -709,6 +1039,18 @@ def _frame_mismatches(
                     right_row,
                 )
             )
+        return mismatches[:max_mismatches]
+
+    if policy.row_order == "keyed":
+        keyed_mismatches = _keyed_frame_mismatches(
+            left_rows,
+            right_rows,
+            left_columns,
+            policy,
+            path,
+            max_mismatches,
+        )
+        mismatches.extend(keyed_mismatches[: max_mismatches - len(mismatches)])
         return mismatches[:max_mismatches]
 
     for row_index, (left_row, right_row) in enumerate(zip(left_rows, right_rows, strict=False)):

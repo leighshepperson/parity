@@ -1,0 +1,39 @@
+version = 1
+artifact_dir = ".parity-utilsforecast"
+fail_fast = false
+
+[[cases]]
+name = "evaluate-mae-rmse"
+fixture = "fixtures/forecast.json"
+tags = ["control", "external", "keyed-output", "pandas", "polars"]
+
+[cases.reference]
+target = "utilsforecast_parity:pandas_evaluate"
+adapter = "pandas"
+pandas_input = "native"
+record_distributions = ["utilsforecast", "narwhals", "pandas", "polars"]
+
+[cases.candidate]
+target = "utilsforecast_parity:polars_evaluate"
+adapter = "polars"
+record_distributions = ["utilsforecast", "narwhals", "pandas", "polars"]
+
+[cases.comparison]
+row_order = "keyed"
+row_keys = ["unique_id", "metric"]
+column_order = "strict"
+dtype = "compatible"
+rtol = 1e-12
+atol = 1e-12
+
+[cases.generation]
+max_examples = 1
+max_findings = 1
+stability_repeats = 2
+seed = 20260813
+adversarial_examples = false
+shrink = false
+derandomize = true
+
+[cases.performance]
+enabled = false

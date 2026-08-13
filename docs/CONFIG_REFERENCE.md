@@ -185,7 +185,8 @@ must satisfy frame constraints even when `adversarial_examples = false`.
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
 | `column_order` | `strict` / `ignore` | `strict` | Whether output column position is semantic. |
-| `row_order` | `strict` / `ignore` | `strict` | Whether output row position is semantic. |
+| `row_order` | `strict` / `ignore` / `keyed` | `strict` | Positional, bag-like or key-aligned output rows. |
+| `row_keys` | string array | `[]` | Ordered composite output key; non-empty for `keyed`, empty otherwise. |
 | `dtype` | `strict` / `compatible` / `ignore` | `compatible` | Concrete, family-level or no dtype check. |
 | `names` | `strict` / `case_insensitive` | `strict` | Column-name comparison. |
 | `null_equal` | boolean | `true` | Treat nulls at matching positions as equal. |
@@ -201,6 +202,26 @@ must satisfy frame constraints even when `adversarial_examples = false`.
 
 For finite numbers, equivalence follows the configured absolute/relative tolerance. Order-insensitive
 comparison preserves multiplicity: two identical rows are not the same as one.
+
+Use keyed comparison when output order is irrelevant but each row has a unique business key:
+
+```toml
+[cases.comparison]
+row_order = "keyed"
+row_keys = ["account_id", "event_id"]
+dtype = "compatible"
+```
+
+`row_keys` is ordered because it defines a composite identity. Every named key column must be
+present on both outputs, must not be ignored, and the composite key must be unique on each side.
+Column lookup follows the configured `names` policy; ambiguous names fail closed. Parity aligns
+rows by key identity, then applies the ordinary cell policy, including to key cells.
+Null, NaN and signed-zero identity follows their explicit equality switches, but numeric and
+datetime tolerances do not make two different keys identical. Non-scalar, non-alignable, missing,
+unexpected or duplicate keys fail explicitly instead of falling back to order-insensitive greedy
+row matching. Any captured values remain in the private counterexample artifact; data-safe reports
+identify only the mismatch shape and cell path. When row counts differ, keyed mode reports the more
+useful missing or unexpected key evidence instead of a generic shape mismatch.
 
 ## Generation policy
 

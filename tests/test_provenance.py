@@ -36,7 +36,7 @@ def _runtime(
 
 
 def test_public_version_uses_single_source() -> None:
-    assert __version__ == source_version == "0.6.0"
+    assert __version__ == source_version == "0.7.0"
 
 
 def test_distribution_names_are_normalized_and_bounded() -> None:
@@ -235,6 +235,29 @@ def test_effective_config_hash_preserves_positional_bundle_order() -> None:
     assert effective_config_sha256(contract(("left", "right"))) != effective_config_sha256(
         contract(("right", "left"))
     )
+
+
+def test_effective_config_hash_includes_keyed_row_alignment_contract() -> None:
+    def contract(row_keys: tuple[str, ...]) -> dict[str, object]:
+        return {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "orders",
+                    "fixture": "input.arrow",
+                    "comparison": {
+                        "row_order": "keyed",
+                        "row_keys": list(row_keys),
+                        "dtype": "compatible",
+                    },
+                }
+            ],
+        }
+
+    composite = effective_config_sha256(contract(("account", "sequence")))
+    assert composite == effective_config_sha256(contract(("account", "sequence")))
+    assert composite != effective_config_sha256(contract(("sequence", "account")))
+    assert composite != effective_config_sha256(contract(("account",)))
 
 
 def test_effective_config_hash_does_not_treat_static_inputs_mapping_as_bundle_order() -> None:

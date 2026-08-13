@@ -1,0 +1,148 @@
+{
+  "cases": [
+    {
+      "deterministic_examples": 1,
+      "diagnoses": [],
+      "elapsed_seconds": 0.613558113000181,
+      "examples_run": 2,
+      "failures": [],
+      "findings_discovered": 0,
+      "generated_examples": 1,
+      "name": "evaluate-mae-rmse",
+      "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "narwhals",
+              "status": "installed",
+              "version": "2.15.0"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.3.5"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "2.3.3"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.31.0"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "23.0.0"
+            },
+            {
+              "name": "utilsforecast",
+              "status": "installed",
+              "version": "0.2.16"
+            }
+          ],
+          "parity_version": "0.7.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "narwhals",
+              "status": "installed",
+              "version": "2.15.0"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.3.5"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "2.3.3"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.31.0"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "23.0.0"
+            },
+            {
+              "name": "utilsforecast",
+              "status": "installed",
+              "version": "0.2.16"
+            }
+          ],
+          "parity_version": "0.7.0",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
+      "status": "passed"
+    }
+  ],
+  "elapsed_seconds": 0.6669938889999685,
+  "parity_version": "0.7.0",
+  "provenance": {
+    "config_sha256": "ddcc751433faf6d77fb0d8a43e2780c11a672d9e974ddf5a99b45ea2333e02a0",
+    "orchestrator": {
+      "distributions": [
+        {
+          "name": "hypothesis",
+          "status": "installed",
+          "version": "6.165.5"
+        },
+        {
+          "name": "numpy",
+          "status": "installed",
+          "version": "2.3.5"
+        },
+        {
+          "name": "pandas",
+          "status": "installed",
+          "version": "2.3.3"
+        },
+        {
+          "name": "polars",
+          "status": "installed",
+          "version": "1.31.0"
+        },
+        {
+          "name": "pyarrow",
+          "status": "installed",
+          "version": "23.0.0"
+        }
+      ],
+      "parity_version": "0.7.0",
+      "platform_machine": "x86_64",
+      "platform_system": "Linux",
+      "python_implementation": "CPython",
+      "python_version": "3.12.13"
+    }
+  },
+  "schema_version": 3,
+  "status": "passed"
+}
