@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.0
+
+- Add a fixture-backed `parity init` mode for existing reference and candidate targets, including
+  adapters, worker interpreters, explicit distribution provenance and keyed output alignment.
+- Add `parity doctor --config` to inspect both workers without importing or invoking either target.
+  It reports only path-free Python, Parity and explicitly requested distribution versions.
+- Preserve configured virtual-environment Python entry points instead of dereferencing them to a
+  shared base interpreter, so side-specific dependency versions remain observable and replayable.
+- Document a small two-environment dependency-version workflow. Environment creation and package
+  installation remain explicit user steps rather than a Parity-managed environment system.
+
+### Compatibility notes
+
+- Plain `parity init` still produces the same editable starter and demo module. Project mode is
+  selected only when `--reference`, `--candidate` and `--fixture` are supplied together.
+- Plain `parity doctor` and its JSON payload retain their existing local dependency report.
+  Configured doctor output is a separate data-safe contract and exits with status 2 when a worker
+  cannot start or an explicitly recorded distribution is missing.
+- Configuration, replay, artifact and report format versions are unchanged.
+- Replay accepts a project-local virtual-environment entry point whose symlink target is a host
+  Python binary. This narrowly scoped interpreter rule does not weaken resolved containment for
+  workdirs, manifests or artifact inputs; replay remains execution of trusted project code.
+
 ## 0.7.0
 
 - Add keyed output alignment with unique scalar composite keys. Reordered outputs can now be

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -14,7 +16,12 @@ import pytest
 import parity.engine as engine
 from parity.artifacts import ArtifactStore
 from parity.engine import replay_artifact, run_live
-from parity.execution import ExceptionInfo, ExecutionOutcome, Observation
+from parity.execution import (
+    ExceptionInfo,
+    ExecutionOutcome,
+    IsolatedExecutionSession,
+    Observation,
+)
 from parity.models import (
     CallableSpec,
     CaseConfig,
@@ -1766,6 +1773,86 @@ def test_replay_rejects_python_path_escape(tmp_path: Path) -> None:
 
     with pytest.raises(engine.ReplayError, match="python paths must stay inside"):
         engine._resolve_replay_paths(case_data, tmp_path)
+
+
+def test_replay_preserves_project_venv_symlink_to_system_python(tmp_path: Path) -> None:
+    interpreter = tmp_path / ".venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(sys.executable)
+    case_data = {
+        "reference": {"workdir": None, "python": ".venv/bin/python"},
+        "candidate": {"workdir": None, "python": ".venv/bin/python"},
+    }
+
+    engine._resolve_replay_paths(case_data, tmp_path)
+
+    assert case_data["reference"]["python"] == interpreter
+    assert case_data["candidate"]["python"] == interpreter
+    assert case_data["reference"]["python"].resolve() == Path(sys.executable).resolve()
+
+
+def test_replay_rejects_missing_project_python_path(tmp_path: Path) -> None:
+    case_data = {
+        "reference": {"workdir": None, "python": ".venv/bin/python"},
+        "candidate": {"workdir": None, "python": None},
+    }
+
+    with pytest.raises(engine.ReplayError, match="python path must be an existing file"):
+        engine._resolve_replay_paths(case_data, tmp_path)
+
+
+def test_artifact_replay_runs_through_project_virtualenv_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    virtualenv = tmp_path / ".venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(virtualenv)],
+        check=True,
+    )
+    interpreter = virtualenv / "bin" / "python"
+    assert interpreter.is_symlink()
+    source_site_packages = (
+        Path(sys.executable).parent.parent
+        / "lib"
+        / (f"python{sys.version_info.major}.{sys.version_info.minor}")
+        / "site-packages"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(source_site_packages))
+    (tmp_path / "replay_transform.py").write_text(
+        "def identity(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="replay_transform:identity",
+        adapter="arrow",
+        python=interpreter,
+        workdir=tmp_path,
+        environment={"PYTHONPATH": str(source_site_packages)},
+    )
+    with IsolatedExecutionSession(spec) as session:
+        runtime_observation = session.inspect_runtime()
+    assert runtime_observation.outcome is ExecutionOutcome.RETURNED
+    assert runtime_observation.runtime is not None
+    runtime = runtime_observation.runtime
+    case = CaseConfig(
+        name="venv-replay",
+        reference=spec,
+        candidate=spec.model_copy(deep=True),
+        fixture=tmp_path / "unused.arrow",
+        performance=PerformanceConfig(enabled=False),
+    )
+    monkeypatch.chdir(tmp_path)
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        case,
+        pa.table({"id": [1, 2]}),
+        ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="e" * 64,
+    )
+
+    result = replay_artifact(artifact)
+
+    assert result.status is Status.PASSED
 
 
 def test_replay_manifest_must_bind_every_consumed_file(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,10 @@ def _resolve_paths(config: ParityConfig, base: Path) -> ParityConfig:
                     input_spec.fixture = (base / input_spec.fixture).resolve()
         for implementation in (case.reference, case.candidate):
             if implementation.python is not None:
-                implementation.python = (base / implementation.python).resolve()
+                # Interpreter launch paths often end in a virtual-environment
+                # symlink. Keep that path identity so two venvs pointing at the
+                # same base executable can still carry different site-packages.
+                implementation.python = Path(os.path.abspath(base / implementation.python))
             if implementation.workdir is not None:
                 implementation.workdir = (base / implementation.workdir).resolve()
             else:

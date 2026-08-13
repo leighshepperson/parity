@@ -50,6 +50,19 @@ parity check
 functions with import targets for your existing and rewritten transformations, then make the
 equivalence policy match the real contract.
 
+To scaffold an existing pair directly, supply the two targets and a fixture together. This mode
+writes only `parity.toml`; it does not create demo code or install environments:
+
+```bash
+parity init --reference orders.pandas_impl:transform \
+  --candidate orders.polars_impl:transform \
+  --fixture tests/fixtures/orders.parquet \
+  --reference-adapter pandas --candidate-adapter polars \
+  --record-distribution orders-lib --row-key order_id
+parity doctor --config parity.toml
+parity check
+```
+
 A minimal case looks like this:
 
 ```toml
@@ -226,7 +239,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: leighshepperson/parity@v0.7.0
+  - uses: leighshepperson/parity@v0.8.0
     with:
       config: parity.toml
       cases: orders,customers
@@ -291,7 +304,7 @@ the [threat model](docs/THREAT_MODEL.md).
 
 ## Development status
 
-Parity `0.7` is an alpha: useful on real migrations, but its configuration and artifact contracts
+Parity `0.8` is an alpha: useful on real migrations, but its configuration and artifact contracts
 may evolve before `1.0`. Issues and small, synthetic reproduction cases are welcome.
 
 Licensed under the [Apache License 2.0](LICENSE).

@@ -1524,7 +1524,18 @@ def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> No
             relative = Path(raw)
             if relative.is_absolute():
                 raise ReplayError(f"replay {field} paths must be relative")
-            resolved = (base / relative).resolve()
+            lexical = Path(os.path.abspath(base / relative))
+            if not lexical.is_relative_to(base):
+                raise ReplayError(f"replay {field} paths must stay inside the invocation directory")
+            if field == "python":
+                # A normal project venv ends in a symlink to the host's base
+                # Python. The project-local launch path is authoritative; its
+                # environment identity would be lost by dereferencing it.
+                if not lexical.is_file():
+                    raise ReplayError("replay python path must be an existing file")
+                spec[field] = lexical
+                continue
+            resolved = lexical.resolve()
             if not resolved.is_relative_to(base):
                 raise ReplayError(f"replay {field} paths must stay inside the invocation directory")
             spec[field] = resolved

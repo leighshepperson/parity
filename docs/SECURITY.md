@@ -15,6 +15,7 @@ That property reduces exposure; it does not make every output non-sensitive.
 | `result.json` in artifact | Structured mismatch evidence | Counterexample directory | Restricted engineering team |
 | `replay.json` | Command/config references | Counterexample directory | Restricted engineering team |
 | `parity doctor --json` | Executable, platform and working-directory paths | Console | Support after review |
+| `parity doctor --config ... --json` | Path-free allowlisted runtime versions | Console | Developers and CI |
 
 Even a minimized synthetic input can reveal a category, boundary or example copied from a schema.
 Treat the entire artifact directory at the same classification as its source fixture.
@@ -66,6 +67,14 @@ crash and cross-implementation state isolation but can still access the filesyst
 inherited environment permitted to the invoking user. A configured campaign reuses each side's
 worker, so module state and spawned activity may persist between examples until campaign teardown.
 Workers can consume resources, spawn children or exploit native dependencies.
+
+Configured runs and artifact replay execute the selected Python interpreter path. A project-local
+virtual-environment entry point may be a symlink to a host Python binary; Parity preserves that
+entry point because its surrounding environment determines installed packages. Replay requires the
+recorded path to stay lexically within the invocation project, but this is provenance hygiene, not
+a sandbox or trust boundary. Review repository code and interpreter paths before replaying evidence
+from another source. Fixture, manifest and workdir containment checks continue to resolve symlinks
+and reject escapes.
 
 For third-party or AI-produced code that has not been reviewed, put the entire Parity invocation in
 a container/VM with:
