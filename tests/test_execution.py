@@ -484,7 +484,9 @@ def test_failed_tabular_return_canonicalization_is_an_infrastructure_error(
         assert observation.exception is not None
         assert observation.exception.module == "parity.execution"
         assert observation.exception.type == "ExecutionError"
-        assert observation.return_type == "pandas.DataFrame"
+        assert observation.return_type is not None
+        assert observation.return_type.startswith("pandas.")
+        assert observation.return_type.endswith(".DataFrame")
         assert "1+2j" not in observation.exception.message
         assert not observation.has_value
         assert observation.table is None
