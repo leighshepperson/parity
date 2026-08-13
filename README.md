@@ -176,7 +176,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: leighshepperson/parity@v0
+  - uses: leighshepperson/parity@v0.1.0
     with:
       config: parity.toml
       cases: orders,customers
