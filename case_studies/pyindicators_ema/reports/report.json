@@ -3,7 +3,7 @@
     {
       "deterministic_examples": 1,
       "diagnoses": [],
-      "elapsed_seconds": 1.468071442001019,
+      "elapsed_seconds": 1.2960587849993317,
       "examples_run": 2,
       "failures": [],
       "findings_discovered": 0,
@@ -54,7 +54,7 @@
               "version": "1.18.0"
             }
           ],
-          "parity_version": "0.7.0",
+          "parity_version": "0.8.0",
           "platform_machine": "x86_64",
           "platform_system": "Linux",
           "python_implementation": "CPython",
@@ -103,7 +103,7 @@
               "version": "1.18.0"
             }
           ],
-          "parity_version": "0.7.0",
+          "parity_version": "0.8.0",
           "platform_machine": "x86_64",
           "platform_system": "Linux",
           "python_implementation": "CPython",
@@ -127,24 +127,24 @@
           "title": "Failure behaviour differs"
         }
       ],
-      "elapsed_seconds": 2.8544732319987816,
+      "elapsed_seconds": 2.616123953001079,
       "examples_run": 1,
       "failures": [
         {
-          "artifact": ".parity-pyindicators/ema-nullable-backend-divergence/20260813T230621.103334Z-093823bd3324",
+          "artifact": ".parity-pyindicators/ema-nullable-backend-divergence/20260813T233445.733078Z-093823bd3324",
           "candidate_metrics": {
-            "duration_seconds": 0.6551172660001612,
+            "duration_seconds": 0.7392890099999931,
             "iterations": 1,
-            "peak_rss_bytes": 208621568
+            "peak_rss_bytes": 209018880
           },
           "finding_signature": "ms1:a7a14380e25d44e74373e61ec514710add1654d30c4cb7016d54a61a104f74a5",
           "mismatch_counts": {
             "exception": 1
           },
           "reference_metrics": {
-            "duration_seconds": 0.7580345459991804,
+            "duration_seconds": 0.7540243829989777,
             "iterations": 1,
-            "peak_rss_bytes": 208621568
+            "peak_rss_bytes": 209018880
           },
           "source": "fixture",
           "status": "failed"
@@ -198,7 +198,7 @@
               "version": "1.18.0"
             }
           ],
-          "parity_version": "0.7.0",
+          "parity_version": "0.8.0",
           "platform_machine": "x86_64",
           "platform_system": "Linux",
           "python_implementation": "CPython",
@@ -247,7 +247,7 @@
               "version": "1.18.0"
             }
           ],
-          "parity_version": "0.7.0",
+          "parity_version": "0.8.0",
           "platform_machine": "x86_64",
           "platform_system": "Linux",
           "python_implementation": "CPython",
@@ -258,10 +258,10 @@
       "status": "failed"
     }
   ],
-  "elapsed_seconds": 4.43790554899897,
-  "parity_version": "0.7.0",
+  "elapsed_seconds": 4.068232884999816,
+  "parity_version": "0.8.0",
   "provenance": {
-    "config_sha256": "41124a7b038e7871d69b62bed6df2b7118a080315cf21b948cc1b5b0d55d9c72",
+    "config_sha256": "1d6d08fe2cf1766f78cb8a87cdc35dfbbb1111e541ec150589b9b8be2b8fc6ea",
     "orchestrator": {
       "distributions": [
         {
@@ -290,7 +290,7 @@
           "version": "23.0.1"
         }
       ],
-      "parity_version": "0.7.0",
+      "parity_version": "0.8.0",
       "platform_machine": "x86_64",
       "platform_system": "Linux",
       "python_implementation": "CPython",

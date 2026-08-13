@@ -25,7 +25,7 @@ from parity.provenance import (
     RuntimeProvenance,
     normalize_distribution_names,
 )
-from parity.targets import IMPORT_TARGET_PATTERN
+from parity.targets import is_import_target
 
 AdapterName = Literal["auto", "pandas", "polars", "arrow"]
 PandasInput = Literal["arrow", "native"]
@@ -383,7 +383,7 @@ class InputBundle(StrictModel):
 class CallableSpec(StrictModel):
     """Importable implementation and the environment in which it should run."""
 
-    target: str = Field(pattern=IMPORT_TARGET_PATTERN)
+    target: str
     adapter: AdapterName = "auto"
     pandas_input: PandasInput = "arrow"
     python: Path | None = None
@@ -392,6 +392,13 @@ class CallableSpec(StrictModel):
     record_distributions: list[str] = Field(
         default_factory=list, max_length=MAX_RECORDED_DISTRIBUTIONS
     )
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, target: str) -> str:
+        if not is_import_target(target):
+            raise ValueError("target must contain dotted Python identifiers as module:callable")
+        return target
 
     @field_validator("record_distributions")
     @classmethod

@@ -8,6 +8,7 @@
   It reports only path-free Python, Parity and explicitly requested distribution versions.
 - Preserve configured virtual-environment Python entry points instead of dereferencing them to a
   shared base interpreter, so side-specific dependency versions remain observable and replayable.
+- Validate import targets as dotted Python identifiers before writing or running a project config.
 - Document a small two-environment dependency-version workflow. Environment creation and package
   installation remain explicit user steps rather than a Parity-managed environment system.
 

@@ -126,6 +126,8 @@ def test_project_template_is_minimal_fixture_backed_and_allows_same_target() -> 
         ({"reference": "pkg..module:run"}, "reference must be"),
         ({"candidate": "pkg.:run"}, "candidate must be"),
         ({"candidate": "pkg:attr..child"}, "candidate must be"),
+        ({"reference": "pkg:run²"}, "reference must be"),
+        ({"candidate": "pkg:run¼"}, "candidate must be"),
         ({"candidate_adapter": "spark"}, "candidate_adapter must be"),
         ({"case_name": "bad name"}, "case_name may contain"),
         ({"row_keys": ["id", "id"]}, "row keys must be unique"),

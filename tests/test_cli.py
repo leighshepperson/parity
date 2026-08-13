@@ -138,9 +138,10 @@ def test_init_project_mode_rejects_bad_adapter_and_fixture(tmp_path: Path) -> No
     assert adapter.exit_code == 2
     assert "reference_adapter must be one of" in adapter.stderr
 
-    malformed = runner.invoke(cli.app, [*common, "--reference", "pkg..module:run"])
-    assert malformed.exit_code == 2
-    assert "reference must be an import target" in malformed.stderr
+    for target in ("pkg..module:run", "pkg:run²", "pkg:run¼"):
+        malformed = runner.invoke(cli.app, [*common, "--reference", target])
+        assert malformed.exit_code == 2
+        assert "reference must be an import target" in malformed.stderr
 
     fixture.unlink()
     missing = runner.invoke(cli.app, common)

@@ -37,6 +37,25 @@ def _installed_versions(case: dict[str, object], endpoint: str) -> dict[str, str
     }
 
 
+def _assert_report_uses_current_parity(report: dict[str, object]) -> None:
+    assert report["parity_version"] == "0.8.0"
+    provenance = report["provenance"]
+    assert isinstance(provenance, dict)
+    orchestrator = provenance["orchestrator"]
+    assert isinstance(orchestrator, dict)
+    assert orchestrator["parity_version"] == "0.8.0"
+    cases = report["cases"]
+    assert isinstance(cases, list)
+    for case in cases:
+        assert isinstance(case, dict)
+        case_provenance = case["provenance"]
+        assert isinstance(case_provenance, dict)
+        for endpoint in ("reference", "candidate"):
+            runtime = case_provenance[endpoint]
+            assert isinstance(runtime, dict)
+            assert runtime["parity_version"] == "0.8.0"
+
+
 def test_pyindicators_study_pins_public_source_and_two_backend_cases() -> None:
     config = _config(PYINDICATORS)
     assert [case.name for case in config.cases] == [
@@ -71,6 +90,7 @@ def test_pyindicators_study_pins_public_source_and_two_backend_cases() -> None:
 
 def test_pyindicators_live_report_has_control_and_nullable_finding() -> None:
     report = _report(PYINDICATORS)
+    _assert_report_uses_current_parity(report)
     assert report["schema_version"] == 3
     assert report["status"] == "failed"
     cases = report["cases"]
@@ -123,6 +143,7 @@ def test_polars_version_study_uses_same_target_in_two_supplied_runtimes() -> Non
 
 def test_polars_version_report_captures_intentional_drift() -> None:
     report = _report(POLARS_VERSIONS)
+    _assert_report_uses_current_parity(report)
     assert report["status"] == "failed"
     case = report["cases"][0]
     assert case["status"] == "failed"
@@ -176,6 +197,7 @@ def test_pandas_version_study_uses_current_non_yanked_candidate() -> None:
 
 def test_pandas_version_report_captures_observed_default_drift() -> None:
     report = _report(PANDAS_VERSIONS)
+    _assert_report_uses_current_parity(report)
     assert report["status"] == "failed"
     case = report["cases"][0]
     assert case["status"] == "failed"

@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from parity.provenance import normalize_distribution_names
-from parity.targets import IMPORT_TARGET
+from parity.targets import is_import_target
 
 _CASE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _ADAPTERS = frozenset({"auto", "pandas", "polars", "arrow"})
@@ -30,7 +30,7 @@ def _validate_replaceable_destination(path: Path) -> None:
 
 
 def _validate_target(label: str, target: str) -> None:
-    if not IMPORT_TARGET.fullmatch(target):
+    if not is_import_target(target):
         raise ValueError(f"{label} must be an import target such as package.module:function")
 
 

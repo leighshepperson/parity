@@ -14,24 +14,24 @@
           "title": "Observable behaviour differs"
         }
       ],
-      "elapsed_seconds": 1.4513171060007153,
+      "elapsed_seconds": 1.4629105129988602,
       "examples_run": 1,
       "failures": [
         {
-          "artifact": ".parity-pandas-versions/categorical-groupby-observed-default/20260813T231237.164875Z-a4306389d093",
+          "artifact": ".parity-pandas-versions/categorical-groupby-observed-default/20260813T233434.035684Z-a4306389d093",
           "candidate_metrics": {
-            "duration_seconds": 0.02443758200024604,
+            "duration_seconds": 0.020715636001114035,
             "iterations": 1,
-            "peak_rss_bytes": 208117760
+            "peak_rss_bytes": 208351232
           },
           "finding_signature": "ms1:ba791dbdb30b756ba35aa8333139335a314abfc8b90dbeb111ef12f882047cef",
           "mismatch_counts": {
             "shape": 1
           },
           "reference_metrics": {
-            "duration_seconds": 0.025030623000930063,
+            "duration_seconds": 0.016078552000180935,
             "iterations": 1,
-            "peak_rss_bytes": 208117760
+            "peak_rss_bytes": 208351232
           },
           "source": "fixture",
           "status": "failed"
@@ -70,7 +70,7 @@
               "version": "23.0.1"
             }
           ],
-          "parity_version": "0.7.0",
+          "parity_version": "0.8.0",
           "platform_machine": "x86_64",
           "platform_system": "Linux",
           "python_implementation": "CPython",
@@ -104,7 +104,7 @@
               "version": "23.0.1"
             }
           ],
-          "parity_version": "0.7.0",
+          "parity_version": "0.8.0",
           "platform_machine": "x86_64",
           "platform_system": "Linux",
           "python_implementation": "CPython",
@@ -115,10 +115,10 @@
       "status": "failed"
     }
   ],
-  "elapsed_seconds": 1.5099240339986864,
-  "parity_version": "0.7.0",
+  "elapsed_seconds": 1.5507849989990063,
+  "parity_version": "0.8.0",
   "provenance": {
-    "config_sha256": "4d8ce157259a436c57d0f31d88ec87e29f59c0d2be294a5b3c6dba0084e578b3",
+    "config_sha256": "80fbde60a969f2095cd850f926ef4ffb76b8abfe879fe8624afe99bf617e227d",
     "orchestrator": {
       "distributions": [
         {
@@ -147,7 +147,7 @@
           "version": "23.0.1"
         }
       ],
-      "parity_version": "0.7.0",
+      "parity_version": "0.8.0",
       "platform_machine": "x86_64",
       "platform_system": "Linux",
       "python_implementation": "CPython",

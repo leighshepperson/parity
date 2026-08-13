@@ -14,15 +14,15 @@
           "title": "Datetime representation or timezone semantics differ"
         }
       ],
-      "elapsed_seconds": 1.1807764820005104,
+      "elapsed_seconds": 1.4821919599999092,
       "examples_run": 1,
       "failures": [
         {
-          "artifact": ".parity-polars-versions/group-by-dynamic-default-offset/20260813T230837.420320Z-364de4eac4ba",
+          "artifact": ".parity-polars-versions/group-by-dynamic-default-offset/20260813T233434.008601Z-364de4eac4ba",
           "candidate_metrics": {
-            "duration_seconds": 0.021615882998958114,
+            "duration_seconds": 0.0228622529994027,
             "iterations": 1,
-            "peak_rss_bytes": 188772352
+            "peak_rss_bytes": 189153280
           },
           "finding_signature": "ms1:ba791dbdb30b756ba35aa8333139335a314abfc8b90dbeb111ef12f882047cef",
           "mismatch_counts": {
@@ -30,9 +30,9 @@
             "value": 4
           },
           "reference_metrics": {
-            "duration_seconds": 0.023875708000559825,
+            "duration_seconds": 0.020288771998821176,
             "iterations": 1,
-            "peak_rss_bytes": 197005312
+            "peak_rss_bytes": 196919296
           },
           "source": "fixture",
           "status": "failed"
@@ -71,7 +71,7 @@
               "version": "23.0.1"
             }
           ],
-          "parity_version": "0.7.0",
+          "parity_version": "0.8.0",
           "platform_machine": "x86_64",
           "platform_system": "Linux",
           "python_implementation": "CPython",
@@ -105,7 +105,7 @@
               "version": "23.0.1"
             }
           ],
-          "parity_version": "0.7.0",
+          "parity_version": "0.8.0",
           "platform_machine": "x86_64",
           "platform_system": "Linux",
           "python_implementation": "CPython",
@@ -116,10 +116,10 @@
       "status": "failed"
     }
   ],
-  "elapsed_seconds": 1.2387308760007727,
-  "parity_version": "0.7.0",
+  "elapsed_seconds": 1.540927885000201,
+  "parity_version": "0.8.0",
   "provenance": {
-    "config_sha256": "42a9dad051a3b5a27127bc0f0c82abcbec5760b6d4ca208449b6bc76f77c13d8",
+    "config_sha256": "4840c1e7773999a2b394c6f756c64456fd65f9c0bce38a58704686ade4971dda",
     "orchestrator": {
       "distributions": [
         {
@@ -148,7 +148,7 @@
           "version": "23.0.1"
         }
       ],
-      "parity_version": "0.7.0",
+      "parity_version": "0.8.0",
       "platform_machine": "x86_64",
       "platform_system": "Linux",
       "python_implementation": "CPython",

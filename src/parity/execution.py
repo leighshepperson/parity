@@ -39,7 +39,7 @@ from parity.adapters import from_arrow as adapter_from_arrow
 from parity.adapters import to_arrow as adapter_to_arrow
 from parity.models import CallableSpec, JsonValue, PandasInput, RunMetrics
 from parity.provenance import RuntimeProvenance, collect_runtime_provenance, diff_runtime
-from parity.targets import IMPORT_TARGET
+from parity.targets import is_import_target
 
 _WORKER_PROTOCOL_VERSION = 3
 
@@ -261,7 +261,7 @@ def redact_text(text: str) -> str:
 def import_callable(target: str) -> Callable[..., Any]:
     """Import an explicit ``module:attribute`` target without using ``eval``."""
 
-    if not IMPORT_TARGET.fullmatch(target):
+    if not is_import_target(target):
         raise ExecutionError("callable target must be in module.path:function.path form")
     module_name, attribute_path = target.split(":", 1)
     try:
