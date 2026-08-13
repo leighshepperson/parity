@@ -1,15 +1,14 @@
 # Parity
 
-**The independent semantic trust layer for changed computation.**
+**Differential semantic testing for changed computation.**
 
 Parity tries to disprove that a rewrite means the same thing as the implementation it replaces.
 It executes both versions over fixtures and generated edge cases, compares their observable
 behaviour under an explicit policy, shrinks a failure to a small counterexample and preserves it
 for replay. Performance is measured only after correctness.
 
-The first release is built for pandas-to-Polars migrations. Its contracts and artifact format are
-engine-neutral by design: the long-term product is the gate between AI-written or migrated code
-and production, not another dataframe framework and not a dashboard product.
+The initial adapters support pandas-to-Polars comparisons. The contracts and artifact format are
+engine-neutral so the same approach can cover other dataframe, numerical and dependency changes.
 
 > Parity is an evidence generator, not a proof of mathematical equivalence. Passing means no
 > difference was found within the configured domain and search budget.
@@ -184,7 +183,7 @@ steps:
 ```
 
 The action always adds a redacted Markdown report to the job summary. The example explicitly opts
-into uploading `.parity` even on failure. Reports omit customer values, but replay artifacts contain
+into uploading `.parity` even on failure. Reports omit compared values, but replay artifacts contain
 generated or fixture-derived input values; leave upload disabled unless your repository's access and
 retention policy permits that data. See the [Action guide](docs/GITHUB_ACTION.md).
 
@@ -230,13 +229,12 @@ the [threat model](docs/THREAT_MODEL.md).
 - [Fault corpus](docs/FAULT_CORPUS.md)
 - [Real-world case study: pyjanitor `complete()`](case_studies/pyjanitor_complete/README.md)
 - [Development and contribution guide](docs/DEVELOPMENT.md)
-- [Two-, three- and ten-year product direction](docs/ROADMAP.md)
+- [Technical roadmap](docs/ROADMAP.md)
 - [Clean-room provenance](docs/CLEAN_ROOM.md) and [public prior art](docs/PRIOR_ART.md)
 
 ## Development status
 
 Parity `0.1` is an alpha: useful on real migrations, but its configuration and artifact contracts
-may evolve before `1.0`. The roadmap is deliberately ambitious; it describes direction rather
-than promised features or dates. Issues and small, synthetic reproduction cases are welcome.
+may evolve before `1.0`. Issues and small, synthetic reproduction cases are welcome.
 
 Licensed under the [Apache License 2.0](LICENSE).

@@ -5,7 +5,7 @@ labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: Do not upload private source, customer data, credentials or unredacted artifacts.
+      value: Do not upload private source, sensitive data, credentials or unredacted artifacts.
   - type: input
     id: version
     attributes:

@@ -16,11 +16,11 @@ Parity deliberately builds on public testing ideas while targeting the gap betwe
   <https://arrow.apache.org/docs/format/Columnar.html>
 - DataComPy dataframe reconciliation:
   <https://capitalone.github.io/datacompy/>
-- Datafold public data-diff product description:
+- Datafold data-diff documentation:
   <https://www.datafold.com/data-diff/>
 - QuantCo's public description of dataframe migration validation pain:
   <https://tech.quantco.com/blog/dataframely>
 
-Parity's intended differentiation is the integrated campaign: execute old and new code, generate
+Parity combines these ideas into an integrated campaign: execute old and new code, generate
 semantically adversarial inputs, apply an explicit cross-engine equivalence policy, minimize a
 counterexample, preserve it as a replayable artifact, and report correctness and performance in CI.

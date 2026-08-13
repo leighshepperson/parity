@@ -1,166 +1,69 @@
-# Product direction: semantic trust for changed computation
+# Roadmap
 
-## North star
+Parity is an open-source, local-first verifier for dataframe and numerical migrations. This roadmap
+lists technical priorities, not release dates or commitments. Work should be guided by reproducible
+public examples and the risk of false passes.
 
-AI will make rewriting computation cheap. Establishing that the rewrite preserved meaning will
-become the expensive part.
+## Make the current release dependable
 
-Parity should become the independent gate between “an agent produced a faster/newer implementation”
-and “this is safe to merge.” Its durable object is **semantic evidence**: an explicit contract,
-the search performed, minimized counterexamples, environment provenance and a reproducible result.
+- Keep configuration, exit codes, reports and replay artifacts consistent across patch releases.
+- Treat false passes, irreproducible counterexamples and input-isolation failures as release
+  blockers.
+- Improve diagnostics for schema, dtype, ordering, null, datetime, exception and tolerance
+  differences.
+- Test supported Python versions and operating systems, including subprocess and timeout paths.
+- Add pinned, runnable case studies from public projects and retain confirmed failures as regression
+  fixtures.
+- Document cross-environment campaigns, redaction, artifact handling and common CI configurations.
 
-This is a direction document, not a feature or date commitment. The local verifier remains useful
-at every stage even if none of the longer-range platform work ships.
+## Broaden semantic coverage
 
-## Where it can hit hardest
+- Cover more Arrow logical types, especially decimals, categorical values, durations and nested
+  columns.
+- Strengthen generation around empty inputs, duplicate and null keys, multi-column joins, timezone
+  boundaries, extreme numeric values and mixed missing-value representations.
+- Add explicit comparison policies where real migrations require them while keeping strict behaviour
+  as the default.
+- Improve performance checks with clearer warm-up, sampling and uncertainty reporting.
+- Add standard machine-readable CI output where it provides useful review annotations.
 
-Parity is most valuable when all four conditions hold:
+## Extend carefully
 
-1. A working implementation already exists and can serve as an executable contract.
-2. There is strong pressure to rewrite it—speed, cost, cloud/engine migration, dependency risk or AI
-   automation.
-3. Ordinary example tests miss edge semantics.
-4. A wrong answer can pass silently and cost far more than a crash.
+- Define a small, documented adapter interface before adding engines beyond pandas, Polars and Arrow.
+- Consider optional DuckDB or Ibis support only with public compatibility fixtures and no new
+  pairwise conversion paths.
+- Explore multiple-input and stateful-sequence campaigns after their replay and shrinking contracts
+  are well defined.
+- Explore metamorphic properties and user-supplied invariants as complements to
+  reference-versus-candidate comparison.
+- Keep generators, comparators and artifact readers independently testable and usable from Python.
 
-That concentrates the initial market in dataframe/SQL migrations, financial and scientific
-calculation refactors, feature pipelines, billing/allocation code and dependency/runtime upgrades.
-The product does not need to compete for greenfield application development.
+## Before 1.0
 
-## Two years: own data-computation migrations
+- Version and document the configuration, report and counterexample-manifest formats.
+- Provide a clear compatibility and deprecation policy.
+- Preserve replay across supported minor versions or fail with an actionable migration message.
+- Publish a supported platform matrix and reproducible release process.
+- Demonstrate the verifier on several independent public projects without project-specific engine
+  changes.
 
-By roughly 2028, the target position is:
+## Possible later experiments
 
-> Before a team replaces pandas, Polars, DuckDB, Ibis, Spark or a SQL execution path, it runs Parity.
+After the core is dependable, it may be useful to investigate stateful transformations, numerical
+invariants, comparisons across languages or hardware, and signed provenance for evidence exchanged
+between systems. These are experiments, not a ten-year plan. They should become project work only
+when a concrete public use case shows that they belong in Parity rather than another tool.
 
-### Product
+## Non-goals
 
-- A hard, public semantic fault corpus with hundreds of versioned cases across joins, groupings,
-  temporal operations, null logic, categoricals, decimal/numeric behaviour, windows and ordering.
-- Stable pandas, Polars, Arrow, DuckDB/Ibis and SQL adapters; Spark as an isolated optional adapter
-  only when reliability justifies its operational weight.
-- Cross-environment campaigns that compare Python, engine and dependency upgrades in their real
-  locked environments.
-- Trace-assisted domain capture that records schema, bounds and invariants without copying production
-  rows into a hosted service.
-- Contract packs maintained for common migrations—reviewable starting policies, never opaque magic.
-- First-class GitHub, GitLab, pytest and pre-merge integrations with SARIF/check annotations, JUnit
-  and content-addressed replay artifacts.
-- A machine protocol for coding agents: propose rewrite, invoke Parity, inspect counterexample, amend
-  code and resubmit. The writer does not control the verifier's policy.
-- Hardened OCI worker profiles for running newly generated code with no ambient credentials/network.
+- Claiming that property-based comparison is a formal proof.
+- Running hostile code as a security sandbox.
+- Uploading source, frames or artifacts to a hosted service by default.
+- Becoming a dataframe engine, application runtime or dashboard framework.
+- Adding adapters faster than they can be tested and maintained.
 
-### Commercial wedge
+## Choosing priorities
 
-The open-source local engine remains complete. Revenue comes from work organizations do not want to
-assemble themselves:
-
-- paid migration-verification engagements that seed real contracts and prove value;
-- a self-hosted team evidence service for protected policies, history, artifact retention, approval
-  and audit; and
-- maintained enterprise adapters/contract packs and support.
-
-The sale is not “more tests.” It is measurable migration risk reduction plus evidence that the
-faster/cheaper engine did not alter answers. A successful initial engagement should find at least one
-defect existing fixtures missed and leave permanent CI gates behind.
-
-### Defensible assets
-
-- The semantic fault corpus and version-to-version engine knowledge.
-- High-quality minimization across heterogeneous runtimes.
-- Longitudinal evidence linking a contract to every migrated/AI-written implementation.
-- Trusted integrations that keep private computation local.
-
-The CLI alone is reproducible; those accumulated semantics and trust relationships are the moat.
-
-## Three years: the independent reviewer for AI-written computation
-
-By roughly 2029, agents will routinely port and optimise whole data/numerical subsystems. The core
-workflow becomes a two-agent separation of duties:
-
-```text
-writer agent → candidate change → Parity verifier → evidence/counterexample → merge gate
-```
-
-The verifier must be independently pinned, use organization-owned policies and remain capable of
-saying “insufficient evidence.” It must not share the writer's incentive to declare completion.
-
-### Product expansion
-
-- **Proof-carrying pull requests:** signed attestations bind source/environment digests, input-domain
-  contract, verifier version, search budget and result.
-- **Semantic change intelligence:** show which contract surface changed, which historic
-  counterexamples were replayed and what remains untested—without turning the product into a generic
-  code-review dashboard.
-- **Search portfolio:** property-based generation plus coverage guidance, metamorphic relations,
-  constraint solving and domain-specific boundary packs. Formal solvers are used where tractable;
-  passing never masquerades as universal proof.
-- **Numerical and stochastic contracts:** distributions, confidence bounds, monotonicity,
-  conservation laws and error envelopes for scientific/ML pipelines.
-- **Stateful sequence verification:** compare incremental/streaming computations over minimized event
-  sequences, not just one frame.
-- **Organizational policy:** protected contract ownership, risk-tiered budgets, required independent
-  approval and retention controls.
-- **Private fleet learning:** teams can contribute anonymized fault signatures and generator patterns
-  without contributing source rows or implementations.
-
-### Buyer and budget
-
-The economic buyer moves from the migration lead to the platform/AI-governance owner. Parity becomes
-part of the organization's permission to deploy agent-written calculation code. Pricing can follow
-protected repositories, verification workers and assurance tier rather than developer seats.
-
-## Ten years: a compatibility and assurance layer for computation
-
-By roughly 2036, code may be continuously regenerated for new hardware, cost targets, jurisdictions
-and runtime constraints. Humans will not review every implementation. They will own the contract and
-the acceptable evidence.
-
-The blue-sky position is:
-
-> Parity evidence becomes to computational change what tests plus signed provenance are to software
-> release: a standard artifact that travels with the implementation.
-
-### What that could mean
-
-- An open **Semantic Evidence Protocol** for contracts, search methods, counterexamples, provenance
-  and assurance levels—portable across CI vendors and languages.
-- Cross-language and cross-hardware verification spanning Python/SQL, JVM, Rust/C++, WASM, GPU
-  kernels, query optimizers and ML inference runtimes.
-- Agents negotiate an executable contract before rewriting, then attach evidence for every target
-  implementation. Production selects implementations by cost/performance only inside the verified
-  envelope.
-- Continuous compatibility maps reveal when a dependency, compiler, model, engine or hardware update
-  changes observable meaning before an organization rolls it out.
-- Regulators, auditors, customers and insurers can verify signed claims without receiving proprietary
-  code or data. Zero-knowledge or confidential-compute techniques may prove selected evidence across
-  organizational boundaries.
-- A public semantic fault commons lets engine maintainers test their releases against real classes of
-  migration failures while private organizations retain data and code locally.
-- Dynamic differential evidence composes with formal proof, static analysis and runtime monitoring;
-  Parity becomes an orchestrator of assurance methods, not a claim that fuzzing alone proves programs.
-
-The business at that point is trust infrastructure: independent certification profiles, enterprise
-policy/evidence networks and verified compatibility programs. The open format and local engine are
-strategic—organizations will not accept a proprietary black box as the sole judge of meaning.
-
-## Product principles that survive every horizon
-
-1. **Local first.** Source and values need not leave the owner's boundary.
-2. **Writer/verifier independence.** The system producing code cannot quietly weaken its contract.
-3. **Evidence over confidence scores.** Preserve the concrete witness and exact policy.
-4. **Errors fail closed.** Timeout, unsupported type and uncertain comparison are not passes.
-5. **Explicit semantics.** Tolerance, ordering and missing-value rules are reviewable configuration.
-6. **Engine neutrality.** No execution engine gets to define universal correctness.
-7. **Replay before explanation.** AI may help explain later; deterministic reproduction comes first.
-8. **No general application framework.** Parity verifies computations. It does not become a dashboard,
-   widget system or user-interface runtime.
-
-## What would invalidate the strategy
-
-The direction should be reconsidered if real migrations rarely contain defects beyond existing unit
-fixtures, teams will not run an independent gate inside CI, or cross-engine minimization cannot be
-made reliable enough to avoid verifier fatigue. The strongest near-term validation is not downloads:
-it is repeated discovery of costly, previously unknown semantic defects on customer-owned migrations.
-
-Conversely, if AI coding accelerates rewrites while failure investigation remains expensive, the
-verification burden compounds. That is the asymmetry Parity is built to own.
+A proposal is strongest when it includes a public or synthetic reference/candidate pair, a semantic
+difference that existing tests miss and a clear explanation of why the fix belongs in the shared
+verifier. A small, well-evidenced improvement should take priority over a broad speculative feature.
