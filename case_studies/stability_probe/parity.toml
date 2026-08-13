@@ -1,0 +1,32 @@
+version = 1
+artifact_dir = ".parity-stability"
+fail_fast = false
+
+[[cases]]
+name = "matching-but-stateful"
+fixture = "fixture.csv"
+tags = ["stability", "hidden-state"]
+
+[cases.reference]
+target = "stability_parity:reference"
+adapter = "arrow"
+
+[cases.candidate]
+target = "stability_parity:candidate"
+adapter = "arrow"
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "strict"
+
+[cases.generation]
+max_examples = 10
+max_findings = 1
+stability_repeats = 2
+seed = 20260813
+adversarial_examples = true
+shrink = true
+
+[cases.performance]
+enabled = false

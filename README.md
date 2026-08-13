@@ -25,6 +25,9 @@ engine-neutral so the same approach can cover other dataframe, numerical and dep
   command.
 - Joint generation, shrinking, mutation tracking and replay for two- or three-frame joins and
   lookups.
+- Frame-local valid-domain constraints for sorted inputs and row-wise column relationships.
+- Same-input stability checks that fail closed when either implementation changes across repeated
+  observations, even when both sides happen to agree with each other.
 - Bounded discovery of several distinct mismatch signatures in one campaign, with repeated
   confirmation before evidence is accepted.
 - Median runtime and peak-memory comparisons with optional regression gates.
@@ -77,6 +80,7 @@ atol = 0.0
 [cases.generation]
 max_examples = 250
 max_findings = 3
+stability_repeats = 2
 seed = 20260813
 shrink = true
 
@@ -139,6 +143,12 @@ min_rows = 0
 max_rows = 50
 unique_together = [["order_id"]]
 
+[[cases.schema.constraints]]
+kind = "sorted_by"
+columns = ["order_id"]
+descending = false
+nulls = "last"
+
 [[cases.schema.columns]]
 name = "order_id"
 dtype = "int64"
@@ -158,7 +168,8 @@ examples = [0.0, -0.0, 0.1]
 The generator targets empty and singleton frames, nulls, NaNs, infinities, signed zero, numeric
 boundaries, duplicate values, awkward strings and temporal boundaries where the schema permits
 them. A failing input is saved as data, not merely printed as a random seed; generated failures are
-minimized when shrinking is enabled and succeeds.
+minimized when shrinking is enabled and succeeds. `sorted_by` and `row_comparison` constraints let
+the search stay inside valid domains required by as-of joins, windows and interval calculations.
 
 ## Pytest
 
@@ -172,7 +183,7 @@ def test_orders_migration(parity):
 Or verify live functions with the same API as `parity.verify`:
 
 ```python
-from parity import ComparisonPolicy, FrameSchema
+from parity import ComparisonPolicy, FrameSchema, RowComparison, SortedBy
 
 
 def test_live_rewrite(parity, orders_schema: FrameSchema):
@@ -186,6 +197,9 @@ def test_live_rewrite(parity, orders_schema: FrameSchema):
     )
 ```
 
+Python callers can construct `FrameSchema(constraints=[SortedBy(...),
+RowComparison(...)])`; configured TOML cases use the same validated models.
+
 Use `--parity-config` and repeatable `--parity-case` options for CI selection, or an explicit
 `@pytest.mark.parity(config="...", cases=[...])` override. See the
 [pytest guide](docs/PYTEST.md).
@@ -198,7 +212,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: leighshepperson/parity@v0.4.0
+  - uses: leighshepperson/parity@v0.6.0
     with:
       config: parity.toml
       cases: orders,customers
@@ -254,13 +268,15 @@ the [threat model](docs/THREAT_MODEL.md).
 - [Real-world case study: pyjanitor `complete()`](case_studies/pyjanitor_complete/README.md)
 - [Version-matrix case study: skrub `AggJoiner`](case_studies/skrub_agg_joiner/README.md)
 - [Multi-input case study: pandas `merge` / Polars `join`](case_studies/pandas_polars_join/README.md)
+- [Valid-domain case study: pandas `merge_asof` / Polars `join_asof`](case_studies/pandas_polars_asof/README.md)
+- [Same-input stability probe](case_studies/stability_probe/README.md)
 - [Development and contribution guide](docs/DEVELOPMENT.md)
 - [Technical roadmap](docs/ROADMAP.md)
 - [Clean-room provenance](docs/CLEAN_ROOM.md) and [public prior art](docs/PRIOR_ART.md)
 
 ## Development status
 
-Parity `0.4` is an alpha: useful on real migrations, but its configuration and artifact contracts
+Parity `0.6` is an alpha: useful on real migrations, but its configuration and artifact contracts
 may evolve before `1.0`. Issues and small, synthetic reproduction cases are welcome.
 
 Licensed under the [Apache License 2.0](LICENSE).

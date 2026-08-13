@@ -57,6 +57,7 @@ record_distributions = []
 min_rows = 0
 max_rows = 40
 unique_together = []
+constraints = []
 
 [[cases.schema.columns]]
 name = "quantity"
@@ -93,6 +94,7 @@ ignored_columns = []
 [cases.generation]
 max_examples = 250
 max_findings = 1
+stability_repeats = 2
 seed = 20260813
 adversarial_examples = true
 shrink = true

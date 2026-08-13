@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 import pandas as pd
 import polars as pl
@@ -25,7 +26,10 @@ from parity.models import (
     InputSpec,
     KeyOverlap,
     KeyRef,
+    RowComparison,
+    SortedBy,
 )
+from parity.schema import rows_satisfy_frame_constraints
 
 
 def rich_schema() -> FrameSchema:
@@ -38,6 +42,30 @@ def rich_schema() -> FrameSchema:
         ],
         min_rows=0,
         max_rows=8,
+    )
+
+
+def cross_width_equality_schema() -> FrameSchema:
+    return FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="narrow",
+                dtype="float32",
+                nullable=False,
+                minimum=-1,
+                maximum=1,
+            ),
+            ColumnSchema(
+                name="wide",
+                dtype="float64",
+                nullable=False,
+                minimum=-1,
+                maximum=1,
+            ),
+        ],
+        min_rows=1,
+        max_rows=5,
+        constraints=[RowComparison(left="narrow", operator="eq", right="wide")],
     )
 
 
@@ -156,6 +184,198 @@ def test_adversarial_cases_respect_row_and_uniqueness_constraints() -> None:
         assert len(values) == len(set(values))
 
 
+@given(
+    frame_strategy(
+        FrameSchema(
+            columns=[
+                ColumnSchema(name="group", dtype="integer", nullable=False, minimum=0, maximum=2),
+                ColumnSchema(name="value", dtype="integer", minimum=0, maximum=3),
+            ],
+            max_rows=8,
+            constraints=[SortedBy(columns=["group", "value"], nulls="last")],
+        )
+    )
+)
+@settings(max_examples=30, deadline=None)
+def test_frame_strategy_constructs_composite_sorted_tables(table: pa.Table) -> None:
+    rows = table.to_pylist()
+    assert rows_satisfy_frame_constraints(
+        FrameSchema(
+            columns=[
+                ColumnSchema(name="group", dtype="integer", nullable=False, minimum=0, maximum=2),
+                ColumnSchema(name="value", dtype="integer", minimum=0, maximum=3),
+            ],
+            max_rows=8,
+            constraints=[SortedBy(columns=["group", "value"], nulls="last")],
+        ),
+        rows,
+    )
+
+
+@given(
+    frame_strategy(
+        FrameSchema(
+            columns=[ColumnSchema(name="value", dtype="integer", minimum=0, maximum=3)],
+            max_rows=8,
+            constraints=[SortedBy(columns=["value"], descending=True, nulls="first")],
+        )
+    )
+)
+@settings(max_examples=30, deadline=None)
+def test_frame_strategy_honours_descending_sort_with_nulls_first(table: pa.Table) -> None:
+    values = table.column("value").to_pylist()
+    non_null = [value for value in values if value is not None]
+    assert values[: values.count(None)] == [None] * values.count(None)
+    assert non_null == sorted(non_null, reverse=True)
+
+
+@given(
+    frame_strategy(
+        FrameSchema(
+            columns=[
+                ColumnSchema(name="start", dtype="integer", nullable=False, minimum=0, maximum=10),
+                ColumnSchema(name="end", dtype="integer", nullable=False, minimum=0, maximum=10),
+            ],
+            min_rows=1,
+            max_rows=8,
+            constraints=[RowComparison(left="start", operator="le", right="end")],
+        )
+    )
+)
+@settings(max_examples=30, deadline=None)
+def test_frame_strategy_constructs_start_before_end_rows(table: pa.Table) -> None:
+    assert all(row["start"] <= row["end"] for row in table.to_pylist())
+
+
+def test_category_to_unconstrained_string_equality_is_generated() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="left", dtype="string", nullable=False, categories=["a", "b"]),
+            ColumnSchema(name="right", dtype="string", nullable=False),
+        ],
+        min_rows=1,
+        max_rows=2,
+        constraints=[RowComparison(left="left", operator="eq", right="right")],
+    )
+
+    table = find(
+        frame_strategy(schema),
+        lambda _table: True,
+        settings=settings(max_examples=20, database=None, deadline=None, derandomize=True),
+    )
+
+    assert all(row["left"] == row["right"] for row in table.to_pylist())
+
+
+def test_valid_row_comparison_examples_remain_adversarial_targets() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="start", dtype="integer", nullable=False, examples=[2]),
+            ColumnSchema(name="end", dtype="integer", nullable=False, examples=[4]),
+        ],
+        min_rows=1,
+        max_rows=3,
+        constraints=[RowComparison(left="start", operator="le", right="end")],
+    )
+
+    singleton = next(case.table for case in adversarial_cases(schema) if case.name == "singleton")
+
+    assert singleton.to_pylist() == [{"start": 2, "end": 4}]
+
+
+@given(frame_strategy(cross_width_equality_schema()))
+@settings(max_examples=100, deadline=None)
+def test_frame_strategy_checks_constraints_after_arrow_width_cast(table: pa.Table) -> None:
+    assert all(row["narrow"] == row["wide"] for row in table.to_pylist())
+
+
+def test_adversarial_cases_check_constraints_after_arrow_width_cast() -> None:
+    schema = cross_width_equality_schema()
+
+    assert all(
+        rows_satisfy_frame_constraints(schema, case.table.to_pylist())
+        for case in adversarial_cases(schema)
+    )
+
+
+@pytest.mark.parametrize("operator", ["lt", "gt"])
+def test_strict_cross_width_float_comparisons_use_representable_bounds(
+    operator: Literal["lt", "gt"],
+) -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="narrow",
+                dtype="float32",
+                nullable=False,
+                minimum=-1,
+                maximum=1,
+            ),
+            ColumnSchema(
+                name="wide",
+                dtype="float64",
+                nullable=False,
+                minimum=-1,
+                maximum=1,
+            ),
+        ],
+        min_rows=1,
+        max_rows=4,
+        constraints=[
+            RowComparison(
+                left="narrow",
+                operator=operator,
+                right="wide",
+            )
+        ],
+    )
+
+    table = find(
+        frame_strategy(schema),
+        lambda _table: True,
+        settings=settings(max_examples=100, database=None, deadline=None, derandomize=True),
+    )
+
+    if operator == "lt":
+        assert all(row["narrow"] < row["wide"] for row in table.to_pylist())
+    else:
+        assert all(row["narrow"] > row["wide"] for row in table.to_pylist())
+
+
+def test_impossible_row_comparison_is_rejected_before_hypothesis() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="start", dtype="integer", nullable=False, minimum=5, maximum=6),
+            ColumnSchema(name="end", dtype="integer", nullable=False, minimum=0, maximum=1),
+        ],
+        min_rows=1,
+        constraints=[RowComparison(left="start", operator="le", right="end")],
+    )
+
+    with pytest.raises(ValueError, match="has no satisfying values"):
+        frame_strategy(schema)
+
+
+def test_adversarial_cases_preserve_declared_frame_constraints() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="start", dtype="integer", nullable=False, minimum=0, maximum=5),
+            ColumnSchema(name="end", dtype="integer", nullable=False, minimum=0, maximum=5),
+        ],
+        min_rows=1,
+        max_rows=4,
+        constraints=[
+            RowComparison(left="start", operator="le", right="end"),
+            SortedBy(columns=["start", "end"], descending=True),
+        ],
+    )
+
+    cases = adversarial_cases(schema)
+
+    assert cases
+    assert all(rows_satisfy_frame_constraints(schema, case.table.to_pylist()) for case in cases)
+
+
 @given(column_strategy(ColumnSchema(name="score", dtype="float", minimum=5.0, maximum=7.0)))
 @settings(max_examples=20, deadline=None)
 def test_bounded_positive_float_strategy_is_valid(score: float | None) -> None:
@@ -203,6 +423,60 @@ def test_bundle_strategy_jointly_preserves_overlap_foreign_key_and_cardinality(
     assert len(customer_keys) == len(set(customer_keys))
 
 
+def test_bundle_strategy_resorts_rows_after_relationship_key_assignment() -> None:
+    schemas = {
+        name: FrameSchema(
+            columns=[
+                ColumnSchema(
+                    name="id",
+                    dtype="integer",
+                    nullable=False,
+                    minimum=0,
+                    maximum=3,
+                )
+            ],
+            min_rows=2,
+            max_rows=3,
+            constraints=[SortedBy(columns=["id"], descending=True)],
+        )
+        for name in ("left", "right")
+    }
+    refs = {name: KeyRef(input=name, columns=["id"]) for name in schemas}
+    bundle = InputBundle(
+        inputs={name: InputSpec(input_schema=schema) for name, schema in schemas.items()},
+        relationships=[KeyOverlap(left=refs["left"], right=refs["right"])],
+    )
+
+    tables = find(
+        bundle_strategy(bundle, schemas),
+        lambda _tables: True,
+        settings=settings(max_examples=50, database=None, deadline=None, derandomize=True),
+    )
+
+    for table in tables.values():
+        values = table.column("id").to_pylist()
+        assert values == sorted(values, reverse=True)
+
+
+@given(
+    bundle_strategy(
+        InputBundle(
+            inputs={
+                name: InputSpec(input_schema=cross_width_equality_schema())
+                for name in ("left", "right")
+            }
+        ),
+        {name: cross_width_equality_schema() for name in ("left", "right")},
+    )
+)
+@settings(max_examples=100, deadline=None)
+def test_bundle_strategy_checks_constraints_after_arrow_width_cast(
+    tables: dict[str, pa.Table],
+) -> None:
+    for table in tables.values():
+        assert all(row["narrow"] == row["wide"] for row in table.to_pylist())
+
+
 def test_adversarial_bundle_cases_are_atomic_and_relationship_valid() -> None:
     bundle, schemas = relational_bundle()
     fixtures = {
@@ -221,6 +495,29 @@ def test_adversarial_bundle_cases_are_atomic_and_relationship_valid() -> None:
         customer_keys = set(case.tables["customers"].column("id").to_pylist())
         assert order_keys <= customer_keys
         assert order_keys & customer_keys
+
+
+def test_adversarial_bundle_fixture_rejects_invalid_frame_constraints() -> None:
+    schemas = {
+        "left": FrameSchema(
+            columns=[ColumnSchema(name="id", dtype="integer", nullable=False)],
+            constraints=[SortedBy(columns=["id"])],
+        ),
+        "right": FrameSchema(columns=[ColumnSchema(name="id", dtype="integer", nullable=False)]),
+    }
+    bundle = InputBundle(
+        inputs={name: InputSpec(input_schema=schema) for name, schema in schemas.items()}
+    )
+
+    with pytest.raises(ValueError, match="does not satisfy its declared frame constraints"):
+        adversarial_bundle_cases(
+            bundle,
+            schemas,
+            fixtures={
+                "left": pa.table({"id": [2, 1]}),
+                "right": pa.table({"id": [1]}),
+            },
+        )
 
 
 @given(

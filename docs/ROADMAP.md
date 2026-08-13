@@ -22,6 +22,8 @@ public examples and the risk of false passes.
   columns.
 - Strengthen generation around empty inputs, duplicate and null keys, multi-column joins, timezone
   boundaries, extreme numeric values and mixed missing-value representations.
+- Extend valid-domain constraints only from concrete examples, with temporal spacing and grouped
+  ordering as likely follow-ups to the initial ordering and row-comparison vocabulary.
 - Exercise multi-input relational campaigns on more public join and lookup implementations, and
   refine the small relationship vocabulary from reproducible examples.
 - Improve mismatch-signature classification without presenting signatures as root causes or bugs.

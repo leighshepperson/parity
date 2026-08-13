@@ -16,8 +16,18 @@ from parity.models import (
     InputSpec,
     KeyOverlap,
     KeyRef,
+    RowComparison,
+    SortedBy,
 )
-from parity.schema import arrow_schema, infer_schema, table_from_rows, validate_bundle_schemas
+from parity.schema import (
+    arrow_schema,
+    infer_schema,
+    rows_satisfy_frame_constraints,
+    sort_rows_for_constraints,
+    table_from_rows,
+    validate_bundle_schemas,
+    validate_frame_schema,
+)
 
 
 def test_infer_portable_schema_and_observed_constraints() -> None:
@@ -80,6 +90,143 @@ def test_table_from_rows_rejects_values_outside_declared_dtype() -> None:
     schema = FrameSchema(columns=[ColumnSchema(name="id", dtype="int64")])
     with pytest.raises(ValueError, match="declared dtype"):
         table_from_rows(schema, [{"id": "not-an-integer"}])
+
+
+def test_sorted_by_uses_composite_lexicographic_order_and_null_placement() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="group", dtype="string", nullable=False),
+            ColumnSchema(name="value", dtype="integer"),
+        ],
+        constraints=[SortedBy(columns=["group", "value"], nulls="first")],
+    )
+    rows = [
+        {"group": "b", "value": 0},
+        {"group": "a", "value": 2},
+        {"group": "a", "value": None},
+        {"group": "a", "value": 1},
+    ]
+
+    sorted_rows = sort_rows_for_constraints(schema, rows)
+
+    assert sorted_rows == [
+        {"group": "a", "value": None},
+        {"group": "a", "value": 1},
+        {"group": "a", "value": 2},
+        {"group": "b", "value": 0},
+    ]
+    assert rows_satisfy_frame_constraints(schema, sorted_rows)
+    assert not rows_satisfy_frame_constraints(schema, rows)
+
+
+def test_row_comparison_ignores_rows_with_null_values() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="start", dtype="integer"),
+            ColumnSchema(name="end", dtype="integer"),
+        ],
+        constraints=[RowComparison(left="start", operator="le", right="end")],
+    )
+
+    assert rows_satisfy_frame_constraints(
+        schema,
+        [{"start": None, "end": -10}, {"start": 1, "end": 1}],
+    )
+    assert not rows_satisfy_frame_constraints(schema, [{"start": 2, "end": 1}])
+
+
+def test_validate_frame_schema_rejects_impossible_comparison_domains() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="start", dtype="integer", nullable=False, minimum=10, maximum=20),
+            ColumnSchema(name="end", dtype="integer", nullable=False, minimum=0, maximum=5),
+        ],
+        constraints=[RowComparison(left="start", operator="le", right="end")],
+    )
+
+    with pytest.raises(ValueError, match="has no satisfying values"):
+        validate_frame_schema(schema)
+
+
+def test_validate_frame_schema_accepts_vacuous_nullable_comparison() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="start", dtype="integer", minimum=10, maximum=20),
+            ColumnSchema(name="end", dtype="integer", nullable=False, minimum=0, maximum=5),
+        ],
+        min_rows=1,
+        constraints=[RowComparison(left="start", operator="le", right="end")],
+    )
+
+    validate_frame_schema(schema)
+
+
+def test_validate_frame_schema_rejects_row_comparison_unique_capacity() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="left",
+                dtype="integer",
+                nullable=False,
+                unique=True,
+                categories=[1, 2],
+            ),
+            ColumnSchema(
+                name="right",
+                dtype="integer",
+                nullable=False,
+                unique=True,
+                categories=[2, 3],
+            ),
+        ],
+        min_rows=2,
+        max_rows=2,
+        constraints=[RowComparison(left="left", operator="eq", right="right")],
+    )
+
+    with pytest.raises(ValueError, match="only 1 distinct values"):
+        validate_frame_schema(schema)
+
+
+def test_nullable_peer_retains_full_unique_capacity_under_row_comparison() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="left",
+                dtype="integer",
+                nullable=False,
+                unique=True,
+                categories=[1, 2, 3],
+            ),
+            ColumnSchema(
+                name="right",
+                dtype="integer",
+                nullable=True,
+                categories=[1, None],
+            ),
+        ],
+        min_rows=3,
+        max_rows=3,
+        constraints=[RowComparison(left="left", operator="eq", right="right")],
+    )
+
+    validate_frame_schema(schema)
+
+
+def test_validate_frame_schema_rejects_overlapping_row_comparisons() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(name="a", dtype="integer"),
+            ColumnSchema(name="b", dtype="integer"),
+        ],
+        constraints=[
+            RowComparison(left="a", operator="le", right="b"),
+            RowComparison(left="b", operator="le", right="b"),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="overlapping row_comparison"):
+        validate_frame_schema(schema)
 
 
 def _two_input_bundle(

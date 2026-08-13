@@ -48,7 +48,7 @@ def _suite(status: Status) -> SuiteResult:
 def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     version = runner.invoke(cli.app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.4.0"
+    assert version.stdout.strip() == "0.6.0"
 
     config_path = tmp_path / "nested" / "parity.toml"
     created = runner.invoke(cli.app, ["init", str(config_path)])
@@ -105,6 +105,8 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
             "7",
             "--max-findings",
             "3",
+            "--stability-repeats",
+            "4",
             "--no-performance",
             "--json",
             str(json_path),
@@ -119,6 +121,7 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
     assert captured["cases"] == {"orders"}
     assert config.cases[0].generation.max_examples == 7
     assert config.cases[0].generation.max_findings == 3
+    assert config.cases[0].generation.stability_repeats == 4
     assert config.cases[0].performance.enabled is False
     assert json.loads(json_path.read_text(encoding="utf-8"))["status"] == "failed"
     assert "<testsuite" in junit_path.read_text(encoding="utf-8")

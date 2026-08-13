@@ -55,8 +55,10 @@ tolerances and temporal values.
 
 Schema-aware deterministic cases run first so common faults have stable names and reproduce without
 random search. Hypothesis then explores and shrinks the remaining domain. `unique` and
-`unique_together` constraints are enforced in strategies. Generated tables preserve types even when
-empty.
+`unique_together` constraints are enforced in strategies. Frame-local ordering and row-comparison
+constraints are constructed as part of the strategy and revalidated after relational bundle key
+rewrites, so search and shrinking remain inside the declared valid domain. Generated tables
+preserve types even when empty.
 
 Fixture-only cases infer a portable schema. Explicit schemas are preferable for high-value contracts
 because sample inference cannot know business bounds or invariants.
@@ -88,6 +90,12 @@ pair, and generated witnesses are repeated twice with a new worker pair for each
 Importable live callables use the same clean confirmation before their evidence is called replayable.
 Non-importable live callables cannot be reconstructed in a fresh process and retain same-process
 confirmation; their artifacts are evidence-only and explicitly reject automatic replay.
+
+Deterministic inputs that pass pairwise comparison are also repeated according to
+`stability_repeats`. Each implementation is compared against its own first observation. This catches
+matching hidden state, unstable reductions and repeated-call failures that ordinary differential
+comparison could otherwise label as a pass. Any instability is an execution error and blocks
+generated search and performance measurement.
 
 Worker processes are not a hostile-code sandbox.
 
