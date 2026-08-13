@@ -1,0 +1,5 @@
+[
+  {"metric": 1.0, "sku": "x", "store": "A"},
+  {"metric": 2.0, "sku": "y", "store": "A"},
+  {"metric": 3.0, "sku": "x", "store": "B"}
+]

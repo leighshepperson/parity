@@ -1,0 +1,5 @@
+[
+  {"group": 1, "item": "a", "__index__": 9, "qty": 1.0},
+  {"group": 1, "item": "b", "__index__": 8, "qty": null},
+  {"group": 2, "item": "a", "__index__": 7, "qty": 2.0}
+]

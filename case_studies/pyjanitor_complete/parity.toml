@@ -1,0 +1,660 @@
+version = 1
+artifact_dir = ".parity-pyjanitor-final"
+fail_fast = false
+
+[[cases]]
+name = "grid-non-null"
+tags = ["generated", "core"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_grid"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_grid"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 1
+max_rows = 8
+unique_together = [["store", "sku"]]
+
+[[cases.schema.columns]]
+name = "store"
+dtype = "string"
+nullable = false
+categories = ["A", "B", "C"]
+
+[[cases.schema.columns]]
+name = "sku"
+dtype = "string"
+nullable = false
+categories = ["x", "y", "z"]
+
+[[cases.schema.columns]]
+name = "metric"
+dtype = "float64"
+nullable = true
+minimum = -1000.0
+maximum = 1000.0
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 300
+seed = 20260813
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "empty-input"
+fixture = "fixtures/empty.arrow"
+tags = ["regression", "empty"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_grid"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_grid"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 3
+max_rows = 3
+
+[[cases.schema.columns]]
+name = "store"
+dtype = "string"
+nullable = false
+categories = ["A", "B"]
+
+[[cases.schema.columns]]
+name = "sku"
+dtype = "string"
+nullable = false
+categories = ["x", "y"]
+
+[[cases.schema.columns]]
+name = "metric"
+dtype = "float64"
+nullable = false
+minimum = -10.0
+maximum = 10.0
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "original-column-order"
+fixture = "fixtures/column_order.json"
+tags = ["regression", "ordering"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_grid"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_grid"
+adapter = "polars"
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "grouped-sort-order"
+fixture = "fixtures/group_order.json"
+tags = ["regression", "ordering", "grouped"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_grouped"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_grouped"
+adapter = "polars"
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "unsorted-row-order"
+fixture = "fixtures/unsorted.json"
+tags = ["regression", "ordering"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_unsorted"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_unsorted"
+adapter = "polars"
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "fill-implicit"
+tags = ["generated", "fill"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_fill_implicit"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_fill_implicit"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 1
+max_rows = 8
+unique_together = [["store", "sku"]]
+
+[[cases.schema.columns]]
+name = "store"
+dtype = "string"
+nullable = false
+categories = ["A", "B", "C"]
+
+[[cases.schema.columns]]
+name = "sku"
+dtype = "string"
+nullable = false
+categories = ["x", "y", "z"]
+
+[[cases.schema.columns]]
+name = "metric"
+dtype = "float64"
+nullable = true
+minimum = -1000.0
+maximum = 1000.0
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 300
+seed = 20260813
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "fill-explicit"
+tags = ["generated", "fill"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_fill_explicit"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_fill_explicit"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 1
+max_rows = 8
+unique_together = [["store", "sku"]]
+
+[[cases.schema.columns]]
+name = "store"
+dtype = "string"
+nullable = false
+categories = ["A", "B", "C"]
+
+[[cases.schema.columns]]
+name = "sku"
+dtype = "string"
+nullable = false
+categories = ["x", "y", "z"]
+
+[[cases.schema.columns]]
+name = "metric"
+dtype = "float64"
+nullable = true
+minimum = -1000.0
+maximum = 1000.0
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 300
+seed = 20260813
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "grouped-inventory-content"
+tags = ["generated", "grouped"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_grouped"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_grouped"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 1
+max_rows = 8
+unique_together = [["warehouse", "week", "sku"]]
+
+[[cases.schema.columns]]
+name = "warehouse"
+dtype = "string"
+nullable = false
+categories = ["W1", "W2", "W3"]
+
+[[cases.schema.columns]]
+name = "week"
+dtype = "int64"
+nullable = false
+minimum = 1
+maximum = 4
+
+[[cases.schema.columns]]
+name = "sku"
+dtype = "string"
+nullable = false
+categories = ["A", "B", "C"]
+
+[[cases.schema.columns]]
+name = "units"
+dtype = "float64"
+nullable = true
+minimum = -1000.0
+maximum = 1000.0
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 300
+seed = 20260813
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "nested-observed-pairs"
+tags = ["generated", "nested"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_nested_pair"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_nested_pair"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 1
+max_rows = 8
+unique_together = [["group", "item_id", "item_name"]]
+
+[[cases.schema.columns]]
+name = "group"
+dtype = "int64"
+nullable = false
+minimum = 1
+maximum = 2
+
+[[cases.schema.columns]]
+name = "item_id"
+dtype = "int64"
+nullable = false
+minimum = 10
+maximum = 12
+
+[[cases.schema.columns]]
+name = "item_name"
+dtype = "string"
+nullable = false
+categories = ["a", "b", "c"]
+
+[[cases.schema.columns]]
+name = "metric"
+dtype = "float64"
+nullable = true
+minimum = -1000.0
+maximum = 1000.0
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 200
+seed = 20260813
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "mixed-logical-dtypes"
+tags = ["generated", "dtypes"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_grid"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_grid"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 1
+max_rows = 8
+unique_together = [["store", "sku"]]
+
+[[cases.schema.columns]]
+name = "store"
+dtype = "string"
+nullable = false
+categories = ["A", "B", "C"]
+
+[[cases.schema.columns]]
+name = "sku"
+dtype = "int64"
+nullable = false
+minimum = 1
+maximum = 3
+
+[[cases.schema.columns]]
+name = "count"
+dtype = "int64"
+nullable = true
+minimum = -10
+maximum = 10
+
+[[cases.schema.columns]]
+name = "flag"
+dtype = "boolean"
+nullable = true
+
+[[cases.schema.columns]]
+name = "label"
+dtype = "string"
+nullable = true
+categories = ["ok", "odd"]
+
+[[cases.schema.columns]]
+name = "observed_at"
+dtype = "datetime"
+nullable = true
+minimum = "2020-01-01T00:00:00"
+maximum = "2030-12-31T00:00:00"
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 200
+seed = 20260813
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "duplicate-multiplicity"
+fixture = "fixtures/duplicates.json"
+tags = ["fixture", "duplicates"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_grid"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_grid"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 3
+max_rows = 3
+
+[[cases.schema.columns]]
+name = "store"
+dtype = "string"
+nullable = false
+categories = ["A", "B"]
+
+[[cases.schema.columns]]
+name = "sku"
+dtype = "string"
+nullable = false
+categories = ["x", "y"]
+
+[[cases.schema.columns]]
+name = "metric"
+dtype = "float64"
+nullable = false
+minimum = -10.0
+maximum = 10.0
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "unsorted-row-content"
+fixture = "fixtures/unsorted.json"
+tags = ["fixture", "ordering"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_unsorted"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_unsorted"
+adapter = "polars"
+
+[cases.schema]
+min_rows = 3
+max_rows = 3
+
+[[cases.schema.columns]]
+name = "store"
+dtype = "string"
+nullable = false
+categories = ["A", "B"]
+
+[[cases.schema.columns]]
+name = "sku"
+dtype = "string"
+nullable = false
+categories = ["x", "y"]
+
+[[cases.schema.columns]]
+name = "metric"
+dtype = "float64"
+nullable = false
+minimum = -10.0
+maximum = 10.0
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "null-key-preservation"
+fixture = "fixtures/null_keys.json"
+tags = ["regression", "null-keys"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_grid"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_grid"
+adapter = "polars"
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "narrow-domain-preservation"
+fixture = "fixtures/narrow_domain.json"
+tags = ["regression", "outer-join"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_narrow_domain"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_narrow_domain"
+adapter = "polars"
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "partial-fill-dictionary"
+fixture = "fixtures/partial_fill.json"
+tags = ["regression", "fill"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_partial_fill"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_partial_fill"
+adapter = "polars"
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "internal-name-collision"
+fixture = "fixtures/index_collision.json"
+tags = ["regression", "collision"]
+
+[cases.reference]
+target = "pyjanitor_parity:pandas_index_collision"
+adapter = "pandas"
+
+[cases.candidate]
+target = "pyjanitor_parity:polars_index_collision"
+adapter = "polars"
+
+[cases.comparison]
+row_order = "ignore"
+column_order = "strict"
+dtype = "compatible"
+
+[cases.generation]
+max_examples = 1
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false

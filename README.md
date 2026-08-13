@@ -228,6 +228,7 @@ the [threat model](docs/THREAT_MODEL.md).
 - [Configuration reference](docs/CONFIG_REFERENCE.md)
 - [Architecture and artifact contracts](docs/ARCHITECTURE.md)
 - [Fault corpus](docs/FAULT_CORPUS.md)
+- [Real-world case study: pyjanitor `complete()`](case_studies/pyjanitor_complete/README.md)
 - [Development and contribution guide](docs/DEVELOPMENT.md)
 - [Two-, three- and ten-year product direction](docs/ROADMAP.md)
 - [Clean-room provenance](docs/CLEAN_ROOM.md) and [public prior art](docs/PRIOR_ART.md)

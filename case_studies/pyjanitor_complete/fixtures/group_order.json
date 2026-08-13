@@ -1,0 +1,5 @@
+[
+  {"warehouse": "W3", "week": 2, "sku": "C", "units": 2.25},
+  {"warehouse": "W2", "week": 1, "sku": "B", "units": 1.25},
+  {"warehouse": "W1", "week": 1, "sku": "A", "units": 0.25}
+]

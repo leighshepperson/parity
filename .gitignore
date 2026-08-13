@@ -5,6 +5,7 @@ coverage.xml
 .hypothesis/
 .mypy_cache/
 .parity/
+.parity-pyjanitor-final/
 .pytest_cache/
 .ruff_cache/
 .venv/
