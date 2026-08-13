@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          package_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          expected_tag = f"v{package_version}"
+          actual_tag = os.environ["RELEASE_TAG"]
+          if actual_tag != expected_tag:
+              raise SystemExit(f"release tag {actual_tag!r} must equal {expected_tag!r}")
+          PY
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]" twine
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy src/parity
+      - run: pytest --cov=src/parity --cov-report=term-missing
+      - run: python -m build
+      - name: Smoke-test built wheel
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python -m pip install --force-reinstall --no-deps dist/*.whl
+          installed_version="$(parity version)"
+          test "$RELEASE_TAG" = "v$installed_version"
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/parity-check/
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1

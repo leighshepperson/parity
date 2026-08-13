@@ -1,6 +1,6 @@
 # Clean-room provenance
 
-Parity is an original implementation begun on 13 August 2026 in this new repository.
+Parity is an original implementation begun on 13 August 2026 in a new repository.
 
 The product object is semantic verification: it executes independently supplied reference and
 candidate computations, searches their input domain and reports observable differences. It does
@@ -11,7 +11,7 @@ Implementation work must use only:
 
 - public Python, NumPy, pandas, Polars, Arrow, Hypothesis and pytest APIs;
 - examples written specifically for this repository using synthetic domains;
-- published behavioural documentation recorded in the repository; and
+- published behavioural documentation linked from `docs/PRIOR_ART.md`; and
 - original architecture, source, tests and prose recorded in this repository's history.
 
 Contributors must not paste private source, prompts, fixtures, metrics, architectural documents or

@@ -1,0 +1,32 @@
+name: Feature proposal
+description: Propose a semantic contract, adapter or integration
+title: "proposal: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract or workflow
+      description: What observable equivalence should Parity be able to test?
+    validations:
+      required: true
+  - type: textarea
+    id: failure
+    attributes:
+      label: Concrete failure example
+      description: Show a small synthetic old/new pair and the counterexample Parity should find.
+    validations:
+      required: true
+  - type: textarea
+    id: policy
+    attributes:
+      label: Proposed policy and false-positive controls
+    validations:
+      required: true
+  - type: checkboxes
+    id: provenance
+    attributes:
+      label: Provenance
+      options:
+        - label: This proposal contains no private source, data or documentation.
+          required: true

@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Keep the static-analysis interpreter aligned with mypy's minimum
+          # supported-Python target.  NumPy releases for newer interpreters may
+          # legitimately use syntax that cannot be parsed as Python 3.11.
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy src/parity
+      - run: python -m build
+
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      # Use the source path so pytest's installed Parity plugin cannot make the
+      # package appear "imported before measurement" during plugin discovery.
+      - run: pytest --cov=src/parity --cov-report=term-missing --cov-report=xml
+      - name: Smoke-test generated project
+        run: |
+          temporary="$(mktemp -d)"
+          cd "$temporary"
+          parity init
+          parity doctor
+          parity check --no-performance --max-examples 20
+
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - name: Generate action fixture
+        run: parity init action-smoke/parity.toml
+      - name: Run local composite action
+        uses: ./
+        with:
+          config: action-smoke/parity.toml
+          max-examples: "20"
+          performance: "false"
+          artifact-name: parity-action-smoke

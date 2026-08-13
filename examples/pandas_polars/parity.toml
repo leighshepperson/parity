@@ -1,0 +1,152 @@
+# Expected-failure campaign: five deliberately incorrect migrations.
+version = 1
+artifact_dir = "../../.parity/fault-corpus"
+fail_fast = false
+
+[[cases]]
+name = "null-join"
+tags = ["join", "null"]
+[cases.reference]
+target = "faults:join_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "faults:join_bad"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 12
+[[cases.schema.columns]]
+name = "customer_id"
+dtype = "int64"
+nullable = true
+examples = [1, 2]
+[cases.comparison]
+row_order = "ignore"
+dtype = "compatible"
+[cases.generation]
+max_examples = 100
+seed = 101
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "groupby-null"
+tags = ["groupby", "null"]
+[cases.reference]
+target = "faults:groupby_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "faults:groupby_bad"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 12
+[[cases.schema.columns]]
+name = "region"
+dtype = "string"
+nullable = true
+categories = ["north", "south"]
+[[cases.schema.columns]]
+name = "amount"
+dtype = "float64"
+nullable = true
+minimum = -100.0
+maximum = 100.0
+examples = [0.0, -0.0, 5.0]
+[cases.comparison]
+row_order = "ignore"
+dtype = "compatible"
+[cases.generation]
+max_examples = 100
+seed = 102
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "timezone-day"
+tags = ["datetime", "timezone"]
+[cases.reference]
+target = "faults:timezone_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "faults:timezone_bad"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 8
+[[cases.schema.columns]]
+name = "event_at"
+dtype = "string"
+nullable = false
+categories = ["2026-01-01T01:30:00Z", "2026-06-01T03:30:00Z", "2026-06-01T18:00:00Z"]
+[cases.comparison]
+row_order = "strict"
+dtype = "compatible"
+[cases.generation]
+max_examples = 60
+seed = 103
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "dtype-width"
+tags = ["dtype", "integer"]
+[cases.reference]
+target = "faults:dtype_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "faults:dtype_bad"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 12
+[[cases.schema.columns]]
+name = "quantity"
+dtype = "int64"
+nullable = true
+minimum = -256
+maximum = 512
+examples = [-129, -128, 127, 128, 255]
+[cases.comparison]
+row_order = "strict"
+dtype = "strict"
+[cases.generation]
+max_examples = 80
+seed = 104
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "stable-order"
+tags = ["ordering"]
+[cases.reference]
+target = "faults:ordering_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "faults:ordering_bad"
+adapter = "polars"
+[cases.schema]
+min_rows = 2
+max_rows = 12
+[[cases.schema.columns]]
+name = "record_id"
+dtype = "int64"
+nullable = false
+unique = true
+minimum = 0
+maximum = 1000
+[[cases.schema.columns]]
+name = "priority"
+dtype = "int64"
+nullable = false
+minimum = 0
+maximum = 2
+examples = [0, 1, 2]
+[cases.comparison]
+row_order = "strict"
+dtype = "compatible"
+[cases.generation]
+max_examples = 100
+seed = 105
+[cases.performance]
+enabled = false
