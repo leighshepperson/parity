@@ -91,6 +91,7 @@ def test_frame_constraints_validate_references_duplicates_and_comparability() ->
 
 
 def test_generation_stability_repeats_is_bounded() -> None:
+    assert GenerationConfig().search
     assert GenerationConfig().stability_repeats == 2
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         GenerationConfig(stability_repeats=0)

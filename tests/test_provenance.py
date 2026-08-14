@@ -37,7 +37,7 @@ def _runtime(
 
 
 def test_public_version_uses_single_source() -> None:
-    assert __version__ == source_version == "0.9.1"
+    assert __version__ == source_version == "0.9.2"
 
 
 def test_distribution_names_are_normalized_and_bounded() -> None:
@@ -351,6 +351,22 @@ def test_effective_config_hash_includes_keyed_row_alignment_contract() -> None:
     assert composite == effective_config_sha256(contract(("account", "sequence")))
     assert composite != effective_config_sha256(contract(("sequence", "account")))
     assert composite != effective_config_sha256(contract(("account",)))
+
+
+def test_effective_config_hash_includes_generated_search_policy() -> None:
+    def contract(search: bool) -> dict[str, object]:
+        return {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "fixture-only",
+                    "fixture": "input.arrow",
+                    "generation": {"search": search},
+                }
+            ],
+        }
+
+    assert effective_config_sha256(contract(True)) != effective_config_sha256(contract(False))
 
 
 def test_effective_config_hash_does_not_treat_static_inputs_mapping_as_bundle_order() -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+import parity.execution as execution_module
 from parity.execution import (
     ExecutionError,
     ExecutionOutcome,
@@ -20,6 +21,43 @@ from parity.execution import (
     redact_text,
 )
 from parity.models import CallableSpec, PandasInput
+
+
+def test_isolated_environment_does_not_inject_wheel_site_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel_module = tmp_path / "site-packages" / "parity" / "execution.py"
+    monkeypatch.setattr(execution_module, "__file__", str(wheel_module))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    spec = CallableSpec(
+        target="package:callable",
+        environment={"PYTHONPATH": "/candidate/site-packages"},
+    )
+
+    environment = execution_module._isolated_environment(spec)
+
+    assert environment["PYTHONPATH"] == "/candidate/site-packages"
+
+
+def test_isolated_environment_injects_only_source_checkout_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "project" / "src"
+    source_module = source_root / "parity" / "execution.py"
+    source_root.parent.mkdir(parents=True)
+    (source_root.parent / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    monkeypatch.setattr(execution_module, "__file__", str(source_module))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    spec = CallableSpec(
+        target="package:callable",
+        environment={"PYTHONPATH": "/candidate/site-packages"},
+    )
+
+    environment = execution_module._isolated_environment(spec)
+
+    assert environment["PYTHONPATH"] == os.pathsep.join(
+        [str(source_root), "/candidate/site-packages"]
+    )
 
 
 @pytest.fixture

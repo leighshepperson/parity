@@ -188,6 +188,7 @@ ignored_columns = []
 max_examples = 250
 max_findings = 1
 stability_repeats = 2
+search = true
 seed = 20260813
 adversarial_examples = true
 shrink = true

@@ -39,6 +39,8 @@ jobs:
         run: |
           mkdir -p case_studies/package-safety/.parity-package-sentinel
           printf 'must not ship\n' > case_studies/package-safety/.parity-package-sentinel/input.arrow
+          mkdir -p case_studies/package-safety/environments/current/reference/src/upstream
+          printf 'must not ship\n' > case_studies/package-safety/environments/current/reference/src/upstream/sentinel.txt
       - run: python -m build
       - name: Verify distributions contain no local evidence or caches
         run: |
@@ -58,6 +60,8 @@ jobs:
               "/.coverage",
               "/coverage.xml",
               "/htmlcov/",
+              "/reference/src/",
+              "/candidate/src/",
               ".pyc",
           )
           archives = [*pathlib.Path("dist").glob("*.tar.gz"), *pathlib.Path("dist").glob("*.whl")]

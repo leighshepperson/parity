@@ -465,6 +465,7 @@ class GenerationConfig(StrictModel):
     max_examples: int = Field(default=100, ge=1, le=100_000)
     max_findings: int = Field(default=1, ge=1, le=20)
     stability_repeats: int = Field(default=2, ge=1, le=10)
+    search: bool = True
     seed: int | None = None
     deadline_ms: int | None = Field(default=None, ge=1)
     adversarial_examples: bool = True

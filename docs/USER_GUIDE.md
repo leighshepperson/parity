@@ -353,6 +353,10 @@ Generation budgets count classifier evaluations plus confirmation runs. Determin
 singleton, null, NaN/signed-zero, duplicate, extreme, temporal, categorical and reversed-order
 cases where applicable—are reported separately. Each deterministic input contributes one to the
 reported example count even when stability checking invokes both implementations more than once.
+For a reviewed fixture whose exact rows are the complete contract, set `generation.search = false`
+and `adversarial_examples = false`. Parity still checks that fixture and its stability repeats, but
+does not search the inferred schema or launch Hypothesis. A searchless case with no deterministic input is
+rejected rather than reported as a pass.
 
 ## Interpreting outcomes
 

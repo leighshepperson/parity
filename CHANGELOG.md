@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.2
+
+- Keep installed reference and candidate worker environments isolated. A wheel-installed
+  orchestrator no longer prepends its whole `site-packages` directory to configured workers and
+  can no longer mask dependency-version differences across virtual environments.
+- Add a five-API, two-dependency-lane PyTimeTK migration pilot that exercises the migration ledger,
+  records baseline incompatibilities, applies a source-level repair and verifies version drift.
+- Add `generation.search = false` for exact fixture-only campaigns while rejecting searchless
+  configurations that would otherwise execute no inputs.
+
+### Compatibility notes
+
+- Source checkouts still inject their narrow `src` root so development workers can import Parity.
+  Installed workers must carry their own `parity-check` installation; a missing installation now
+  fails closed instead of borrowing the orchestrator environment.
+
 ## 0.9.1
 
 - Add a strict version 1 migration manifest and `parity migration check` coverage gate that maps

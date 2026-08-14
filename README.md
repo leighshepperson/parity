@@ -98,6 +98,7 @@ atol = 0.0
 max_examples = 250
 max_findings = 3
 stability_repeats = 2
+search = true
 seed = 20260813
 shrink = true
 

@@ -398,6 +398,9 @@ def _campaign(
     else:
         deterministic = []
 
+    if not exact_only and not generation.search and not deterministic:
+        raise ValueError("generation.search=false requires at least one deterministic input")
+
     for source, value in deterministic:
         deterministic_count += 1
         if representative is None or _input_row_count(value) > _input_row_count(representative):
@@ -589,7 +592,10 @@ def _campaign(
     # excludes already confirmed signatures, so max_findings bounds both the
     # amount of evidence and the worst-case search cost.
     while (
-        not exact_only and not operational_error and len(seen_signatures) < generation.max_findings
+        generation.search
+        and not exact_only
+        and not operational_error
+        and len(seen_signatures) < generation.max_findings
     ):
         latest: tuple[Observation, Observation, list[Mismatch], Status] | None = None
         latest_value: CampaignInput | None = None

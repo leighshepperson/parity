@@ -213,6 +213,57 @@ def test_live_engine_accepts_explicit_cross_engine_adapters(tmp_path: Path) -> N
     assert result.status is Status.PASSED
 
 
+def test_live_engine_can_run_only_the_exact_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_search(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("property search must be disabled")
+
+    monkeypatch.setattr(engine, "find_unseen_counterexample", unexpected_search)
+    result = run_live(
+        identity,
+        identity,
+        fixture=pd.DataFrame({"x": [7]}),
+        schema=None,
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(
+            search=False,
+            adversarial_examples=False,
+            stability_repeats=1,
+        ),
+        performance=PerformanceConfig(enabled=False),
+        artifact_dir=tmp_path,
+    )
+
+    case = result.cases[0]
+    assert result.status is Status.PASSED
+    assert case.examples_run == case.deterministic_examples == 1
+    assert case.generated_examples == 0
+    assert case.failures == []
+
+
+def test_live_engine_rejects_searchless_campaign_without_deterministic_inputs(
+    tmp_path: Path,
+) -> None:
+    def local_identity(frame: pd.DataFrame) -> pd.DataFrame:
+        return frame.copy()
+
+    with pytest.raises(ValueError, match="requires at least one deterministic input"):
+        run_live(
+            local_identity,
+            local_identity,
+            fixture=None,
+            schema=FrameSchema(columns=[ColumnSchema(name="x", dtype="int64", nullable=False)]),
+            comparison=ComparisonPolicy(),
+            generation=GenerationConfig(
+                search=False,
+                adversarial_examples=False,
+            ),
+            performance=PerformanceConfig(enabled=False),
+            artifact_dir=tmp_path,
+        )
+
+
 def test_live_engine_accepts_named_input_bundle(tmp_path: Path) -> None:
     result = run_live(
         merge_named,
