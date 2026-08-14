@@ -18,6 +18,8 @@ JOIN_STUDY = ROOT / "case_studies" / "pandas_polars_join"
 ASOF_STUDY = ROOT / "case_studies" / "pandas_polars_asof"
 STABILITY_STUDY = ROOT / "case_studies" / "stability_probe"
 SKRUB_COMMIT = "55dc7f45e140ccb76e768e3e4b4193f4eac3d5aa"
+PYJANITOR_COMMIT = "c1b57b993dca4348e9acc41301fe8526dcae57df"
+PYJANITOR_FINDINGS = ["null-key-preservation", "narrow-domain-preservation"]
 
 SKRUB_CASES = [
     "aggregate-numeric-control",
@@ -38,10 +40,26 @@ def test_pyjanitor_case_study_config_and_evidence_are_consistent() -> None:
     case_names = [case.name for case in config.cases]
     report_names = [case["name"] for case in report["cases"]]
     assert len(case_names) == 16
-    assert case_names == report_names
-    assert sum(case["examples_run"] for case in report["cases"]) == 1_643
-    assert sum(case["status"] == "passed" for case in report["cases"]) == 8
-    assert sum(case["status"] == "failed" for case in report["cases"]) == 8
+    assert report_names == PYJANITOR_FINDINGS
+    assert sum(case["examples_run"] for case in report["cases"]) == 2
+    assert all(case["status"] == "failed" for case in report["cases"])
+    assert report["schema_version"] == 3
+    assert report["parity_version"] == "0.8.1"
+
+    focused_cases = {case.name: case for case in config.cases if case.name in report_names}
+    for name in PYJANITOR_FINDINGS:
+        for endpoint in (focused_cases[name].reference, focused_cases[name].candidate):
+            assert endpoint.record_distributions == ["pyjanitor"]
+        provenance = report["cases"][report_names.index(name)]["provenance"]
+        assert provenance["verification"] == "captured"
+        for endpoint in ("reference", "candidate"):
+            distributions = {
+                item["name"]: item["version"] for item in provenance[endpoint]["distributions"]
+            }
+            assert distributions["pyjanitor"] == "0.32.23"
+            assert distributions["pandas"] == "3.0.5"
+            assert distributions["polars"] == "1.43.2"
+            assert distributions["pyarrow"] == "25.0.1"
 
     for case in config.cases:
         if case.fixture is not None:
@@ -67,12 +85,13 @@ def test_pyjanitor_case_study_targets_exist_without_importing_optional_dependenc
 
 def test_pyjanitor_case_study_readme_has_pinned_reproduction() -> None:
     content = (STUDY / "README.md").read_text(encoding="utf-8")
-    assert "c1b57b993dca4348e9acc41301fe8526dcae57df" in content
-    assert "parity-check==0.1.0" in content
+    assert PYJANITOR_COMMIT in content
+    assert "parity-check==0.8.1" in content
+    assert "pyjanitor's current `dev` head" in content
     assert "pandas==3.0.5" in content
     assert "polars==1.43.2" in content
     assert "pyarrow==25.0.1" in content
-    assert "expected" not in content.lower() or "exits `1`" in content
+    assert "exits `1`" in content
 
 
 def test_pyjanitor_issue_drafts_include_standalone_reproductions() -> None:
@@ -80,7 +99,11 @@ def test_pyjanitor_issue_drafts_include_standalone_reproductions() -> None:
     assert "loses payload values when completion keys contain nulls" in content
     assert "drops existing rows outside an explicit domain" in content
     assert content.count("import janitor.polars") == 2
-    assert content.count("c1b57b993dca4348e9acc41301fe8526dcae57df") == 2
+    assert content.count(PYJANITOR_COMMIT) >= 2
+    assert "import parity" not in content
+    assert content.count("Actual:") == 2
+    assert content.count("Expected:") == 2
+    assert "found no equivalent report" in content
 
 
 def test_skrub_case_study_config_and_reports_are_consistent() -> None:

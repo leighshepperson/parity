@@ -1,17 +1,6 @@
 {
   "cases": [
     {
-      "deterministic_examples": 5,
-      "diagnoses": [],
-      "elapsed_seconds": 8.401820839997526,
-      "examples_run": 305,
-      "failures": [],
-      "generated_examples": 300,
-      "name": "grid-non-null",
-      "performance": null,
-      "status": "passed"
-    },
-    {
       "deterministic_examples": 1,
       "diagnoses": [
         {
@@ -25,451 +14,291 @@
           "title": "Missing-value semantics differ"
         },
         {
-          "code": "exception-contract",
+          "code": "row-content",
           "confidence": "high",
           "documentation_url": null,
           "evidence": [
-            "The reference and candidate outcomes differ for the minimized input."
+            "A keyed or order-insensitive comparison found incompatible row identity or content."
           ],
-          "explanation": "The implementations return versus raise, or raise different exception types. Decide whether invalid-input behaviour is part of the public contract.",
-          "title": "Failure behaviour differs"
+          "explanation": "One output contains a row for which the other has no equivalent. Check filtering, grouping-key treatment, join cardinality and duplicate preservation.",
+          "title": "Row content or multiplicity differs"
         }
       ],
-      "elapsed_seconds": 1.6459787530002359,
+      "elapsed_seconds": 2.2536690649994853,
       "examples_run": 1,
       "failures": [
         {
-          "artifact": ".parity-pyjanitor-final/empty-input/20260813T064847.646200Z-246a8e8221d0",
+          "artifact": ".parity-pyjanitor-final/null-key-preservation/20260814T002610.786805Z-6ea29b4caa2c",
           "candidate_metrics": {
-            "duration_seconds": 0.9868452940027055,
+            "duration_seconds": 0.6777654359993903,
             "iterations": 1,
-            "peak_rss_bytes": 239087616
+            "peak_rss_bytes": 221196288
           },
-          "mismatch_counts": {
-            "exception": 1
-          },
-          "reference_metrics": {
-            "duration_seconds": 0.9887330070014286,
-            "iterations": 1,
-            "peak_rss_bytes": 239087616
-          },
-          "source": "adversarial:fixture",
-          "status": "failed"
-        }
-      ],
-      "generated_examples": 0,
-      "name": "empty-input",
-      "performance": null,
-      "status": "failed"
-    },
-    {
-      "deterministic_examples": 1,
-      "diagnoses": [
-        {
-          "code": "row-order",
-          "confidence": "medium",
-          "documentation_url": null,
-          "evidence": [
-            "The same or similar values occur at different row positions."
-          ],
-          "explanation": "A group-by, join, unique operation or query optimizer may not preserve implicit order. Add an explicit sort if order is part of the contract; otherwise configure an order-insensitive comparison with stable keys.",
-          "title": "Row ordering differs"
-        },
-        {
-          "code": "schema-shape",
-          "confidence": "medium",
-          "documentation_url": null,
-          "evidence": [
-            "The output columns or schema are not equivalent."
-          ],
-          "explanation": "Check index materialization, selected columns, aliases, join suffixes and aggregation column names.",
-          "title": "Output schema differs"
-        }
-      ],
-      "elapsed_seconds": 2.3311686029992416,
-      "examples_run": 1,
-      "failures": [
-        {
-          "artifact": ".parity-pyjanitor-final/original-column-order/20260813T064850.033899Z-a5077a07025e",
-          "candidate_metrics": {
-            "duration_seconds": 1.7574217799992766,
-            "iterations": 1,
-            "peak_rss_bytes": 239673344
-          },
-          "mismatch_counts": {
-            "column": 1
-          },
-          "reference_metrics": {
-            "duration_seconds": 1.2227508049982134,
-            "iterations": 1,
-            "peak_rss_bytes": 239673344
-          },
-          "source": "adversarial:fixture",
-          "status": "failed"
-        }
-      ],
-      "generated_examples": 0,
-      "name": "original-column-order",
-      "performance": null,
-      "status": "failed"
-    },
-    {
-      "deterministic_examples": 1,
-      "diagnoses": [
-        {
-          "code": "semantic-difference",
-          "confidence": "low",
-          "documentation_url": null,
-          "evidence": [
-            "Parity recorded 8 structured mismatch(es)."
-          ],
-          "explanation": "The candidate does not satisfy the configured equivalence policy for this input. The preserved counterexample is the authoritative reproduction.",
-          "title": "Observable behaviour differs"
-        }
-      ],
-      "elapsed_seconds": 4.756097313998907,
-      "examples_run": 1,
-      "failures": [
-        {
-          "artifact": ".parity-pyjanitor-final/grouped-sort-order/20260813T064854.851570Z-cfb392e77b14",
-          "candidate_metrics": {
-            "duration_seconds": 1.1324026430011145,
-            "iterations": 1,
-            "peak_rss_bytes": 241274880
-          },
-          "mismatch_counts": {
-            "value": 8
-          },
-          "reference_metrics": {
-            "duration_seconds": 2.2980951280005684,
-            "iterations": 1,
-            "peak_rss_bytes": 241274880
-          },
-          "source": "adversarial:fixture",
-          "status": "failed"
-        }
-      ],
-      "generated_examples": 0,
-      "name": "grouped-sort-order",
-      "performance": null,
-      "status": "failed"
-    },
-    {
-      "deterministic_examples": 1,
-      "diagnoses": [
-        {
-          "code": "missing-values",
-          "confidence": "high",
-          "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
-          "evidence": [
-            "The minimized difference contains a missing value."
-          ],
-          "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
-          "title": "Missing-value semantics differ"
-        }
-      ],
-      "elapsed_seconds": 1.2154618269996718,
-      "examples_run": 1,
-      "failures": [
-        {
-          "artifact": ".parity-pyjanitor-final/unsorted-row-order/20260813T064856.125754Z-5249eae5e6f2",
-          "candidate_metrics": {
-            "duration_seconds": 0.6947393580012431,
-            "iterations": 1,
-            "peak_rss_bytes": 241274880
-          },
-          "mismatch_counts": {
-            "value": 12
-          },
-          "reference_metrics": {
-            "duration_seconds": 0.6954742260022613,
-            "iterations": 1,
-            "peak_rss_bytes": 241274880
-          },
-          "source": "adversarial:fixture",
-          "status": "failed"
-        }
-      ],
-      "generated_examples": 0,
-      "name": "unsorted-row-order",
-      "performance": null,
-      "status": "failed"
-    },
-    {
-      "deterministic_examples": 5,
-      "diagnoses": [],
-      "elapsed_seconds": 10.428187371999229,
-      "examples_run": 305,
-      "failures": [],
-      "generated_examples": 300,
-      "name": "fill-implicit",
-      "performance": null,
-      "status": "passed"
-    },
-    {
-      "deterministic_examples": 5,
-      "diagnoses": [],
-      "elapsed_seconds": 12.592851576999237,
-      "examples_run": 305,
-      "failures": [],
-      "generated_examples": 300,
-      "name": "fill-explicit",
-      "performance": null,
-      "status": "passed"
-    },
-    {
-      "deterministic_examples": 5,
-      "diagnoses": [],
-      "elapsed_seconds": 14.643393751997792,
-      "examples_run": 305,
-      "failures": [],
-      "generated_examples": 300,
-      "name": "grouped-inventory-content",
-      "performance": null,
-      "status": "passed"
-    },
-    {
-      "deterministic_examples": 5,
-      "diagnoses": [],
-      "elapsed_seconds": 5.083760285997414,
-      "examples_run": 205,
-      "failures": [],
-      "generated_examples": 200,
-      "name": "nested-observed-pairs",
-      "performance": null,
-      "status": "passed"
-    },
-    {
-      "deterministic_examples": 6,
-      "diagnoses": [],
-      "elapsed_seconds": 16.4162065720011,
-      "examples_run": 206,
-      "failures": [],
-      "generated_examples": 200,
-      "name": "mixed-logical-dtypes",
-      "performance": null,
-      "status": "passed"
-    },
-    {
-      "deterministic_examples": 1,
-      "diagnoses": [],
-      "elapsed_seconds": 3.0229460450027545,
-      "examples_run": 2,
-      "failures": [],
-      "generated_examples": 1,
-      "name": "duplicate-multiplicity",
-      "performance": null,
-      "status": "passed"
-    },
-    {
-      "deterministic_examples": 1,
-      "diagnoses": [],
-      "elapsed_seconds": 3.5613515389995882,
-      "examples_run": 2,
-      "failures": [],
-      "generated_examples": 1,
-      "name": "unsorted-row-content",
-      "performance": null,
-      "status": "passed"
-    },
-    {
-      "deterministic_examples": 1,
-      "diagnoses": [
-        {
-          "code": "missing-values",
-          "confidence": "high",
-          "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
-          "evidence": [
-            "The minimized difference contains a missing value."
-          ],
-          "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
-          "title": "Missing-value semantics differ"
-        },
-        {
-          "code": "row-order",
-          "confidence": "medium",
-          "documentation_url": null,
-          "evidence": [
-            "The same or similar values occur at different row positions."
-          ],
-          "explanation": "A group-by, join, unique operation or query optimizer may not preserve implicit order. Add an explicit sort if order is part of the contract; otherwise configure an order-insensitive comparison with stable keys.",
-          "title": "Row ordering differs"
-        }
-      ],
-      "elapsed_seconds": 3.1714638699995703,
-      "examples_run": 1,
-      "failures": [
-        {
-          "artifact": ".parity-pyjanitor-final/null-key-preservation/20260813T065005.809155Z-dd70fa41a5af",
-          "candidate_metrics": {
-            "duration_seconds": 1.332183131002239,
-            "iterations": 1,
-            "peak_rss_bytes": 248279040
-          },
+          "finding_signature": "ms1:d31d5804bbdded2176f4339ca816d7fa1169c48cd7ff836952ec3130807030d1",
           "mismatch_counts": {
             "row": 4
           },
           "reference_metrics": {
-            "duration_seconds": 2.008143333001499,
+            "duration_seconds": 0.6638090950000333,
             "iterations": 1,
-            "peak_rss_bytes": 248279040
+            "peak_rss_bytes": 221196288
           },
-          "source": "adversarial:fixture",
+          "source": "fixture",
           "status": "failed"
         }
       ],
+      "findings_discovered": 1,
       "generated_examples": 0,
       "name": "null-key-preservation",
       "performance": null,
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "pyjanitor",
+              "status": "installed",
+              "version": "0.32.23"
+            }
+          ],
+          "parity_version": "0.8.1",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "pyjanitor",
+              "status": "installed",
+              "version": "0.32.23"
+            }
+          ],
+          "parity_version": "0.8.1",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
+        },
+        "verification": "captured"
+      },
       "status": "failed"
     },
     {
       "deterministic_examples": 1,
       "diagnoses": [
         {
-          "code": "row-order",
-          "confidence": "medium",
+          "code": "row-content",
+          "confidence": "high",
           "documentation_url": null,
           "evidence": [
-            "The same or similar values occur at different row positions."
+            "A keyed or order-insensitive comparison found incompatible row identity or content."
           ],
-          "explanation": "A group-by, join, unique operation or query optimizer may not preserve implicit order. Add an explicit sort if order is part of the contract; otherwise configure an order-insensitive comparison with stable keys.",
-          "title": "Row ordering differs"
+          "explanation": "One output contains a row for which the other has no equivalent. Check filtering, grouping-key treatment, join cardinality and duplicate preservation.",
+          "title": "Row content or multiplicity differs"
         }
       ],
-      "elapsed_seconds": 2.527716866999981,
+      "elapsed_seconds": 2.3049772560007113,
       "examples_run": 1,
       "failures": [
         {
-          "artifact": ".parity-pyjanitor-final/narrow-domain-preservation/20260813T065008.415257Z-8482b5e81a5c",
+          "artifact": ".parity-pyjanitor-final/narrow-domain-preservation/20260814T002613.165182Z-b20645ab421e",
           "candidate_metrics": {
-            "duration_seconds": 1.0487685709995276,
+            "duration_seconds": 0.7591386250005598,
             "iterations": 1,
-            "peak_rss_bytes": 248279040
+            "peak_rss_bytes": 224059392
           },
+          "finding_signature": "ms1:ba791dbdb30b756ba35aa8333139335a314abfc8b90dbeb111ef12f882047cef",
           "mismatch_counts": {
             "row": 1,
             "shape": 1
           },
           "reference_metrics": {
-            "duration_seconds": 1.5363620619973517,
+            "duration_seconds": 0.7072680789988226,
             "iterations": 1,
-            "peak_rss_bytes": 248279040
+            "peak_rss_bytes": 224059392
           },
-          "source": "adversarial:fixture",
+          "source": "fixture",
           "status": "failed"
         }
       ],
+      "findings_discovered": 1,
       "generated_examples": 0,
       "name": "narrow-domain-preservation",
       "performance": null,
-      "status": "failed"
-    },
-    {
-      "deterministic_examples": 1,
-      "diagnoses": [
-        {
-          "code": "missing-values",
-          "confidence": "high",
-          "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
-          "evidence": [
-            "The minimized difference contains a missing value."
+      "provenance": {
+        "candidate": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "pyjanitor",
+              "status": "installed",
+              "version": "0.32.23"
+            }
           ],
-          "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
-          "title": "Missing-value semantics differ"
+          "parity_version": "0.8.1",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
         },
-        {
-          "code": "exception-contract",
-          "confidence": "high",
-          "documentation_url": null,
-          "evidence": [
-            "The reference and candidate outcomes differ for the minimized input."
+        "reference": {
+          "distributions": [
+            {
+              "name": "hypothesis",
+              "status": "installed",
+              "version": "6.165.5"
+            },
+            {
+              "name": "numpy",
+              "status": "installed",
+              "version": "2.5.2"
+            },
+            {
+              "name": "pandas",
+              "status": "installed",
+              "version": "3.0.5"
+            },
+            {
+              "name": "polars",
+              "status": "installed",
+              "version": "1.43.2"
+            },
+            {
+              "name": "pyarrow",
+              "status": "installed",
+              "version": "25.0.1"
+            },
+            {
+              "name": "pyjanitor",
+              "status": "installed",
+              "version": "0.32.23"
+            }
           ],
-          "explanation": "The implementations return versus raise, or raise different exception types. Decide whether invalid-input behaviour is part of the public contract.",
-          "title": "Failure behaviour differs"
-        }
-      ],
-      "elapsed_seconds": 2.649970458998723,
-      "examples_run": 1,
-      "failures": [
-        {
-          "artifact": ".parity-pyjanitor-final/partial-fill-dictionary/20260813T065011.166604Z-307263e1f1d5",
-          "candidate_metrics": {
-            "duration_seconds": 1.4583243939996464,
-            "iterations": 1,
-            "peak_rss_bytes": 248279040
-          },
-          "mismatch_counts": {
-            "exception": 1
-          },
-          "reference_metrics": {
-            "duration_seconds": 1.3669112919997133,
-            "iterations": 1,
-            "peak_rss_bytes": 248279040
-          },
-          "source": "adversarial:fixture",
-          "status": "failed"
-        }
-      ],
-      "generated_examples": 0,
-      "name": "partial-fill-dictionary",
-      "performance": null,
-      "status": "failed"
-    },
-    {
-      "deterministic_examples": 1,
-      "diagnoses": [
-        {
-          "code": "missing-values",
-          "confidence": "high",
-          "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
-          "evidence": [
-            "The minimized difference contains a missing value."
-          ],
-          "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
-          "title": "Missing-value semantics differ"
+          "parity_version": "0.8.1",
+          "platform_machine": "x86_64",
+          "platform_system": "Linux",
+          "python_implementation": "CPython",
+          "python_version": "3.12.13"
         },
-        {
-          "code": "exception-contract",
-          "confidence": "high",
-          "documentation_url": null,
-          "evidence": [
-            "The reference and candidate outcomes differ for the minimized input."
-          ],
-          "explanation": "The implementations return versus raise, or raise different exception types. Decide whether invalid-input behaviour is part of the public contract.",
-          "title": "Failure behaviour differs"
-        }
-      ],
-      "elapsed_seconds": 3.201944136999373,
-      "examples_run": 1,
-      "failures": [
-        {
-          "artifact": ".parity-pyjanitor-final/internal-name-collision/20260813T065014.438969Z-e74662bfb672",
-          "candidate_metrics": {
-            "duration_seconds": 2.1189051660003315,
-            "iterations": 1,
-            "peak_rss_bytes": 248279040
-          },
-          "mismatch_counts": {
-            "exception": 1
-          },
-          "reference_metrics": {
-            "duration_seconds": 1.4783195519994479,
-            "iterations": 1,
-            "peak_rss_bytes": 248279040
-          },
-          "source": "adversarial:fixture",
-          "status": "failed"
-        }
-      ],
-      "generated_examples": 0,
-      "name": "internal-name-collision",
-      "performance": null,
+        "verification": "captured"
+      },
       "status": "failed"
     }
   ],
-  "elapsed_seconds": 96.98547701599819,
-  "parity_version": "0.1.0",
-  "schema_version": 1,
+  "elapsed_seconds": 4.714076721998936,
+  "parity_version": "0.8.1",
+  "provenance": {
+    "config_sha256": "db33f017bfeb5d758d133ff50b2afe4b02bc291da942667175bb5a76e3a2dd50",
+    "orchestrator": {
+      "distributions": [
+        {
+          "name": "hypothesis",
+          "status": "installed",
+          "version": "6.165.5"
+        },
+        {
+          "name": "numpy",
+          "status": "installed",
+          "version": "2.5.2"
+        },
+        {
+          "name": "pandas",
+          "status": "installed",
+          "version": "3.0.5"
+        },
+        {
+          "name": "polars",
+          "status": "installed",
+          "version": "1.43.2"
+        },
+        {
+          "name": "pyarrow",
+          "status": "installed",
+          "version": "25.0.1"
+        }
+      ],
+      "parity_version": "0.8.1",
+      "platform_machine": "x86_64",
+      "platform_system": "Linux",
+      "python_implementation": "CPython",
+      "python_version": "3.12.13"
+    }
+  },
+  "schema_version": 3,
   "status": "failed"
 }

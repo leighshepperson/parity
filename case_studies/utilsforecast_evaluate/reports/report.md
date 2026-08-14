@@ -1,6 +1,6 @@
 # Parity verification
 
-**PASSED** — 1/1 cases passed in 0.870s.
+**PASSED** — 1/1 cases passed in 0.675s.
 
 | Case | Status | Examples | Findings | Runtime ratio | Memory ratio |
 | --- | ---: | ---: | ---: | ---: | ---: |

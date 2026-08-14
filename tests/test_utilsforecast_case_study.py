@@ -76,7 +76,7 @@ def test_utilsforecast_study_reproduction_is_exact_and_data_safe() -> None:
 def test_utilsforecast_live_report_is_a_clean_pinned_pass() -> None:
     report = json.loads((STUDY / "reports" / "report.json").read_text(encoding="utf-8"))
     assert report["schema_version"] == 3
-    assert report["parity_version"] == "0.7.0"
+    assert report["parity_version"] == "0.8.1"
     assert report["status"] == "passed"
     assert len(report["cases"]) == 1
 
@@ -87,6 +87,7 @@ def test_utilsforecast_live_report_is_a_clean_pinned_pass() -> None:
     assert case["findings_discovered"] == 0
     assert case["provenance"]["verification"] == "captured"
     for endpoint in ("reference", "candidate"):
+        assert case["provenance"][endpoint]["parity_version"] == "0.8.1"
         versions = {
             item["name"]: item["version"]
             for item in case["provenance"][endpoint]["distributions"]

@@ -32,6 +32,36 @@ seed = 201
 enabled = false
 
 [[cases]]
+name = "integer-precision-fixed"
+fixture = "fixtures/integer_precision.parquet"
+[cases.reference]
+target = "faults:integer_precision_reference"
+adapter = "pandas"
+[cases.candidate]
+target = "corrected:integer_precision_fixed"
+adapter = "polars"
+[cases.schema]
+min_rows = 1
+max_rows = 4
+[[cases.schema.columns]]
+name = "quantity"
+dtype = "int64"
+nullable = false
+minimum = 9007199254740992
+maximum = 9007199254740995
+examples = [9007199254740993]
+[cases.comparison]
+row_order = "strict"
+dtype = "compatible"
+rtol = 0
+atol = 0
+[cases.generation]
+max_examples = 3
+seed = 206
+[cases.performance]
+enabled = false
+
+[[cases]]
 name = "groupby-null-fixed"
 fixture = "fixtures/groupby_null.parquet"
 [cases.reference]

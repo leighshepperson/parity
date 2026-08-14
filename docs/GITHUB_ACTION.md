@@ -19,7 +19,7 @@ jobs:
       - name: Install project dependencies
         run: python -m pip install -e .
       - id: parity
-        uses: leighshepperson/parity@v0.8.0
+        uses: leighshepperson/parity@v0.8.1
         with:
           config: migrations/parity.toml
           cases: orders,customers

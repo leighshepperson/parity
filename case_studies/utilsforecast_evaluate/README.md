@@ -31,6 +31,7 @@ python3.12 -m venv /tmp/parity-utilsforecast-0216
 ```
 
 Expected result: `evaluate-mae-rmse` passes and the command exits `0`. The committed report records
-that result under CPython 3.12.13 with Parity 0.7.0 and the exact dependency versions above. It
-contains no compared row values; all inputs were derived from the synthetic fixture. Replay
-artifacts remain local in `.parity-utilsforecast/` and are ignored.
+that result under CPython 3.12.13 with Parity 0.8.1 and the exact dependency versions above. This
+refresh required no wrapper, fixture, policy, or target-project changes. The report contains no
+compared row values; all inputs were derived from the synthetic fixture. Replay artifacts remain
+local in `.parity-utilsforecast/` and are ignored.

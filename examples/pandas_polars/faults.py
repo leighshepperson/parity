@@ -113,6 +113,18 @@ def ordering_bad(frame: pl.DataFrame) -> pl.DataFrame:
     return frame.sort(["priority", "record_id"]).select("record_id", "priority")
 
 
+def integer_precision_reference(frame: pd.DataFrame) -> pd.DataFrame:
+    """Integer identifiers retain every bit across the transformation."""
+
+    return frame[["quantity"]].copy()
+
+
+def integer_precision_bad(frame: pl.DataFrame) -> pl.DataFrame:
+    """Bug: a binary-float round trip loses integers above 2**53."""
+
+    return frame.select(pl.col("quantity").cast(pl.Float64).cast(pl.Int64))
+
+
 def make_demo_inputs() -> dict[str, pd.DataFrame]:
     """Return deterministic witnesses used in documentation and integrity tests."""
 
@@ -124,4 +136,5 @@ def make_demo_inputs() -> dict[str, pd.DataFrame]:
         "stable-order": pd.DataFrame(
             {"record_id": [20, 10, 30], "priority": np.array([1, 1, 0], dtype=np.int64)}
         ),
+        "integer-precision": pd.DataFrame({"quantity": pd.Series([2**53 + 1], dtype="int64")}),
     }

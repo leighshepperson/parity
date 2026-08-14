@@ -10,7 +10,7 @@ Run it from the repository root:
 parity check --config examples/pandas_polars/parity.toml --no-performance
 ```
 
-This command is expected to exit `1`. Success means Parity found and classified all five injected
+This command is expected to exit `1`. Success means Parity found and classified all six injected
 defects, not that the candidate implementations passed.
 
 ## Initial cases
@@ -50,6 +50,14 @@ The reference sorts by priority while preserving arrival order for ties. The can
 ID as a tie-breaker and changes equal-priority order.
 
 Expected signal: row mismatch when strict order is enabled.
+
+### Integer precision
+
+The reference preserves an integer just above `2**53`. The candidate round-trips it through a
+binary float, losing one unit while retaining the same integer output dtype. The comparison uses
+zero numeric tolerances so the regression also guards Parity's own lossless numeric boundary.
+
+Expected signal: an exact numeric value mismatch.
 
 ## Passing counterparts
 

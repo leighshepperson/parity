@@ -1604,6 +1604,46 @@ def test_configured_named_bundle_failure_replays_atomically(
     assert replayed.cases[0].failures[0].artifact == artifact
 
 
+def test_configured_worker_and_replay_detect_large_integer_precision_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "precision_transforms.py").write_text(
+        "def reference(_frame):\n"
+        "    return {'value': 9007199254740992}\n"
+        "def candidate(_frame):\n"
+        "    return {'value': 9007199254740993}\n",
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "fixture.arrow"
+    table = pa.table({"x": [1]})
+    with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    monkeypatch.chdir(tmp_path)
+    case = CaseConfig(
+        name="numeric-precision-replay",
+        reference=CallableSpec(
+            target="precision_transforms:reference", adapter="pandas", workdir=tmp_path
+        ),
+        candidate=CallableSpec(
+            target="precision_transforms:candidate", adapter="pandas", workdir=tmp_path
+        ),
+        fixture=fixture,
+        comparison=ComparisonPolicy(rtol=0, atol=0),
+        generation=GenerationConfig(max_examples=1, adversarial_examples=False),
+        performance=PerformanceConfig(enabled=False),
+    )
+
+    result = engine.run_suite(ParityConfig(artifact_dir=tmp_path / ".parity", cases=[case]))
+    failure = result.cases[0].failures[0]
+
+    assert result.status is Status.FAILED
+    assert failure.mismatches[0].path == "$['value']"
+    assert failure.artifact is not None
+    replayed = replay_artifact(failure.artifact)
+    assert replayed.status is Status.FAILED
+    assert replayed.cases[0].failures[0].mismatches[0].path == "$['value']"
+
+
 def test_positional_bundle_replay_restores_hash_bound_input_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
