@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -28,15 +27,10 @@ jobs:
 
           def categorical_groupby(data: pd.DataFrame) -> pd.DataFrame:
               labels = data["code"].map({0: "a", 1: "b", 2: "c"})
-              frame = pd.DataFrame(
-                  {
-                      "key": pd.Categorical(labels, categories=CATEGORIES),
-                      "value": data["value"].astype("float64"),
-                  }
-              )
-              # Intentionally rely on pandas' observed= default. 2.2.x used False;
-              # 3.0.x uses True. The fixture observes every category, so only generated
-              # inputs that omit a category can reveal the semantic change.
+              frame = pd.DataFrame({
+                  "key": pd.Categorical(labels, categories=CATEGORIES),
+                  "value": data["value"].astype("float64"),
+              })
               return frame.groupby("key").agg(total=("value", "sum")).reset_index()
           PY
 
@@ -133,11 +127,11 @@ jobs:
         shell: bash
         run: |
           .venv-candidate/bin/python - <<'PY'
-          import json, subprocess, tempfile
+          import json, subprocess
           from pathlib import Path
 
           cfg = Path("parity-drift.toml").read_text()
-          cfg = cfg.replace("search = true", "search = false")
+          cfg = cfg.replace("search = true", "search = false\nadversarial_examples = false")
           Path("parity-fixture-only.toml").write_text(cfg)
           result = subprocess.run([
               ".venv-candidate/bin/parity", "check",
@@ -145,10 +139,13 @@ jobs:
               "--json", "fixture-only-report.json",
           ])
           report = json.load(open("fixture-only-report.json"))
+          case = report["cases"][0]
           print("FIXTURE_ONLY_EXIT=", result.returncode)
           print("FIXTURE_ONLY_STATUS=", report["status"])
+          print("FIXTURE_ONLY_EXAMPLES=", case["examples_run"])
           assert result.returncode == 0
           assert report["status"] == "passed"
+          assert case["generated_examples"] == 0
           PY
 
       - name: Let Parity search for the drift
@@ -180,7 +177,6 @@ jobs:
           print("FINDINGS_DISCOVERED=", case["findings_discovered"])
           assert report["status"] == "failed"
           assert case["findings_discovered"] == 1
-          assert case["failures"]
           failure = case["failures"][0]
           print("FAILURE_SOURCE=", failure["source"])
           print("MISMATCH_COUNTS=", failure["mismatch_counts"])
@@ -188,8 +184,7 @@ jobs:
           print("ARTIFACT=", failure["artifact"])
           assert failure["source"] == "generated"
 
-          arrow_path = failure["artifact"] + "/input.arrow"
-          with ipc.open_file(arrow_path) as reader:
+          with ipc.open_file(failure["artifact"] + "/input.arrow") as reader:
               table = reader.read_all()
           print("SHRUNK_ROWS=", table.num_rows)
           print("SHRUNK_CODES=", table.column("code").to_pylist())
