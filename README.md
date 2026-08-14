@@ -239,7 +239,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: leighshepperson/parity@v0.8.0
+  - uses: leighshepperson/parity@v0.8.1
     with:
       config: parity.toml
       cases: orders,customers
@@ -288,6 +288,7 @@ the [threat model](docs/THREAT_MODEL.md).
 ## Documentation
 
 - [Release notes](CHANGELOG.md)
+- [External validation log](case_studies/ADOPTION_LOG.md)
 - [Getting started and migration workflow](docs/USER_GUIDE.md)
 - [Configuration reference](docs/CONFIG_REFERENCE.md)
 - [Architecture and artifact contracts](docs/ARCHITECTURE.md)

@@ -220,7 +220,12 @@ def normalize_scalar(value: Any) -> Any:
     if value is pd.NA or value is pd.NaT:
         return None
     if isinstance(value, np.generic):
-        return normalize_scalar(value.item())
+        unboxed = value.item()
+        # Wider-than-binary64 NumPy floats deliberately remain NumPy scalars:
+        # ``longdouble.item()`` can return another ``longdouble`` and recursive
+        # unboxing would never terminate. The comparator can consume its exact
+        # integer ratio without narrowing it to a Python float.
+        return value if isinstance(unboxed, np.generic) else normalize_scalar(unboxed)
     if isinstance(value, enum.Enum):
         return normalize_scalar(value.value)
     if isinstance(value, Path):
@@ -249,9 +254,11 @@ def is_null(value: Any) -> bool:
 def is_nan(value: Any) -> bool:
     """Return whether a value is an IEEE NaN."""
 
-    return isinstance(value, (float, np.floating, decimal.Decimal)) and bool(
-        value.is_nan() if isinstance(value, decimal.Decimal) else math.isnan(float(value))
-    )
+    if isinstance(value, decimal.Decimal):
+        return value.is_nan()
+    if isinstance(value, np.floating):
+        return bool(np.isnan(value))
+    return isinstance(value, float) and math.isnan(value)
 
 
 def json_safe(value: Any, *, max_items: int = 20) -> JsonValue:

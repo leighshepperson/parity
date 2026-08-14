@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.1
+
+- Compare finite integers, Decimals and mixed numeric types without first converting them to
+  binary floats. Exact comparisons now distinguish adjacent integers above `2**53`, high-precision
+  Decimals and finite Decimals outside the float range.
+- Apply existing relative and absolute tolerances with exact rational arithmetic for ordinary
+  numeric ranges and bounded, directed Decimal intervals for extreme exponents.
+- Preserve wider-than-binary64 NumPy floating scalars instead of recursively unboxing or narrowing
+  them before comparison.
+- Add scalar, frame, keyed, order-insensitive, isolated-worker, replay and synthetic fault-corpus
+  regressions for numeric precision loss.
+
+### Compatibility notes
+
+- Configuration, artifact, replay and report formats are unchanged. Python and binary16/32/64
+  float comparison retains `math.isclose` behaviour, including NaN, infinity and signed-zero
+  policy handling; wider NumPy floats use their exact ratios.
+- With `rtol = 0` and `atol = 0`, mismatches previously hidden by float coercion are now reported.
+  Nonzero tolerances retain the same symmetric relative/absolute rule but apply it to exact values.
+
 ## 0.8.0
 
 - Add a fixture-backed `parity init` mode for existing reference and candidate targets, including

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import math
 import os
 import subprocess
 import sys
@@ -16,7 +17,7 @@ import pyarrow as pa
 import pytest
 
 import parity.comparison as comparison_module
-from parity.canonical import CanonicalFrame, CanonicalSeries, canonicalize
+from parity.canonical import CanonicalColumn, CanonicalFrame, CanonicalSeries, canonicalize
 from parity.comparison import compare, compare_observations, compare_result, mismatch_signature
 from parity.models import ComparisonPolicy, Mismatch, MismatchKind
 
@@ -473,6 +474,268 @@ def test_null_nan_and_signed_zero_policies() -> None:
     assert compare(0.0, -0.0, ComparisonPolicy(signed_zero_equal=False))
 
 
+@pytest.mark.parametrize(
+    ("reference", "candidate"),
+    [
+        (2**53, 2**53 + 1),
+        (
+            decimal.Decimal("1.0000000000000000000000000001"),
+            decimal.Decimal("1.0000000000000000000000000002"),
+        ),
+        (decimal.Decimal("1e10000"), decimal.Decimal("1.0000000001e10000")),
+        (2**53 + 1, float(2**53 + 1)),
+        (decimal.Decimal("0.1"), 0.1),
+        (10**10_000, 10**10_000 + 1),
+    ],
+    ids=[
+        "adjacent-large-integers",
+        "high-precision-decimals",
+        "huge-decimals",
+        "mixed-integer-float",
+        "mixed-decimal-float",
+        "huge-integers",
+    ],
+)
+def test_numeric_precision_fault_corpus_distinguishes_exact_values(
+    reference: object, candidate: object
+) -> None:
+    assert compare(reference, candidate, ComparisonPolicy(rtol=0, atol=0))
+
+
+def test_exact_numeric_comparison_accepts_equal_cross_type_values() -> None:
+    policy = ComparisonPolicy(rtol=0, atol=0)
+
+    assert compare(42, 42.0, policy) == []
+    assert compare(decimal.Decimal("0.5"), 0.5, policy) == []
+    assert compare(decimal.Decimal("1e10000"), decimal.Decimal("1e10000"), policy) == []
+
+
+def test_numeric_tolerance_is_lossless_for_huge_decimals() -> None:
+    reference = decimal.Decimal("1e10000")
+    within = decimal.Decimal("1.00000001e10000")
+    outside = decimal.Decimal("1.000001e10000")
+    policy = ComparisonPolicy(rtol=1e-7, atol=0)
+
+    assert compare(reference, within, policy) == []
+    assert compare(reference, outside, policy)
+    assert compare(reference, decimal.Decimal("Infinity"), ComparisonPolicy(rtol=math.inf))
+
+
+def test_extreme_decimal_exponents_do_not_expand_into_huge_fractions() -> None:
+    reference = decimal.Decimal("1e1000000000")
+    within = decimal.Decimal("1.00000001e1000000000")
+    outside = decimal.Decimal("1.000001e1000000000")
+    policy = ComparisonPolicy(rtol=1e-7, atol=0)
+
+    assert compare(reference, reference, policy) == []
+    assert compare(reference, within, policy) == []
+    assert compare(reference, outside, policy)
+
+
+def test_equivalent_extreme_decimals_compare_exactly() -> None:
+    reference = decimal.Decimal("1e100000")
+    equivalent = decimal.Decimal("10e99999")
+
+    assert compare(reference, equivalent, ComparisonPolicy(rtol=0, atol=0)) == []
+
+
+@pytest.mark.parametrize(
+    ("reference", "candidate", "rtol", "atol"),
+    [
+        (1.0, 1.0 + 1e-8, 1e-7, 0.0),
+        (1.0, 1.0 + 1e-6, 1e-7, 0.0),
+        (1e308, 1.00000001e308, 1e-7, 0.0),
+        (0.0, 1e-12, 0.0, 1e-12),
+        (-0.0, 0.0, 0.0, 0.0),
+    ],
+)
+def test_ordinary_float_comparison_retains_math_isclose_behavior(
+    reference: float, candidate: float, rtol: float, atol: float
+) -> None:
+    policy = ComparisonPolicy(rtol=rtol, atol=atol)
+
+    assert (compare(reference, candidate, policy) == []) is math.isclose(
+        reference, candidate, rel_tol=rtol, abs_tol=atol
+    )
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_standard_numpy_floats_retain_math_isclose_behavior(dtype: object) -> None:
+    reference = dtype(1)  # type: ignore[operator]
+    candidate = np.nextafter(reference, dtype(2))  # type: ignore[operator]
+
+    for policy in (ComparisonPolicy(rtol=0, atol=0), ComparisonPolicy(rtol=1e-3, atol=0)):
+        assert (compare(reference, candidate, policy) == []) is math.isclose(
+            float(reference),
+            float(candidate),
+            rel_tol=policy.rtol,
+            abs_tol=policy.atol,
+        )
+
+
+def test_wide_numpy_floats_compare_without_binary64_narrowing() -> None:
+    reference = np.longdouble(1)
+    candidate = np.nextafter(reference, np.longdouble(2))
+    exact = ComparisonPolicy(rtol=0, atol=0)
+
+    assert float(reference) == float(candidate)
+    assert canonicalize(reference) is reference
+    assert compare(reference, candidate, exact)
+    assert compare(reference, candidate, ComparisonPolicy(rtol=1e-18, atol=0)) == []
+
+
+def test_mixed_integer_and_wide_numpy_float_do_not_use_numpy_coercive_equality() -> None:
+    integer = 2**64 + 1
+    narrowed = np.longdouble(2**64)
+    exact = ComparisonPolicy(rtol=0, atol=0)
+
+    # NumPy releases differ on whether native cross-type equality first coerces
+    # the Python integer. Parity's exact contract must not depend on that choice.
+    assert int(narrowed) == 2**64
+    assert compare(integer, narrowed, exact)
+
+
+def test_unsupported_complex_numpy_scalars_retain_native_equality() -> None:
+    value = np.clongdouble(1 + 2j)
+
+    assert compare(value, value, ComparisonPolicy(rtol=0, atol=0)) == []
+
+
+def test_finite_wide_numpy_float_does_not_collapse_to_infinity() -> None:
+    largest = np.longdouble(np.finfo(np.longdouble).max)
+    exact = ComparisonPolicy(rtol=0, atol=0)
+
+    assert np.isfinite(largest)
+    assert compare(largest, float("inf"), exact)
+    assert compare(-largest, float("-inf"), exact)
+
+
+def test_keyed_wide_numpy_float_does_not_collapse_to_infinity() -> None:
+    largest = np.longdouble(np.finfo(np.longdouble).max)
+    frame = CanonicalFrame(
+        (
+            CanonicalColumn("id", "longdouble", "float", (largest, np.longdouble("inf"))),
+            CanonicalColumn("value", "int64", "integer", (1, 2)),
+        )
+    )
+
+    assert (
+        compare(
+            frame,
+            frame,
+            ComparisonPolicy(row_order="keyed", row_keys=["id"], rtol=0, atol=0),
+        )
+        == []
+    )
+
+
+def test_numeric_special_values_retain_explicit_policy_behavior() -> None:
+    exact = ComparisonPolicy(rtol=0, atol=0)
+
+    assert compare(decimal.Decimal("Infinity"), float("inf"), exact) == []
+    assert compare(decimal.Decimal("-Infinity"), float("-inf"), exact) == []
+    assert compare(decimal.Decimal("Infinity"), float("-inf"), exact)
+    assert compare(decimal.Decimal("1e10000"), float("inf"), exact)
+    assert compare(decimal.Decimal("NaN"), float("nan"), exact) == []
+    assert compare(
+        decimal.Decimal("NaN"),
+        float("nan"),
+        ComparisonPolicy(rtol=0, atol=0, nan_equal=False),
+    )
+    assert compare(decimal.Decimal("-0"), -0.0, exact) == []
+    assert compare(
+        decimal.Decimal("-0"),
+        0,
+        ComparisonPolicy(rtol=0, atol=0, signed_zero_equal=False),
+    )
+
+
+def test_canonical_frame_cells_keep_integer_and_decimal_precision() -> None:
+    reference = CanonicalFrame(
+        (
+            CanonicalColumn("integer", "int64", "integer", (2**53,)),
+            CanonicalColumn(
+                "decimal",
+                "decimal128(38, 28)",
+                "decimal",
+                (decimal.Decimal("1.0000000000000000000000000001"),),
+            ),
+        )
+    )
+    candidate = CanonicalFrame(
+        (
+            CanonicalColumn("integer", "int64", "integer", (2**53 + 1,)),
+            CanonicalColumn(
+                "decimal",
+                "decimal128(38, 28)",
+                "decimal",
+                (decimal.Decimal("1.0000000000000000000000000002"),),
+            ),
+        )
+    )
+
+    mismatches = compare(reference, candidate, ComparisonPolicy(rtol=0, atol=0))
+
+    assert [mismatch.path for mismatch in mismatches] == ["$[0].integer", "$[0].decimal"]
+
+
+def test_keyed_payload_comparison_keeps_decimal_precision() -> None:
+    reference = CanonicalFrame(
+        (
+            CanonicalColumn("id", "int64", "integer", (1, 2)),
+            CanonicalColumn(
+                "amount",
+                "decimal128(38, 28)",
+                "decimal",
+                (
+                    decimal.Decimal("1.0000000000000000000000000001"),
+                    decimal.Decimal("2"),
+                ),
+            ),
+        )
+    )
+    candidate = CanonicalFrame(
+        (
+            CanonicalColumn("id", "int64", "integer", (2, 1)),
+            CanonicalColumn(
+                "amount",
+                "decimal128(38, 28)",
+                "decimal",
+                (
+                    decimal.Decimal("2"),
+                    decimal.Decimal("1.0000000000000000000000000002"),
+                ),
+            ),
+        )
+    )
+
+    mismatches = compare(
+        reference,
+        candidate,
+        ComparisonPolicy(row_order="keyed", row_keys=["id"], rtol=0, atol=0),
+    )
+
+    assert len(mismatches) == 1
+    assert mismatches[0].path == "$[0].amount"
+    assert mismatches[0].details["candidate_row"] == 1
+
+
+def test_unordered_matching_does_not_collapse_adjacent_large_integers() -> None:
+    reference = CanonicalFrame((CanonicalColumn("value", "int64", "integer", (2**53, 2**53 + 1)),))
+    candidate = CanonicalFrame((CanonicalColumn("value", "int64", "integer", (2**53, 2**53)),))
+
+    mismatches = compare(
+        reference,
+        candidate,
+        ComparisonPolicy(row_order="ignore", rtol=0, atol=0),
+    )
+
+    assert [mismatch.message for mismatch in mismatches] == [
+        "reference row has no equivalent candidate row",
+        "candidate contains an unmatched row",
+    ]
+
+
 def test_nested_scalars_and_datetime_tolerance() -> None:
     left = {"scores": [1.0, 2.0], "meta": {"active": True}}
     right = {"scores": [1.0, 2.00000001], "meta": {"active": True}}
@@ -527,6 +790,49 @@ def test_keyed_decimal_and_float_identity_is_mathematically_exact() -> None:
     assert comparison_module._key_token(
         decimal.Decimal("1e10000"), policy
     ) != comparison_module._key_token(decimal.Decimal("Infinity"), policy)
+
+
+def test_keyed_extreme_decimal_identity_is_context_free_and_canonical() -> None:
+    policy = ComparisonPolicy(row_order="keyed", row_keys=["id"])
+    first = decimal.Decimal("1e1000000000")
+    equivalent = decimal.Decimal("100e999999998")
+    different = decimal.Decimal("2e1000000000")
+
+    assert comparison_module._key_token(first, policy) == comparison_module._key_token(
+        equivalent, policy
+    )
+    assert comparison_module._key_token(first, policy) != comparison_module._key_token(
+        different, policy
+    )
+
+
+def test_keyed_extreme_decimal_and_integer_share_exact_identity() -> None:
+    policy = ComparisonPolicy(row_order="keyed", row_keys=["id"])
+    huge_integer = 10**100_000
+    decimal_key = decimal.Decimal("1e100000")
+    reference = CanonicalFrame(
+        (
+            CanonicalColumn("id", "object", "decimal", (decimal_key,)),
+            CanonicalColumn("value", "int64", "integer", (1,)),
+        )
+    )
+    candidate = CanonicalFrame(
+        (
+            CanonicalColumn("id", "object", "integer", (huge_integer,)),
+            CanonicalColumn("value", "int64", "integer", (1,)),
+        )
+    )
+
+    assert compare(reference, candidate, policy) == []
+
+
+def test_keyed_positive_extreme_decimal_is_not_treated_as_signed_zero() -> None:
+    value = decimal.Decimal("1e1000000000")
+    policy = ComparisonPolicy(row_order="keyed", row_keys=["id"], signed_zero_equal=False)
+
+    assert comparison_module._key_token(value, policy) == comparison_module._key_token(
+        decimal.Decimal("10e999999999"), policy
+    )
 
 
 def test_exceptions_are_structured_and_checked() -> None:

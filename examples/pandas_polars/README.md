@@ -1,6 +1,6 @@
 # Pandas-to-Polars fault corpus
 
-This is an executable teaching corpus, not a benchmark. It contains five deliberately wrong
+This is an executable teaching corpus, not a benchmark. It contains six deliberately wrong
 migrations over synthetic data:
 
 | Case | Preserved contract | Injected defect |
@@ -10,6 +10,7 @@ migrations over synthetic data:
 | `timezone-day` | Day boundary is New York local time | Candidate extracts the UTC day |
 | `dtype-width` | Nullable 64-bit quantity | Candidate narrows to 8 bits |
 | `stable-order` | Equal priorities retain arrival order | Candidate adds a different tie-breaker |
+| `integer-precision` | Integers above `2**53` remain exact | Candidate round-trips through binary float |
 
 From the repository root, run the expected-failure campaign:
 

@@ -158,8 +158,8 @@ wrapper under two releases without teaching Parity how to create or mutate virtu
 ```bash
 python -m venv .venv-polars-old
 python -m venv .venv-polars-new
-.venv-polars-old/bin/python -m pip install parity-check==0.8.0 polars==1.0.0
-.venv-polars-new/bin/python -m pip install parity-check==0.8.0 polars==1.41.1
+.venv-polars-old/bin/python -m pip install parity-check==0.8.1 polars==1.0.0
+.venv-polars-new/bin/python -m pip install parity-check==0.8.1 polars==1.41.1
 
 parity init parity.toml \
   --reference project.polars_transform:run \

@@ -9,7 +9,8 @@ import pandas as pd
 import polars as pl
 from examples.pandas_polars import corrected, faults
 
-from parity.models import ParityConfig
+from parity.comparison import compare
+from parity.models import ComparisonPolicy, ParityConfig
 
 ROOT = Path(__file__).parents[1]
 
@@ -106,6 +107,19 @@ def test_bad_ordering_changes_ties_and_fixed_is_stable() -> None:
     assert reference["record_id"].tolist() == [30, 20, 10]
     assert bad["record_id"].tolist() == [30, 10, 20]
     assert fixed["record_id"].tolist() == reference["record_id"].tolist()
+
+
+def test_bad_float_round_trip_loses_large_integer_and_parity_detects_it() -> None:
+    frame = faults.make_demo_inputs()["integer-precision"]
+    reference = faults.integer_precision_reference(frame)
+    bad = _pandas(faults.integer_precision_bad(pl.from_pandas(frame)))
+    fixed = _pandas(corrected.integer_precision_fixed(pl.from_pandas(frame)))
+    exact = ComparisonPolicy(rtol=0, atol=0)
+
+    assert reference.iloc[0, 0] == fixed.iloc[0, 0] == 2**53 + 1
+    assert bad.iloc[0, 0] == 2**53
+    assert compare(reference, bad, exact)
+    assert compare(reference, fixed, exact) == []
 
 
 def test_example_module_and_docs_are_clean_room_synthetic() -> None:

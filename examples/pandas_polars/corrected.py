@@ -55,3 +55,7 @@ def ordering_fixed(frame: pl.DataFrame) -> pl.DataFrame:
         .sort(["priority", "_arrival"], nulls_last=True)
         .select("record_id", "priority")
     )
+
+
+def integer_precision_fixed(frame: pl.DataFrame) -> pl.DataFrame:
+    return frame.select(pl.col("quantity").cast(pl.Int64))

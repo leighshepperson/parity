@@ -563,10 +563,12 @@ tags = ["regression", "null-keys"]
 [cases.reference]
 target = "pyjanitor_parity:pandas_grid"
 adapter = "pandas"
+record_distributions = ["pyjanitor"]
 
 [cases.candidate]
 target = "pyjanitor_parity:polars_grid"
 adapter = "polars"
+record_distributions = ["pyjanitor"]
 
 [cases.comparison]
 row_order = "ignore"
@@ -589,10 +591,12 @@ tags = ["regression", "outer-join"]
 [cases.reference]
 target = "pyjanitor_parity:pandas_narrow_domain"
 adapter = "pandas"
+record_distributions = ["pyjanitor"]
 
 [cases.candidate]
 target = "pyjanitor_parity:polars_narrow_domain"
 adapter = "polars"
+record_distributions = ["pyjanitor"]
 
 [cases.comparison]
 row_order = "ignore"

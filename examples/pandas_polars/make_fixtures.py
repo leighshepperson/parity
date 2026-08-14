@@ -19,6 +19,7 @@ def main() -> None:
         "timezone-day": "timezone_day.parquet",
         "dtype-width": "dtype_width.parquet",
         "stable-order": "stable_order.parquet",
+        "integer-precision": "integer_precision.parquet",
     }
     for name, frame in make_demo_inputs().items():
         frame.to_parquet(destination / names[name], index=False)

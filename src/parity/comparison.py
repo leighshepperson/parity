@@ -90,6 +90,9 @@ _SIGNATURE_MESSAGE_CODES = {
     "row key contains a non-scalar value": "unsupported-row-key",
     "input mutation behaviour differs": "input-mutation",
 }
+
+_DECIMAL_FRACTION_EXPONENT_LIMIT = 10_000
+_DECIMAL_INTERVAL_PRECISIONS = (34, 128, 512, 2_048)
 _INDEXED_PATH = re.compile(r"\[(?:-?\d+|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")\]")
 
 
@@ -222,17 +225,199 @@ def _duration_ns(value: Any) -> int | None:
     return None
 
 
+def _finite_numeric_fraction(value: Any) -> fractions.Fraction | None:
+    """Return the exact rational value of a supported finite real scalar."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, np.integer)):
+        return fractions.Fraction(int(value), 1)
+    if isinstance(value, (float, np.floating)):
+        try:
+            numerator, denominator = value.as_integer_ratio()
+        except (OverflowError, ValueError):
+            return None
+        return fractions.Fraction(numerator, denominator)
+    if isinstance(value, decimal.Decimal):
+        if not value.is_finite():
+            return None
+        parts = value.as_tuple()
+        exponent = parts.exponent
+        if (
+            not isinstance(exponent, int)
+            or abs(exponent) > _DECIMAL_FRACTION_EXPONENT_LIMIT
+            or len(parts.digits) > _DECIMAL_FRACTION_EXPONENT_LIMIT
+        ):
+            return None
+        return fractions.Fraction(value)
+    return None
+
+
+def _numeric_infinity_sign(value: Any) -> int | None:
+    if isinstance(value, decimal.Decimal):
+        if value.is_infinite():
+            return -1 if value.is_signed() else 1
+        return None
+    if isinstance(value, np.floating) and bool(np.isinf(value)):
+        return -1 if bool(np.signbit(value)) else 1
+    if isinstance(value, float) and math.isinf(value):
+        return -1 if value < 0 else 1
+    return None
+
+
+def _numeric_zero_sign(value: Any) -> int:
+    if isinstance(value, decimal.Decimal):
+        return -1 if value.is_signed() else 1
+    if isinstance(value, np.floating):
+        return -1 if bool(np.signbit(value)) else 1
+    if isinstance(value, float):
+        return -1 if math.copysign(1.0, float(value)) < 0 else 1
+    return 1
+
+
+def _uses_python_float_isclose(reference: Any, candidate: Any) -> bool:
+    """Whether Python float conversion preserves both floating operands exactly."""
+
+    for value in (reference, candidate):
+        if not isinstance(value, (float, np.floating)):
+            return False
+        try:
+            if value.as_integer_ratio() != float(value).as_integer_ratio():
+                return False
+        except (OverflowError, ValueError):
+            return False
+    return True
+
+
+def _exact_decimal(value: Any) -> decimal.Decimal | None:
+    """Convert a supported finite numeric scalar to an exact compact Decimal."""
+
+    if isinstance(value, decimal.Decimal):
+        return value if value.is_finite() else None
+    if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
+        return decimal.Decimal(int(value))
+    if not isinstance(value, (float, np.floating)):
+        return None
+    try:
+        numerator, denominator = value.as_integer_ratio()
+    except (OverflowError, ValueError):
+        return None
+    # Every supported binary float has a power-of-two denominator. Multiplying
+    # by 5**scale gives an exact finite decimal without context-dependent
+    # division or narrowing a wider NumPy float.
+    if denominator <= 0 or denominator & (denominator - 1):
+        return None
+    scale = denominator.bit_length() - 1
+    coefficient = decimal.Decimal(numerator * 5**scale)
+    parts = coefficient.as_tuple()
+    if not isinstance(parts.exponent, int):
+        return None
+    return decimal.Decimal((parts.sign, parts.digits, parts.exponent - scale))
+
+
+def _decimal_interval_equal(reference: Any, candidate: Any, policy: ComparisonPolicy) -> bool:
+    """Resolve extreme-exponent tolerance checks without expanding huge integers.
+
+    Directed rounding produces a lower and upper bound for both sides of the
+    tolerance inequality. Ambiguous pathological boundaries fail closed after
+    a bounded amount of work rather than risking an unbounded allocation.
+    """
+
+    left = _exact_decimal(reference)
+    right = _exact_decimal(candidate)
+    if left is None or right is None:
+        return False
+    high, low = (left, right) if left >= right else (right, left)
+    magnitude = max(left.copy_abs(), right.copy_abs())
+    relative = decimal.Decimal.from_float(policy.rtol)
+    absolute = decimal.Decimal.from_float(policy.atol)
+
+    for precision in _DECIMAL_INTERVAL_PRECISIONS:
+        lower = decimal.Context(
+            prec=precision,
+            rounding=decimal.ROUND_FLOOR,
+            Emin=decimal.MIN_EMIN,
+            Emax=decimal.MAX_EMAX,
+        )
+        upper = decimal.Context(
+            prec=precision,
+            rounding=decimal.ROUND_CEILING,
+            Emin=decimal.MIN_EMIN,
+            Emax=decimal.MAX_EMAX,
+        )
+        try:
+            difference_lower = lower.subtract(high, low)
+            difference_upper = upper.subtract(high, low)
+            allowed_lower = max(absolute, lower.multiply(relative, magnitude))
+            allowed_upper = max(absolute, upper.multiply(relative, magnitude))
+        except decimal.DecimalException:
+            return False
+        if difference_upper <= allowed_lower:
+            return True
+        if difference_lower > allowed_upper:
+            return False
+    return False
+
+
 def _numeric_equal(reference: Any, candidate: Any, policy: ComparisonPolicy) -> bool:
     if is_nan(reference) or is_nan(candidate):
         return is_nan(reference) and is_nan(candidate) and policy.nan_equal
-    try:
-        left = float(reference)
-        right = float(candidate)
-    except (TypeError, ValueError, OverflowError):
-        return bool(reference == candidate)
-    if left == 0.0 and right == 0.0 and not policy.signed_zero_equal:
-        return math.copysign(1.0, left) == math.copysign(1.0, right)
-    return math.isclose(left, right, rel_tol=policy.rtol, abs_tol=policy.atol)
+
+    reference_infinity = _numeric_infinity_sign(reference)
+    candidate_infinity = _numeric_infinity_sign(candidate)
+    if reference_infinity is not None or candidate_infinity is not None:
+        # A finite Decimal must never become equal to infinity merely because
+        # converting it to a binary float would overflow.
+        return reference_infinity is not None and reference_infinity == candidate_infinity
+
+    reference_zero = reference == 0
+    candidate_zero = candidate == 0
+    if reference_zero and candidate_zero and not policy.signed_zero_equal:
+        return _numeric_zero_sign(reference) == _numeric_zero_sign(candidate)
+
+    # Keep the established binary-float contract exactly, including its
+    # rounding at tolerance boundaries. Other numeric combinations use exact
+    # rational arithmetic so large integers and Decimals cannot first collapse
+    # through float conversion.
+    if _uses_python_float_isclose(reference, candidate):
+        return math.isclose(
+            float(reference),
+            float(candidate),
+            rel_tol=policy.rtol,
+            abs_tol=policy.atol,
+        )
+
+    left = _finite_numeric_fraction(reference)
+    right = _finite_numeric_fraction(candidate)
+    if left is not None and right is not None and left == right:
+        return True
+    if left is None or right is None:
+        left_decimal = _exact_decimal(reference)
+        right_decimal = _exact_decimal(candidate)
+        if left_decimal is not None and right_decimal is not None:
+            if left_decimal == right_decimal:
+                return True
+            if policy.rtol == 0 and policy.atol == 0:
+                return False
+            if math.isinf(policy.rtol) or math.isinf(policy.atol):
+                return True
+            return _decimal_interval_equal(reference, candidate, policy)
+        # Complex and other unsupported NumPy number kinds retain the old
+        # native equality fallback; supported real scalars never reach it.
+        try:
+            return bool(reference == candidate)
+        except (TypeError, ValueError):
+            return False
+    if policy.rtol == 0 and policy.atol == 0:
+        return False
+    if math.isinf(policy.rtol) or math.isinf(policy.atol):
+        return True
+
+    relative_tolerance = fractions.Fraction(*policy.rtol.as_integer_ratio())
+    absolute_tolerance = fractions.Fraction(*policy.atol.as_integer_ratio())
+    difference = abs(left - right)
+    allowed = max(absolute_tolerance, relative_tolerance * max(abs(left), abs(right)))
+    return difference <= allowed
 
 
 def _value_mismatches(
@@ -703,26 +888,31 @@ def _maximum_row_matching(
     return left_match, right_match
 
 
-def _numeric_key(value: Any) -> tuple[str, int, int] | None:
+def _compact_decimal_key(value: decimal.Decimal) -> tuple[str, int, tuple[int, ...], int]:
+    """Return the canonical coefficient/exponent form without applying a context."""
+
+    parts = value.as_tuple()
+    exponent = parts.exponent
+    if not isinstance(exponent, int):
+        raise ValueError("finite Decimal must have an integer exponent")
+    digits = list(parts.digits)
+    while len(digits) > 1 and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    if not any(digits):
+        return "number-decimal", 0, (0,), 0
+    return "number-decimal", parts.sign, tuple(digits), exponent
+
+
+def _numeric_key(value: Any) -> tuple[Any, ...] | None:
     """Return an exact cross-numeric identity without lossy float conversion."""
 
-    if isinstance(value, bool) or is_nan(value):
+    if is_nan(value):
         return None
-    if isinstance(value, (int, np.integer)):
-        fraction = fractions.Fraction(int(value), 1)
-    elif isinstance(value, (float, np.floating)):
-        try:
-            numerator, denominator = float(value).as_integer_ratio()
-        except (OverflowError, ValueError):
-            return None
-        fraction = fractions.Fraction(numerator, denominator)
-    elif isinstance(value, decimal.Decimal):
-        if not value.is_finite():
-            return None
-        fraction = fractions.Fraction(value)
-    else:
+    exact = _exact_decimal(value)
+    if exact is None:
         return None
-    return "number", fraction.numerator, fraction.denominator
+    return _compact_decimal_key(exact)
 
 
 def _key_token(value: Any, policy: ComparisonPolicy) -> tuple[Any, ...] | None:
@@ -746,16 +936,12 @@ def _key_token(value: Any, policy: ComparisonPolicy) -> tuple[Any, ...] | None:
     duration_value = _duration_ns(value)
     if duration_value is not None:
         return "duration", duration_value
-    if isinstance(value, decimal.Decimal) and value.is_infinite():
-        return "number-infinity", "negative" if value.is_signed() else "positive"
-    if isinstance(value, (float, np.floating)) and math.isinf(float(value)):
-        return "number-infinity", "negative" if float(value) < 0 else "positive"
+    infinity_sign = _numeric_infinity_sign(value)
+    if infinity_sign is not None:
+        return "number-infinity", "negative" if infinity_sign < 0 else "positive"
     if numeric := _numeric_key(value):
-        if numeric[1] == 0 and not policy.signed_zero_equal:
-            try:
-                sign = math.copysign(1.0, float(value))
-            except (TypeError, ValueError, OverflowError):
-                sign = 1.0
+        if value == 0 and not policy.signed_zero_equal:
+            sign = _numeric_zero_sign(value)
             return *numeric, "negative" if sign < 0 else "positive"
         return numeric
     if isinstance(value, dt.date):
