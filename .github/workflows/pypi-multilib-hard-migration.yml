@@ -1,0 +1,410 @@
+name: PyPI multi-library hard migration
+
+on:
+  push:
+    branches:
+      - agent/multilib-hard-migration
+
+permissions:
+  contents: read
+
+jobs:
+  campaign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build migration harness
+        shell: bash
+        run: |
+          cat > multilib_harness.py <<'PY'
+          import numpy as np
+          import pandas as pd
+          import scipy
+
+          def stable_numeric(data: pd.DataFrame) -> pd.DataFrame:
+              x = data["x"].astype("float64").to_numpy()
+              out = np.square(x) + 2.0 * x + 1.0
+              return pd.DataFrame({"y": out})
+
+          def pandas_groupby_default(data: pd.DataFrame) -> pd.DataFrame:
+              labels = data["code"].map({0: "a", 1: "b", 2: "c"})
+              frame = pd.DataFrame({
+                  "key": pd.Categorical(labels, categories=["a", "b", "c"]),
+                  "value": data["value"].astype("float64"),
+              })
+              return frame.groupby("key").agg(total=("value", "sum")).reset_index()
+
+          def pandas_upcast_setitem(data: pd.DataFrame) -> pd.DataFrame:
+              s = data["x"].astype("float64").copy()
+              if len(s):
+                  s.iloc[0] = "changed"
+              return pd.DataFrame({"value": s})
+
+          def scipy_removed_simps(data: pd.DataFrame) -> pd.DataFrame:
+              from scipy import integrate
+              x = data["x"].astype("float64").to_numpy()
+              y = data["y"].astype("float64").to_numpy()
+              value = integrate.simps(y, x=x)
+              return pd.DataFrame({"integral": [float(value)]})
+
+          def numpy_copy_false(data: pd.DataFrame) -> pd.DataFrame:
+              values = data["x"].astype("float64").tolist()
+              arr = np.array(values, dtype=np.float64, copy=False)
+              return pd.DataFrame({"x": arr})
+          PY
+
+          mkdir -p multilib-fixtures
+          cat > multilib-fixtures/stable.json <<'JSON'
+          [{"x": -2.0}, {"x": -1.0}, {"x": 0.0}, {"x": 1.0}, {"x": 3.5}]
+          JSON
+          cat > multilib-fixtures/groupby.json <<'JSON'
+          [{"code": 0, "value": 1.0}, {"code": 1, "value": 2.0}, {"code": 2, "value": 3.0}]
+          JSON
+          cat > multilib-fixtures/upcast.json <<'JSON'
+          [{"x": 1.0}, {"x": 2.0}]
+          JSON
+          cat > multilib-fixtures/simps.json <<'JSON'
+          [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 2.0, "y": 4.0}]
+          JSON
+          cat > multilib-fixtures/copy.json <<'JSON'
+          [{"x": 1.0}, {"x": 2.0}, {"x": 3.0}]
+          JSON
+
+          cat > parity-multilib.toml <<'TOML'
+          version = 1
+          artifact_dir = ".parity-multilib"
+          fail_fast = false
+
+          [[cases]]
+          name = "control-stable-numeric"
+          fixture = "multilib-fixtures/stable.json"
+          [cases.reference]
+          target = "multilib_harness:stable_numeric"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.candidate]
+          target = "multilib_harness:stable_numeric"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          rtol = 1e-12
+          atol = 1e-12
+          [cases.schema]
+          min_rows = 1
+          max_rows = 20
+          [[cases.schema.columns]]
+          name = "x"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000.0
+          maximum = 1000.0
+          examples = [-1000.0, -1.0, -0.0, 0.0, 1.0, 1000.0]
+          [cases.generation]
+          max_examples = 80
+          max_findings = 2
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          derandomize = true
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "pandas-groupby-observed-default"
+          fixture = "multilib-fixtures/groupby.json"
+          [cases.reference]
+          target = "multilib_harness:pandas_groupby_default"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.candidate]
+          target = "multilib_harness:pandas_groupby_default"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.schema]
+          min_rows = 1
+          max_rows = 12
+          [[cases.schema.columns]]
+          name = "code"
+          dtype = "int64"
+          nullable = false
+          minimum = 0
+          maximum = 2
+          examples = [0, 1, 2]
+          [[cases.schema.columns]]
+          name = "value"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000.0
+          maximum = 1000.0
+          examples = [-1.0, 0.0, 1.0]
+          [cases.generation]
+          max_examples = 100
+          max_findings = 2
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          derandomize = true
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "pandas-upcast-setitem"
+          fixture = "multilib-fixtures/upcast.json"
+          [cases.reference]
+          target = "multilib_harness:pandas_upcast_setitem"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.candidate]
+          target = "multilib_harness:pandas_upcast_setitem"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.schema]
+          min_rows = 1
+          max_rows = 8
+          [[cases.schema.columns]]
+          name = "x"
+          dtype = "float64"
+          nullable = false
+          minimum = -10.0
+          maximum = 10.0
+          examples = [-1.0, 0.0, 1.0]
+          [cases.generation]
+          max_examples = 40
+          max_findings = 1
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          derandomize = true
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "scipy-removed-simps"
+          fixture = "multilib-fixtures/simps.json"
+          [cases.reference]
+          target = "multilib_harness:scipy_removed_simps"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.candidate]
+          target = "multilib_harness:scipy_removed_simps"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          rtol = 1e-12
+          atol = 1e-12
+          [cases.schema]
+          min_rows = 3
+          max_rows = 8
+          [[cases.schema.columns]]
+          name = "x"
+          dtype = "float64"
+          nullable = false
+          minimum = 0.0
+          maximum = 10.0
+          examples = [0.0, 1.0, 2.0]
+          [[cases.schema.columns]]
+          name = "y"
+          dtype = "float64"
+          nullable = false
+          minimum = -100.0
+          maximum = 100.0
+          examples = [-1.0, 0.0, 1.0]
+          [cases.generation]
+          max_examples = 30
+          max_findings = 1
+          stability_repeats = 2
+          seed = 20260814
+          search = false
+          shrink = true
+          derandomize = true
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "numpy-copy-false-semantics"
+          fixture = "multilib-fixtures/copy.json"
+          [cases.reference]
+          target = "multilib_harness:numpy_copy_false"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.candidate]
+          target = "multilib_harness:numpy_copy_false"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas", "scipy"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.schema]
+          min_rows = 1
+          max_rows = 8
+          [[cases.schema.columns]]
+          name = "x"
+          dtype = "float64"
+          nullable = false
+          minimum = -100.0
+          maximum = 100.0
+          examples = [-1.0, 0.0, 1.0]
+          [cases.generation]
+          max_examples = 30
+          max_findings = 1
+          stability_repeats = 2
+          seed = 20260814
+          search = false
+          shrink = true
+          derandomize = true
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+          TOML
+
+      - name: Install published Parity and two real stacks
+        shell: bash
+        run: |
+          python -m venv .venv-reference
+          python -m venv .venv-candidate
+          .venv-reference/bin/pip install --upgrade pip
+          .venv-candidate/bin/pip install --upgrade pip
+          .venv-reference/bin/pip install 'parity-check==0.10.0' 'numpy==1.26.4' 'pandas==2.2.3' 'scipy==1.13.1'
+          .venv-candidate/bin/pip install 'parity-check==0.10.0' 'numpy==2.0.2' 'pandas==3.0.5' 'scipy==1.14.0'
+          .venv-reference/bin/python - <<'PY'
+          import numpy, pandas, scipy, parity
+          print('REFERENCE', 'parity', parity.__version__, 'numpy', numpy.__version__, 'pandas', pandas.__version__, 'scipy', scipy.__version__)
+          PY
+          .venv-candidate/bin/python - <<'PY'
+          import numpy, pandas, scipy, parity
+          print('CANDIDATE', 'parity', parity.__version__, 'numpy', numpy.__version__, 'pandas', pandas.__version__, 'scipy', scipy.__version__)
+          PY
+
+      - name: Run full migration campaign
+        id: parity
+        shell: bash
+        run: |
+          set +e
+          .venv-candidate/bin/parity doctor --config parity-multilib.toml
+          doctor_status=$?
+          .venv-candidate/bin/parity check --config parity-multilib.toml --no-performance --json multilib-report.json --markdown multilib-report.md
+          parity_status=$?
+          set -e
+          echo "doctor_status=$doctor_status" >> "$GITHUB_OUTPUT"
+          echo "parity_status=$parity_status" >> "$GITHUB_OUTPUT"
+          echo "DOCTOR_STATUS=$doctor_status"
+          echo "PARITY_STATUS=$parity_status"
+
+          .venv-candidate/bin/python - <<'PY'
+          import json
+          report = json.load(open('multilib-report.json'))
+          print('REPORT_STATUS=', report['status'])
+          for case in report['cases']:
+              print('CASE', case['name'])
+              print('  status=', case['status'])
+              print('  examples=', case.get('examples_run'))
+              print('  generated=', case.get('generated_examples'))
+              print('  findings=', case.get('findings_discovered'))
+              for failure in case.get('failures', []):
+                  print('  source=', failure.get('source'))
+                  print('  mismatch=', failure.get('mismatch_counts'))
+                  print('  signature=', failure.get('finding_signature'))
+                  print('  artifact=', failure.get('artifact'))
+          cases = {c['name']: c for c in report['cases']}
+          assert cases['control-stable-numeric']['status'] == 'passed'
+          for name in [
+              'pandas-groupby-observed-default',
+              'pandas-upcast-setitem',
+              'scipy-removed-simps',
+              'numpy-copy-false-semantics',
+          ]:
+              assert cases[name]['status'] == 'failed', (name, cases[name])
+              assert cases[name]['failures'], name
+          signatures = {
+              c['failures'][0]['finding_signature']
+              for n, c in cases.items() if n != 'control-stable-numeric'
+          }
+          print('DISTINCT_SIGNATURES=', len(signatures))
+          assert len(signatures) >= 3
+          PY
+
+      - name: Replay every isolated incompatibility
+        shell: bash
+        run: |
+          .venv-candidate/bin/python - <<'PY' > artifacts.txt
+          import json
+          report = json.load(open('multilib-report.json'))
+          for case in report['cases']:
+              if case['name'] != 'control-stable-numeric' and case.get('failures'):
+                  print(case['failures'][0]['artifact'])
+          PY
+          count=0
+          while IFS= read -r artifact; do
+            echo "REPLAY $artifact"
+            set +e
+            .venv-candidate/bin/parity replay "$artifact"
+            status=$?
+            set -e
+            echo "REPLAY_STATUS=$status"
+            test "$status" -eq 1
+            count=$((count+1))
+          done < artifacts.txt
+          echo "REPLAY_COUNT=$count"
+          test "$count" -eq 4
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-multilib-hard-migration
+          path: |
+            multilib-report.json
+            multilib-report.md
+            .parity-multilib
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+      - name: Require semantic failure, not infrastructure failure
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.parity.outputs.doctor_status }}" -eq 0
+          test "${{ steps.parity.outputs.parity_status }}" -eq 1
