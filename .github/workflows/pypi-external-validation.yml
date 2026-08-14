@@ -1,0 +1,289 @@
+name: PyPI external validation
+
+on:
+  push:
+    branches:
+      - agent/sklearn-pypi-validation
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Create external validation harness
+        shell: bash
+        run: |
+          cat > validation_harness.py <<'PY'
+          import pandas as pd
+          from sklearn.preprocessing import KBinsDiscretizer, PowerTransformer, RobustScaler
+
+          FEATURES = ["x1", "x2", "x3"]
+
+          def _frame(data, values):
+              return pd.DataFrame(values, columns=[f"{c}_out" for c in FEATURES], index=data.index)
+
+          def robust_scale(data: pd.DataFrame) -> pd.DataFrame:
+              model = RobustScaler(quantile_range=(10.0, 90.0), unit_variance=True)
+              return _frame(data, model.fit_transform(data[FEATURES]))
+
+          def power_transform(data: pd.DataFrame) -> pd.DataFrame:
+              model = PowerTransformer(method="yeo-johnson", standardize=True)
+              return _frame(data, model.fit_transform(data[FEATURES]))
+
+          def kbin_quantiles(data: pd.DataFrame) -> pd.DataFrame:
+              model = KBinsDiscretizer(
+                  n_bins=5,
+                  encode="ordinal",
+                  strategy="quantile",
+                  quantile_method="averaged_inverted_cdf",
+              )
+              return _frame(data, model.fit_transform(data[FEATURES]))
+          PY
+
+          mkdir -p validation-fixtures
+          cat > validation-fixtures/numeric.json <<'JSON'
+          [
+            {"x1": -1000.0, "x2": 0.0, "x3": 0.000001},
+            {"x1": -10.0, "x2": 1.0, "x3": 0.1},
+            {"x1": -1.0, "x2": 2.0, "x3": 1.0},
+            {"x1": -0.0, "x2": 3.0, "x3": 10.0},
+            {"x1": 0.0, "x2": 5.0, "x3": 100.0},
+            {"x1": 1.0, "x2": 8.0, "x3": 1000.0},
+            {"x1": 10.0, "x2": 13.0, "x3": 10000.0},
+            {"x1": 1000.0, "x2": 21.0, "x3": 1000000.0}
+          ]
+          JSON
+
+          cat > parity-external.toml <<'TOML'
+          version = 1
+          artifact_dir = ".parity-external"
+          fail_fast = false
+
+          [[cases]]
+          name = "sklearn-robust-scaler"
+          fixture = "validation-fixtures/numeric.json"
+          [cases.reference]
+          target = "validation_harness:robust_scale"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["scikit-learn", "numpy", "scipy", "pandas"]
+          [cases.candidate]
+          target = "validation_harness:robust_scale"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["scikit-learn", "numpy", "scipy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          rtol = 1e-10
+          atol = 1e-12
+          [cases.schema]
+          min_rows = 1
+          max_rows = 40
+          [[cases.schema.columns]]
+          name = "x1"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000000.0
+          maximum = 1000000.0
+          examples = [-1000000.0, -1.0, -0.0, 0.0, 1.0, 1000000.0]
+          [[cases.schema.columns]]
+          name = "x2"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000000.0
+          maximum = 1000000.0
+          examples = [-1.0, 0.0, 1.0]
+          [[cases.schema.columns]]
+          name = "x3"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000000.0
+          maximum = 1000000.0
+          examples = [-1.0, 0.0, 1.0]
+          [cases.generation]
+          max_examples = 150
+          max_findings = 3
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "sklearn-power-transformer"
+          fixture = "validation-fixtures/numeric.json"
+          [cases.reference]
+          target = "validation_harness:power_transform"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["scikit-learn", "numpy", "scipy", "pandas"]
+          [cases.candidate]
+          target = "validation_harness:power_transform"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["scikit-learn", "numpy", "scipy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          rtol = 1e-9
+          atol = 1e-11
+          [cases.schema]
+          min_rows = 2
+          max_rows = 40
+          [[cases.schema.columns]]
+          name = "x1"
+          dtype = "float64"
+          nullable = false
+          minimum = -10000.0
+          maximum = 10000.0
+          examples = [-10000.0, -1.0, -0.0, 0.0, 1.0, 10000.0]
+          [[cases.schema.columns]]
+          name = "x2"
+          dtype = "float64"
+          nullable = false
+          minimum = -10000.0
+          maximum = 10000.0
+          examples = [-1.0, 0.0, 1.0]
+          [[cases.schema.columns]]
+          name = "x3"
+          dtype = "float64"
+          nullable = false
+          minimum = -10000.0
+          maximum = 10000.0
+          examples = [-1.0, 0.0, 1.0]
+          [cases.generation]
+          max_examples = 150
+          max_findings = 3
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "sklearn-kbins-quantiles"
+          fixture = "validation-fixtures/numeric.json"
+          [cases.reference]
+          target = "validation_harness:kbin_quantiles"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["scikit-learn", "numpy", "scipy", "pandas"]
+          [cases.candidate]
+          target = "validation_harness:kbin_quantiles"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["scikit-learn", "numpy", "scipy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.schema]
+          min_rows = 5
+          max_rows = 50
+          [[cases.schema.columns]]
+          name = "x1"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000.0
+          maximum = 1000.0
+          examples = [-1000.0, -1.0, -0.0, 0.0, 1.0, 1000.0]
+          [[cases.schema.columns]]
+          name = "x2"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000.0
+          maximum = 1000.0
+          examples = [-1.0, 0.0, 1.0]
+          [[cases.schema.columns]]
+          name = "x3"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000.0
+          maximum = 1000.0
+          examples = [-1.0, 0.0, 1.0]
+          [cases.generation]
+          max_examples = 150
+          max_findings = 3
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          [cases.performance]
+          enabled = false
+          TOML
+
+      - name: Install published packages into clean environments
+        shell: bash
+        run: |
+          python -m venv .venv-reference
+          python -m venv .venv-candidate
+          .venv-reference/bin/python -m pip install --upgrade pip
+          .venv-candidate/bin/python -m pip install --upgrade pip
+          .venv-reference/bin/pip install parity-check 'scikit-learn==1.8.0'
+          .venv-candidate/bin/pip install parity-check 'scikit-learn==1.9.0'
+          echo "REFERENCE_PARITY=$(.venv-reference/bin/python -c 'import parity; print(parity.__version__)')"
+          echo "CANDIDATE_PARITY=$(.venv-candidate/bin/python -c 'import parity; print(parity.__version__)')"
+          echo "REFERENCE_SKLEARN=$(.venv-reference/bin/python -c 'import sklearn; print(sklearn.__version__)')"
+          echo "CANDIDATE_SKLEARN=$(.venv-candidate/bin/python -c 'import sklearn; print(sklearn.__version__)')"
+
+      - name: Run Parity external campaign
+        id: parity
+        shell: bash
+        run: |
+          set +e
+          .venv-candidate/bin/parity doctor --config parity-external.toml
+          doctor_status=$?
+          .venv-candidate/bin/parity check --config parity-external.toml --no-performance --json parity-external-report.json --markdown parity-external-report.md
+          parity_status=$?
+          set -e
+          echo "doctor_status=$doctor_status" >> "$GITHUB_OUTPUT"
+          echo "parity_status=$parity_status" >> "$GITHUB_OUTPUT"
+          echo "DOCTOR_STATUS=$doctor_status"
+          echo "PARITY_STATUS=$parity_status"
+          if [[ -f parity-external-report.json ]]; then
+            python - <<'PY'
+          import json
+          report = json.load(open('parity-external-report.json'))
+          print('PARITY_REPORT_STATUS=' + report['status'])
+          for case in report['cases']:
+              print('CASE', case['name'], case['status'], 'examples=', case.get('examples_run'), 'findings=', case.get('findings_discovered'))
+              for failure in case.get('failures', []):
+                  print('  FAILURE', failure.get('source'), failure.get('mismatch_counts'), failure.get('finding_signature'))
+          PY
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-external-validation
+          path: |
+            parity-external-report.json
+            parity-external-report.md
+            .parity-external
+          if-no-files-found: ignore
+
+      - name: Preserve semantic result as job outcome
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.parity.outputs.doctor_status }}" -eq 0
+          test "${{ steps.parity.outputs.parity_status }}" -le 1
