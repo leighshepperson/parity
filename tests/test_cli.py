@@ -196,7 +196,7 @@ def test_migration_check_preserves_failure_and_error_exit_codes(
 def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     version = runner.invoke(cli.app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.9.1"
+    assert version.stdout.strip() == "0.9.2"
 
     config_path = tmp_path / "nested" / "parity.toml"
     created = runner.invoke(cli.app, ["init", str(config_path)])

@@ -886,13 +886,22 @@ def _isolated_environment(spec: CallableSpec) -> dict[str, str]:
 
     environment = os.environ.copy()
     environment.update(spec.environment)
-    package_root = str(Path(__file__).resolve().parent.parent)
-    inherited_pythonpath = environment.get("PYTHONPATH")
-    environment["PYTHONPATH"] = (
-        os.pathsep.join([package_root, inherited_pythonpath])
-        if inherited_pythonpath
-        else package_root
+    package_root = Path(__file__).resolve().parent.parent
+    # A source checkout needs its ``src`` root in child interpreters.  A wheel
+    # install does not: every configured worker must import Parity from its own
+    # environment.  Prepending a wheel's parent would add the orchestrator's
+    # entire site-packages directory and could silently replace the candidate's
+    # pandas, Polars, or target-library versions with the reference versions.
+    is_source_checkout = (
+        package_root.name == "src" and (package_root.parent / "pyproject.toml").is_file()
     )
+    if is_source_checkout:
+        inherited_pythonpath = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            os.pathsep.join([str(package_root), inherited_pythonpath])
+            if inherited_pythonpath
+            else str(package_root)
+        )
     return environment
 
 

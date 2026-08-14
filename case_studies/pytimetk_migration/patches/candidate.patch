@@ -1,0 +1,398 @@
+diff --git a/src/pytimetk/_polars_compat.py b/src/pytimetk/_polars_compat.py
+index 92fae77..6a171b1 100644
+--- a/src/pytimetk/_polars_compat.py
++++ b/src/pytimetk/_polars_compat.py
+@@ -4,7 +4,7 @@ from __future__ import annotations
+ 
+ import inspect
+ from functools import lru_cache
+-from typing import Any, Dict
++from typing import Any, Dict, Optional
+ 
+ import polars as pl
+ 
+@@ -51,3 +51,31 @@ def ensure_polars_rolling_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+         value = normalized.pop("min_samples")
+         normalized.setdefault("min_periods", value)
+     return normalized
++
++
++@lru_cache(maxsize=None)
++def _polars_ewm_supports_min_samples() -> bool:
++    """Return True if the current Polars EWM API accepts `min_samples`."""
++    try:
++        return "min_samples" in inspect.signature(pl.Expr.ewm_mean).parameters
++    except (TypeError, ValueError):
++        return False
++
++
++def ensure_polars_ewm_kwargs(
++    kwargs: Dict[str, Any], *, minimum_samples: Optional[int] = None
++) -> Dict[str, Any]:
++    """Translate the EWM minimum-observation keyword across Polars versions."""
++    normalized = dict(kwargs)
++    if _polars_ewm_supports_min_samples():
++        key = "min_samples"
++        if "min_periods" in normalized and key not in normalized:
++            normalized[key] = normalized.pop("min_periods")
++    else:
++        key = "min_periods"
++        if "min_samples" in normalized and key not in normalized:
++            normalized[key] = normalized.pop("min_samples")
++
++    if minimum_samples is not None:
++        normalized[key] = max(minimum_samples, normalized.get(key) or 0)
++    return normalized
+diff --git a/src/pytimetk/core/pad.py b/src/pytimetk/core/pad.py
+index 32945ec..533a3b6 100644
+--- a/src/pytimetk/core/pad.py
++++ b/src/pytimetk/core/pad.py
+@@ -497,6 +497,12 @@ def _pad_by_time_polars(
+         results: List[pl.DataFrame] = []
+         for part in partitions:
+             part_sorted = part.sort(date_column)
++            group_values = {
++                col: part_sorted.select(pl.col(col).first()).item()
++                for col in resolved_groups
++            }
++            if any(value is None for value in group_values.values()):
++                continue
+             group_start = start_date if start_date is not None else part_sorted.select(
+                 pl.col(date_column).min()
+             ).to_series().item()
+@@ -506,12 +512,17 @@ def _pad_by_time_polars(
+ 
+             date_df = _build_date_df(group_start, group_end)
+ 
++            padded = date_df.join(
++                part_sorted.drop(resolved_groups),
++                on=[date_column],
++                how="left",
++            ).sort(date_column)
+             for col in resolved_groups:
+-                key_value = part_sorted.select(pl.col(col).first()).item()
+-                date_df = date_df.with_columns(pl.lit(key_value).alias(col))
++                padded = padded.with_columns(
++                    pl.lit(group_values[col]).cast(frame.schema[col]).alias(col)
++                )
+ 
+             join_keys = list(resolved_groups) + [date_column]
+-            padded = date_df.join(part_sorted, on=join_keys, how="left").sort(join_keys)
+             if fillna is not None:
+                 fill_cols = [col for col in padded.columns if col not in join_keys]
+                 padded = padded.with_columns(
+@@ -569,9 +580,7 @@ def _pad_by_time_polars(
+             for col_name in series_sorted.columns:
+                 if col_name == date_column or col_name == row_id_column:
+                     continue
+-                unique_count = (
+-                    series_sorted.select(pl.col(col_name).n_unique()).to_series().item()
+-                )
++                unique_count = padded.select(pl.col(col_name).n_unique()).to_series().item()
+                 if unique_count == 1:
+                     constant_cols.append(col_name)
+             if constant_cols:
+@@ -579,7 +588,10 @@ def _pad_by_time_polars(
+                     [pl.col(col).forward_fill() for col in constant_cols]
+                 )
+ 
+-        padded = padded.select(ordered_cols)
++        output_cols = [date_column] + [
++            col for col in ordered_cols if col != date_column
++        ]
++        padded = padded.select(output_cols)
+ 
+     # Drop row id column if it exists to avoid leaking conversion internals.
+     if row_id_column and row_id_column in padded.columns:
+diff --git a/src/pytimetk/feature_engineering/ewm.py b/src/pytimetk/feature_engineering/ewm.py
+index d18e751..393c0c2 100644
+--- a/src/pytimetk/feature_engineering/ewm.py
++++ b/src/pytimetk/feature_engineering/ewm.py
+@@ -7,6 +7,8 @@ from typing import Optional, Union, List, Sequence, Any, Tuple
+ 
+ import numpy as np
+ 
++from pytimetk._polars_compat import ensure_polars_ewm_kwargs
++
+ try:  # Optional dependency for GPU acceleration
+     import cudf  # type: ignore
+ except ImportError:  # pragma: no cover - cudf optional
+@@ -20,8 +22,10 @@ from pytimetk.utils.checks import (
+ from pytimetk.utils.dataframe_ops import (
+     FrameConversion,
+     convert_to_engine,
++    ensure_row_id_column,
+     normalize_engine,
+     resolve_pandas_groupby_frame,
++    resolve_polars_group_columns,
+     restore_output_type,
+     conversion_to_pandas,
+ )
+@@ -202,6 +206,56 @@ def augment_ewm(
+             **kwargs,
+         )
+     elif target_engine == "polars":
++        polars_frame = (
++            prepared_data.df
++            if isinstance(prepared_data, pl.dataframe.group_by.GroupBy)
++            else prepared_data
++        )
++        value_columns = (
++            [value_column] if isinstance(value_column, str) else list(value_column)
++        )
++        if any(polars_frame.get_column(col).null_count() for col in value_columns):
++            warnings.warn(
++                "Polars EWM null semantics differ from pandas. Falling back to pandas.",
++                RuntimeWarning,
++                stacklevel=2,
++            )
++            fallback_data = data
++            fallback_row_col = None
++            fallback_generated = False
++            if isinstance(data, pl.dataframe.group_by.GroupBy):
++                fallback_frame, fallback_row_col, fallback_generated = (
++                    ensure_row_id_column(data.df)
++                )
++                fallback_groups = resolve_polars_group_columns(data)
++                fallback_group_key = (
++                    list(fallback_groups)
++                    if len(fallback_groups) > 1
++                    else fallback_groups[0]
++                )
++                fallback_data = fallback_frame.group_by(
++                    fallback_group_key, maintain_order=True
++                )
++            elif isinstance(data, pl.DataFrame):
++                fallback_data, fallback_row_col, fallback_generated = (
++                    ensure_row_id_column(data)
++                )
++
++            fallback = augment_ewm(
++                data=fallback_data,
++                date_column=date_column,
++                value_column=value_column,
++                window_func=window_func,
++                alpha=alpha,
++                reduce_memory=reduce_memory,
++                engine="pandas",
++                **kwargs,
++            )
++            if isinstance(fallback, pl.DataFrame) and fallback_row_col:
++                fallback = fallback.sort(fallback_row_col)
++                if fallback_generated:
++                    fallback = fallback.drop(fallback_row_col)
++            return fallback
+         try:
+             result = _augment_ewm_polars(
+                 data=prepared_data,
+@@ -423,8 +477,14 @@ def _augment_ewm_polars(
+ 
+     resolved_groups = list(group_columns) if group_columns else []
+     frame = data.df if isinstance(data, pl.dataframe.group_by.GroupBy) else data
++    if resolved_groups:
++        frame = frame.filter(
++            pl.all_horizontal([pl.col(col).is_not_null() for col in resolved_groups])
++        )
++    frame_with_id, row_col, generated = ensure_row_id_column(frame, row_id_column)
+     sort_columns = resolved_groups + [date_column]
+-    frame_sorted = frame.sort(sort_columns)
++    frame_sorted = frame_with_id.sort(sort_columns, nulls_last=True)
++
+     lf = frame_sorted.lazy()
+ 
+     def _maybe_over(expr: pl.Expr) -> pl.Expr:
+@@ -433,14 +493,22 @@ def _augment_ewm_polars(
+     exprs: List[pl.Expr] = []
+     for col in value_columns:
+         for decay_label, decay_value, params in decay_configs:
+-            filtered_params = {k: params[k] for k in params if k in allowed_params}
++            filtered_params = ensure_polars_ewm_kwargs(
++                {k: params[k] for k in params if k in allowed_params}
++            )
+             for func in window_funcs:
+                 if func == "mean":
+                     expr = pl.col(col).ewm_mean(**filtered_params)
+                 elif func == "std":
+-                    expr = pl.col(col).ewm_std(**filtered_params)
++                    std_params = ensure_polars_ewm_kwargs(
++                        filtered_params, minimum_samples=2
++                    )
++                    expr = pl.col(col).ewm_std(**std_params)
+                 elif func == "var":
+-                    expr = pl.col(col).ewm_var(**filtered_params)
++                    var_params = ensure_polars_ewm_kwargs(
++                        filtered_params, minimum_samples=2
++                    )
++                    expr = pl.col(col).ewm_var(**var_params)
+                 else:
+                     continue
+ 
+@@ -452,8 +520,10 @@ def _augment_ewm_polars(
+     else:
+         result = frame_sorted
+ 
+-    if row_id_column and row_id_column in result.columns:
+-        result = result.sort(row_id_column)
++    result = result.sort(row_col)
++
++    if generated:
++        result = result.drop(row_col)
+ 
+     return result
+ 
+diff --git a/src/pytimetk/feature_engineering/lags.py b/src/pytimetk/feature_engineering/lags.py
+index fc8ac05..0649b91 100644
+--- a/src/pytimetk/feature_engineering/lags.py
++++ b/src/pytimetk/feature_engineering/lags.py
+@@ -259,14 +259,20 @@ def _augment_lags_polars(
+ 
+     sort_keys = list(resolved_groups)
+     sort_keys.append(date_column)
+-    sorted_frame = frame_with_id.sort(sort_keys)
++    sorted_frame = frame_with_id.sort(sort_keys, nulls_last=True)
+ 
+     lag_columns = []
++    null_group = (
++        pl.any_horizontal([pl.col(col).is_null() for col in resolved_groups])
++        if resolved_groups
++        else None
++    )
+     for col in value_column:
+         for lag in lags:
+             expr = pl.col(col).shift(lag)
+             if resolved_groups:
+                 expr = expr.over(resolved_groups)
++                expr = pl.when(null_group).then(None).otherwise(expr)
+             lag_columns.append(expr.alias(f"{col}_lag_{lag}"))
+ 
+     augmented = sorted_frame.with_columns(lag_columns).sort(row_col)
+diff --git a/src/pytimetk/feature_engineering/rolling.py b/src/pytimetk/feature_engineering/rolling.py
+index 547c800..8f7f2c6 100644
+--- a/src/pytimetk/feature_engineering/rolling.py
++++ b/src/pytimetk/feature_engineering/rolling.py
+@@ -816,7 +816,7 @@ def _augment_rolling_polars(
+ 
+     sort_keys = list(resolved_groups)
+     sort_keys.append(date_column)
+-    sorted_frame = frame_with_id.sort(sort_keys)
++    sorted_frame = frame_with_id.sort(sort_keys, nulls_last=True)
+ 
+     rolling_exprs: List[pl.Expr] = []
+ 
+@@ -956,8 +956,19 @@ def _augment_rolling_polars(
+                 rolling_exprs.append(expr)
+             min_periods_state = resolved_min_periods
+ 
+-    augmented = sorted_frame.with_columns(rolling_exprs)
+-    augmented = augmented.sort(row_col)
++    augmented = sorted_frame.with_columns(rolling_exprs).sort(row_col)
++
++    if resolved_groups:
++        null_group = pl.any_horizontal(
++            [pl.col(col).is_null() for col in resolved_groups]
++        )
++        augmented = augmented.with_columns(
++            [
++                pl.when(null_group).then(None).otherwise(pl.col(col)).alias(col)
++                for col in augmented.columns
++                if col != row_col
++            ]
++        )
+ 
+     if generated:
+         augmented = augmented.drop(row_col)
+diff --git a/src/pytimetk/finance/macd.py b/src/pytimetk/finance/macd.py
+index 02496e9..808c458 100644
+--- a/src/pytimetk/finance/macd.py
++++ b/src/pytimetk/finance/macd.py
+@@ -247,16 +247,64 @@ def augment_macd(
+                 row_id_column=conversion.row_id_column,
+             )
+     else:
+-        result = _augment_macd_polars(
+-            data=prepared_data,
+-            date_column=date_column,
+-            close_column=close_column,
+-            fast_period=fast_period,
+-            slow_period=slow_period,
+-            signal_period=signal_period,
+-            group_columns=conversion.group_columns,
+-            row_id_column=conversion.row_id_column,
++        polars_frame = (
++            prepared_data.df
++            if isinstance(prepared_data, pl.dataframe.group_by.GroupBy)
++            else prepared_data
+         )
++        if polars_frame.get_column(close_column).null_count():
++            warnings.warn(
++                "Polars MACD null semantics differ from pandas. Falling back to pandas.",
++                RuntimeWarning,
++                stacklevel=2,
++            )
++            fallback_data = data
++            fallback_row_col = None
++            fallback_generated = False
++            if isinstance(data, pl.dataframe.group_by.GroupBy):
++                fallback_frame, fallback_row_col, fallback_generated = (
++                    ensure_row_id_column(data.df)
++                )
++                fallback_groups = resolve_polars_group_columns(data)
++                fallback_group_key = (
++                    list(fallback_groups)
++                    if len(fallback_groups) > 1
++                    else fallback_groups[0]
++                )
++                fallback_data = fallback_frame.group_by(
++                    fallback_group_key, maintain_order=True
++                )
++            elif isinstance(data, pl.DataFrame):
++                fallback_data, fallback_row_col, fallback_generated = (
++                    ensure_row_id_column(data)
++                )
++
++            fallback = augment_macd(
++                data=fallback_data,
++                date_column=date_column,
++                close_column=close_column,
++                fast_period=fast_period,
++                slow_period=slow_period,
++                signal_period=signal_period,
++                reduce_memory=reduce_memory,
++                engine="pandas",
++            )
++            if isinstance(fallback, pl.DataFrame) and fallback_row_col:
++                fallback = fallback.sort(fallback_row_col)
++                if fallback_generated:
++                    fallback = fallback.drop(fallback_row_col)
++            return fallback
++        else:
++            result = _augment_macd_polars(
++                data=prepared_data,
++                date_column=date_column,
++                close_column=close_column,
++                fast_period=fast_period,
++                slow_period=slow_period,
++                signal_period=signal_period,
++                group_columns=conversion.group_columns,
++                row_id_column=conversion.row_id_column,
++            )
+ 
+     restored = restore_output_type(result, conversion)
+ 
+@@ -357,11 +405,15 @@ def _augment_macd_polars(
+     """
+     resolved_groups = resolve_polars_group_columns(data, group_columns)
+     frame = data.df if isinstance(data, pl.dataframe.group_by.GroupBy) else data
++    if resolved_groups:
++        frame = frame.filter(
++            pl.all_horizontal([pl.col(col).is_not_null() for col in resolved_groups])
++        )
+     frame_with_id, row_col, generated = ensure_row_id_column(frame, row_id_column)
+ 
+     sort_keys = list(resolved_groups)
+     sort_keys.append(date_column)
+-    sorted_frame = frame_with_id.sort(sort_keys)
++    sorted_frame = frame_with_id.sort(sort_keys, nulls_last=True)
+ 
+     fast_ema_expr = pl.col(close_column).ewm_mean(
+         span=fast_period, adjust=False, min_periods=0

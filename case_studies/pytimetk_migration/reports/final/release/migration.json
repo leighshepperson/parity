@@ -1,0 +1,1601 @@
+{
+  "manifest_sha256": "8aa46c660d1d8a789ae150fdea9345265f756625bfcd82bc75d445dbb047b10a",
+  "parity": {
+    "cases": [
+      {
+        "deterministic_examples": 0,
+        "diagnoses": [],
+        "elapsed_seconds": 8.131383570998878,
+        "examples_run": 100,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 100,
+        "name": "lags-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 7.475607639000373,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "lags-grouped-unsorted",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 7.952339359000689,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "lags-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 0,
+        "diagnoses": [],
+        "elapsed_seconds": 9.701554806000786,
+        "examples_run": 100,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 100,
+        "name": "rolling-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 6.729055200999937,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "rolling-grouped-centered",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 6.752896295000028,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "rolling-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 0,
+        "diagnoses": [],
+        "elapsed_seconds": 8.35298137800055,
+        "examples_run": 100,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 100,
+        "name": "ewm-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 7.6819923570001265,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "ewm-grouped-unsorted",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 8.298913587001152,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "ewm-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 0,
+        "diagnoses": [],
+        "elapsed_seconds": 9.371784499000569,
+        "examples_run": 100,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 100,
+        "name": "macd-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 7.102774400000271,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "macd-grouped-unsorted",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 7.392251339999348,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "macd-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 7.568797854999502,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "pad-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 6.954164454999045,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "pad-grouped-bounds",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 6.927149185999951,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "pad-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1+parity.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      }
+    ],
+    "elapsed_seconds": 117.61476114099969,
+    "parity_version": "0.9.2",
+    "provenance": {
+      "config_sha256": "821aef184819c570861ba3c6afbfbde18e7302083b97225430076834f99cd720",
+      "orchestrator": {
+        "distributions": [
+          {
+            "name": "hypothesis",
+            "status": "installed",
+            "version": "6.165.6"
+          },
+          {
+            "name": "numpy",
+            "status": "installed",
+            "version": "2.0.2"
+          },
+          {
+            "name": "pandas",
+            "status": "installed",
+            "version": "2.2.3"
+          },
+          {
+            "name": "polars",
+            "status": "installed",
+            "version": "1.21.0"
+          },
+          {
+            "name": "pyarrow",
+            "status": "installed",
+            "version": "16.1.0"
+          }
+        ],
+        "parity_version": "0.9.2",
+        "platform_machine": "x86_64",
+        "platform_system": "Linux",
+        "python_implementation": "CPython",
+        "python_version": "3.12.13"
+      }
+    },
+    "schema_version": 3,
+    "status": "passed"
+  },
+  "schema_version": 1,
+  "status": "passed",
+  "summary": {
+    "error": 0,
+    "excluded": 6,
+    "failed": 0,
+    "passed": 5,
+    "total": 11,
+    "uncovered": 0
+  },
+  "units": [
+    {
+      "cases": [
+        {
+          "examples_run": 100,
+          "name": "lags-control",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "lags-grouped-unsorted",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "lags-null-semantics",
+          "status": "passed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "augment-lags.cpu-core",
+      "status": "passed"
+    },
+    {
+      "cases": [
+        {
+          "examples_run": 100,
+          "name": "rolling-control",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "rolling-grouped-centered",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "rolling-null-semantics",
+          "status": "passed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "augment-rolling.cpu-builtins",
+      "status": "passed"
+    },
+    {
+      "cases": [
+        {
+          "examples_run": 100,
+          "name": "ewm-control",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "ewm-grouped-unsorted",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "ewm-null-semantics",
+          "status": "passed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "augment-ewm.cpu-native",
+      "status": "passed"
+    },
+    {
+      "cases": [
+        {
+          "examples_run": 100,
+          "name": "macd-control",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "macd-grouped-unsorted",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "macd-null-semantics",
+          "status": "passed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "augment-macd.cpu-core",
+      "status": "passed"
+    },
+    {
+      "cases": [
+        {
+          "examples_run": 1,
+          "name": "pad-control",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "pad-grouped-bounds",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "pad-null-semantics",
+          "status": "passed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "pad-by-time.cpu-fixed-frequency",
+      "status": "passed"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "This CPU pilot has no CUDA runner; cudf behavior remains outside the declared migration.",
+      "id": "cross-cutting.cudf",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Memory downcasting intentionally changes dtypes and is separate from backend semantic parity.",
+      "id": "cross-cutting.reduce-memory",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Selector and human-duration parsing is shared frontend code; this pilot covers explicit columns and integer lag forms.",
+      "id": "augment-lags.selectors-duration",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Custom callables, Ray parallelism and progress reporting require a separate execution and performance study.",
+      "id": "augment-rolling.custom-parallel",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Median and unsupported EWM keyword combinations deliberately fall back to pandas upstream; this pilot covers native mean, std and var.",
+      "id": "augment-ewm.pandas-fallbacks",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Calendar offsets, timezone and DST behavior, relative bounds and selectors require a dedicated temporal contract.",
+      "id": "pad-by-time.calendar-timezone-selectors",
+      "status": "excluded"
+    }
+  ]
+}

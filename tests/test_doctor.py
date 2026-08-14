@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 from parity.doctor import REQUIRED_DEPENDENCIES, diagnose, diagnose_config
@@ -46,7 +47,7 @@ def test_config_doctor_inspects_workers_without_importing_targets(tmp_path: Path
     case = report.cases[0]
     assert case.reference.status == "ready"
     assert case.reference.python_version
-    assert case.reference.parity_version == "0.9.1"
+    assert case.reference.parity_version == "0.9.2"
     assert case.reference.distributions[0].name == "pytest"
     assert case.reference.distributions[0].status == "installed"
 
@@ -157,3 +158,125 @@ def test_config_doctor_uses_distinct_virtualenv_symlinks_and_site_packages(
     assert case.reference.distributions[0].version == "1.0"
     assert case.candidate.distributions[0].version == "2.0"
     assert os.path.realpath(interpreters[0]) == os.path.realpath(interpreters[1])
+
+
+def test_wheel_controller_does_not_leak_its_site_packages_into_workers(
+    tmp_path: Path,
+) -> None:
+    source_package = Path(__file__).parents[1] / "src" / "parity"
+    wheel = tmp_path / "parity_check-0.9.2-py3-none-any.whl"
+    records: list[str] = []
+    with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for source in source_package.rglob("*.py"):
+            target = Path("parity") / source.relative_to(source_package)
+            archive.write(source, target.as_posix())
+            records.append(f"{target.as_posix()},,")
+        metadata_root = Path("parity_check-0.9.2.dist-info")
+        metadata = "Metadata-Version: 2.1\nName: parity-check\nVersion: 0.9.2\n"
+        wheel_metadata = (
+            "Wheel-Version: 1.0\nGenerator: parity-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        )
+        archive.writestr((metadata_root / "METADATA").as_posix(), metadata)
+        archive.writestr((metadata_root / "WHEEL").as_posix(), wheel_metadata)
+        records.extend(
+            [
+                f"{(metadata_root / 'METADATA').as_posix()},,",
+                f"{(metadata_root / 'WHEEL').as_posix()},,",
+                f"{(metadata_root / 'RECORD').as_posix()},,",
+            ]
+        )
+        archive.writestr((metadata_root / "RECORD").as_posix(), "\n".join(records) + "\n")
+
+    interpreters: list[Path] = []
+    dependency_site_packages = (
+        Path(sys.executable).parent.parent
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    for name, version in (("reference", "1.0"), ("candidate", "2.0")):
+        root = tmp_path / name
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--system-site-packages", str(root)], check=True
+        )
+        interpreter = root / "bin" / "python"
+        subprocess.run(
+            [
+                str(interpreter),
+                "-m",
+                "pip",
+                "install",
+                "--no-index",
+                "--no-deps",
+                str(wheel),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        site_packages = (
+            root
+            / "lib"
+            / f"python{sys.version_info.major}.{sys.version_info.minor}"
+            / "site-packages"
+        )
+        (site_packages / "parity-test-dependencies.pth").write_text(
+            str(dependency_site_packages) + "\n", encoding="utf-8"
+        )
+        probe_metadata = site_packages / f"parity_isolation_probe-{version}.dist-info"
+        probe_metadata.mkdir(parents=True)
+        (probe_metadata / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: parity-isolation-probe\nVersion: {version}\n",
+            encoding="utf-8",
+        )
+        interpreters.append(interpreter)
+
+    assert interpreters[0].is_symlink()
+    assert interpreters[1].is_symlink()
+    assert os.path.realpath(interpreters[0]) == os.path.realpath(interpreters[1])
+
+    controller = tmp_path / "controller.py"
+    controller.write_text(
+        """
+import json
+import sys
+from pathlib import Path
+from parity.doctor import diagnose_config
+from parity.models import CallableSpec, CaseConfig, ParityConfig
+
+root = Path(sys.argv[1])
+def specification(name):
+    return CallableSpec(
+        target="missing:callable",
+        adapter="arrow",
+        python=root / name / "bin" / "python",
+        workdir=root,
+        record_distributions=["parity-isolation-probe"],
+    )
+
+report = diagnose_config(ParityConfig(cases=[CaseConfig(
+    name="versions",
+    reference=specification("reference"),
+    candidate=specification("candidate"),
+    fixture=root / "unused.arrow",
+)]))
+case = report.cases[0]
+print(json.dumps([
+    case.reference.distributions[0].version,
+    case.candidate.distributions[0].version,
+]))
+""".lstrip(),
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [str(interpreters[0]), "-I", str(controller), str(tmp_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == ["1.0", "2.0"]

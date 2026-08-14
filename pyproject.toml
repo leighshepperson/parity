@@ -70,14 +70,15 @@ exclude = [
   "**/.parity*/**",
   "**/__pycache__/**",
   "**/*.py[cod]",
-  ".coverage",
-  "coverage.xml",
-  "htmlcov/**",
-  ".hypothesis/**",
-  ".mypy_cache/**",
-  ".pytest_cache/**",
-  ".ruff_cache/**",
-  ".venv/**",
+  "case_studies/**/environments/**/src/**",
+  "**/.coverage",
+  "**/coverage.xml",
+  "**/htmlcov/**",
+  "**/.hypothesis/**",
+  "**/.mypy_cache/**",
+  "**/.pytest_cache/**",
+  "**/.ruff_cache/**",
+  "**/.venv/**",
 ]
 
 [tool.hatch.version]

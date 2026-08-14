@@ -318,6 +318,7 @@ useful missing or unexpected key evidence instead of a generic shape mismatch.
 | `max_examples` | integer | `100` | Property examples, 1 through 100,000. |
 | `max_findings` | integer | `1` | Maximum distinct mismatch signatures, 1 through 20. Each additional search receives its own `max_examples` budget. |
 | `stability_repeats` | integer | `2` | Total same-input observations per implementation for deterministic passing inputs, 1 through 10. `1` disables the stability check. |
+| `search` | boolean | `true` | Run property-based search after deterministic inputs. Set this and `adversarial_examples` to `false` for an exact fixture-only contract. |
 | `seed` | integer/null | none | Stable run seed. |
 | `deadline_ms` | integer/null | none | Per-Hypothesis-example deadline. |
 | `adversarial_examples` | boolean | `true` | Run deterministic edge cases before search. |
@@ -326,6 +327,10 @@ useful missing or unexpected key evidence instead of a generic shape mismatch.
 | `suppress_too_slow` | boolean | `true` | Suppress Hypothesis health check for slow generation. |
 
 A seed improves repeatability but a saved replay artifact is the strongest reproduction mechanism.
+With `search = false`, Parity still checks deterministic fixtures or enabled adversarial examples,
+including stability repeats, but skips property-based search beyond them. A searchless case without
+any deterministic input is rejected instead of passing without evidence. Performance policy is
+unchanged; set `[cases.performance] enabled = false` separately for a semantic-only fixture check.
 Mismatch signatures classify observable difference shapes, not root causes or separate bugs. Every
 generated witness is observed twice after shrinking; changing signatures or side-specific output
 nondeterminism stops the campaign as an execution error rather than creating questionable evidence.

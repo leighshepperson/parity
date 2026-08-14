@@ -1,0 +1,45 @@
+version = 1
+
+[[units]]
+id = "augment-lags.cpu-core"
+cases = ["lags-control", "lags-grouped-unsorted", "lags-null-semantics"]
+
+[[units]]
+id = "augment-rolling.cpu-builtins"
+cases = ["rolling-control", "rolling-grouped-centered", "rolling-null-semantics"]
+
+[[units]]
+id = "augment-ewm.cpu-native"
+cases = ["ewm-control", "ewm-grouped-unsorted", "ewm-null-semantics"]
+
+[[units]]
+id = "augment-macd.cpu-core"
+cases = ["macd-control", "macd-grouped-unsorted", "macd-null-semantics"]
+
+[[units]]
+id = "pad-by-time.cpu-fixed-frequency"
+cases = ["pad-control", "pad-grouped-bounds", "pad-null-semantics"]
+
+[[units]]
+id = "cross-cutting.cudf"
+excluded_reason = "This CPU pilot has no CUDA runner; cudf behavior remains outside the declared migration."
+
+[[units]]
+id = "cross-cutting.reduce-memory"
+excluded_reason = "Memory downcasting intentionally changes dtypes and is separate from backend semantic parity."
+
+[[units]]
+id = "augment-lags.selectors-duration"
+excluded_reason = "Selector and human-duration parsing is shared frontend code; this pilot covers explicit columns and integer lag forms."
+
+[[units]]
+id = "augment-rolling.custom-parallel"
+excluded_reason = "Custom callables, Ray parallelism and progress reporting require a separate execution and performance study."
+
+[[units]]
+id = "augment-ewm.pandas-fallbacks"
+excluded_reason = "Median and unsupported EWM keyword combinations deliberately fall back to pandas upstream; this pilot covers native mean, std and var."
+
+[[units]]
+id = "pad-by-time.calendar-timezone-selectors"
+excluded_reason = "Calendar offsets, timezone and DST behavior, relative bounds and selectors require a dedicated temporal contract."
