@@ -24,6 +24,7 @@ from parity.provenance import (
     MAX_RECORDED_DISTRIBUTIONS,
     RuntimeProvenance,
     normalize_distribution_names,
+    normalize_distribution_requirements,
 )
 from parity.targets import is_import_target
 
@@ -392,6 +393,9 @@ class CallableSpec(StrictModel):
     record_distributions: list[str] = Field(
         default_factory=list, max_length=MAX_RECORDED_DISTRIBUTIONS
     )
+    required_distributions: dict[str, str] = Field(
+        default_factory=dict, max_length=MAX_RECORDED_DISTRIBUTIONS
+    )
 
     @field_validator("target")
     @classmethod
@@ -407,6 +411,29 @@ class CallableSpec(StrictModel):
             return list(normalize_distribution_names(names))
         except (TypeError, ValueError) as error:
             raise ValueError(str(error)) from error
+
+    @field_validator("required_distributions", mode="before")
+    @classmethod
+    def normalize_required_distributions(cls, requirements: object) -> dict[str, str]:
+        try:
+            return normalize_distribution_requirements(requirements)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as error:
+            raise ValueError(str(error)) from error
+
+    @model_validator(mode="after")
+    def bound_explicit_distributions(self) -> CallableSpec:
+        explicit = set(self.record_distributions).union(self.required_distributions)
+        if len(explicit) > MAX_RECORDED_DISTRIBUTIONS:
+            raise ValueError(
+                f"at most {MAX_RECORDED_DISTRIBUTIONS} explicit distributions may be used"
+            )
+        return self
+
+    @property
+    def provenance_distributions(self) -> tuple[str, ...]:
+        """All explicitly observed names, including fail-closed requirements."""
+
+        return tuple(sorted(set(self.record_distributions).union(self.required_distributions)))
 
 
 class ComparisonPolicy(StrictModel):
@@ -499,6 +526,8 @@ class CaseConfig(StrictModel):
     input_bundle: InputBundle | None = None
     static_args: list[JsonValue] = Field(default_factory=list)
     static_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
+    reference_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
+    candidate_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
     comparison: ComparisonPolicy = Field(default_factory=ComparisonPolicy)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
@@ -514,12 +543,26 @@ class CaseConfig(StrictModel):
             raise ValueError("a case requires either fixture or schema, or input_bundle")
         if has_single_input and self.input_bundle is not None:
             raise ValueError("a case cannot combine fixture or schema with input_bundle")
+        for side, endpoint_kwargs in (
+            ("reference", self.reference_kwargs),
+            ("candidate", self.candidate_kwargs),
+        ):
+            overlap = self.static_kwargs.keys() & endpoint_kwargs.keys()
+            if overlap:
+                raise ValueError(f"{side}_kwargs overlap static_kwargs: {sorted(overlap)}")
         if self.input_bundle is not None and self.input_bundle.binding == "keyword":
             if self.static_args:
                 raise ValueError("keyword input_bundle binding cannot be combined with static_args")
-            collisions = self.input_bundle.inputs.keys() & self.static_kwargs.keys()
+            invocation_kwargs = (
+                self.static_kwargs.keys()
+                | self.reference_kwargs.keys()
+                | self.candidate_kwargs.keys()
+            )
+            collisions = self.input_bundle.inputs.keys() & invocation_kwargs
             if collisions:
-                raise ValueError(f"input names collide with static_kwargs: {sorted(collisions)}")
+                raise ValueError(
+                    f"input names collide with invocation kwargs: {sorted(collisions)}"
+                )
         return self
 
 

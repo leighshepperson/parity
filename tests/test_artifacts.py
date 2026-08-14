@@ -37,6 +37,8 @@ def _case(tmp_path: Path) -> CaseConfig:
         candidate=CallableSpec(target="new:transform", adapter="polars"),
         fixture=tmp_path / "source.parquet",
         static_kwargs={"api_key": "also-secret", "mode": "strict"},
+        reference_kwargs={"engine": "pandas", "reference_token": "reference-secret"},
+        candidate_kwargs={"engine": "polars", "candidate_token": "candidate-secret"},
     )
 
 
@@ -84,8 +86,18 @@ def test_artifact_campaign_is_complete_replayable_and_hashed(tmp_path: Path) -> 
     assert replay["case"]["reference"] is None
     assert replay["case"]["static_kwargs"]["api_key"] == "<redacted>"
     assert replay["case"]["static_kwargs"]["mode"] == "strict"
+    assert replay["case"]["reference_kwargs"] == {
+        "engine": "pandas",
+        "reference_token": "<redacted>",
+    }
+    assert replay["case"]["candidate_kwargs"] == {
+        "candidate_token": "<redacted>",
+        "engine": "polars",
+    }
     assert "do-not-store" not in replay_text
     assert "also-secret" not in replay_text
+    assert "reference-secret" not in replay_text
+    assert "candidate-secret" not in replay_text
     assert str(tmp_path) not in replay_text
 
 
@@ -95,8 +107,16 @@ def test_artifact_uses_v2_only_with_complete_runtime_and_config_contract(
     runtime = collect_runtime_provenance(["definitely-not-installed-artifact-probe"])
     case = CaseConfig(
         name="complete-runtime",
-        reference=CallableSpec(target="old:transform", adapter="pandas"),
-        candidate=CallableSpec(target="new:transform", adapter="polars"),
+        reference=CallableSpec(
+            target="old:transform",
+            adapter="pandas",
+            required_distributions={"numpy": ">=1"},
+        ),
+        candidate=CallableSpec(
+            target="new:transform",
+            adapter="polars",
+            required_distributions={"numpy": ">=1"},
+        ),
         fixture=tmp_path / "source.arrow",
         comparison=ComparisonPolicy(row_order="keyed", row_keys=["account", "sequence"]),
     )
@@ -120,6 +140,8 @@ def test_artifact_uses_v2_only_with_complete_runtime_and_config_contract(
     # transport. The existing v2 contract reconstructs it without guessing.
     restored = CaseConfig.model_validate(replay["case"])
     assert restored.comparison == case.comparison
+    assert restored.reference.required_distributions == {"numpy": ">=1"}
+    assert restored.candidate.required_distributions == {"numpy": ">=1"}
 
     # Replay payloads produced before keyed alignment omitted row_keys. They
     # retain their original strict/ignore semantics through the empty default.

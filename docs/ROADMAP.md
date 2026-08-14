@@ -4,6 +4,25 @@ Parity is an open-source, local-first verifier for dataframe and numerical migra
 lists technical priorities, not release dates or commitments. Work should be guided by reproducible
 public examples and the risk of false passes.
 
+## v0.10 usability foundation
+
+The bounded v0.10 scope makes a complete migration easier to operate without broadening Parity into
+a source manager or general build system:
+
+- an optional `parity-check[workspace]` flow creates isolated, locked reference/candidate workers
+  for one or more dependency lanes behind `parity migration init/setup/run`;
+- `cases_file` and bounded `case_defaults` remove repetitive large-config boilerplate while keeping
+  case identity, targets and input contracts visible;
+- side-specific `reference_kwargs` and `candidate_kwargs` let one wrapper expose controlled backend
+  switches without duplicating cases;
+- worker Parity and target-package requirements fail closed before target execution; and
+- `parity evidence verify` batch-replays mismatch-classified findings referenced by suite or
+  migration reports.
+
+The workspace consumes a released reference and an existing local candidate checkout. It does not
+clone, patch or modify source. Parity's `ms1:` value is a mismatch-shape digest, not a
+cryptographic signature or attestation.
+
 ## Make the current release dependable
 
 - Keep configuration, exit codes, reports and replay artifacts consistent across patch releases.
@@ -18,6 +37,10 @@ public examples and the risk of false passes.
 - Keep the migration coverage gate resistant to partial execution, missing case evidence and
   vacuous all-excluded inventories, with versioned, data-safe reports bound to the reviewed
   manifest and effective Parity configuration.
+- Exercise managed workspaces across supported platforms, resolver failures and multi-lane public
+  migrations while keeping explicit externally provisioned interpreter paths supported.
+- Preserve evidence-verification exit semantics and distinguish stale behavioural evidence from
+  corrupt, unverifiable or unauthenticated evidence.
 
 ## Broaden semantic coverage
 

@@ -35,6 +35,8 @@ jobs:
           printf 'must not ship\n' > case_studies/package-safety/.parity-package-sentinel/input.arrow
           mkdir -p case_studies/package-safety/environments/current/reference/src/upstream
           printf 'must not ship\n' > case_studies/package-safety/environments/current/reference/src/upstream/sentinel.txt
+          mkdir -p case_studies/package-safety/candidate-src/upstream
+          printf 'must not ship\n' > case_studies/package-safety/candidate-src/upstream/sentinel.txt
       - run: python -m build
       - name: Verify distributions contain no local evidence or caches
         run: |
@@ -56,6 +58,7 @@ jobs:
               "/htmlcov/",
               "/reference/src/",
               "/candidate/src/",
+              "/candidate-src/",
               ".pyc",
           )
           archives = [*pathlib.Path("dist").glob("*.tar.gz"), *pathlib.Path("dist").glob("*.whl")]
@@ -119,6 +122,16 @@ jobs:
             --requirement .github/constraints/minimum-py311.txt
           python -m pip install --no-deps --editable .
           python -m pip check
+      - name: Smoke-test the managed-workspace tool floor
+        env:
+          PARITY_WORKSPACE_FLOOR_SMOKE: "1"
+        run: |
+          python -m pip install \
+            tox==4.44.0 \
+            tox-uv==1.29.0 \
+            uv==0.9.1
+          pytest tests/test_migration_workspace.py \
+            -k generated_tox_config_runs_on_declared_tool_floor
       - name: Test without performance or extended campaigns
         run: pytest -m "not slow" --ignore=tests/test_performance.py
 

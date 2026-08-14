@@ -1,0 +1,51 @@
+name: Promote Action major tag
+run-name: Promote stable Action channel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/promote-action-major.yml
+      - scripts/promote_action_major.py
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Stable vMAJOR.MINOR.PATCH release tag to promote
+        required: true
+        type: string
+      dry_run:
+        description: Validate without changing the moving major tag
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: parity-action-major-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Validate and promote Action major tag
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_TAG" ]]; then
+            RELEASE_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          fi
+          arguments=(--release-tag "$RELEASE_TAG")
+          if [[ "$DRY_RUN" == "true" ]]; then
+            arguments+=(--dry-run)
+          fi
+          python scripts/promote_action_major.py "${arguments[@]}"

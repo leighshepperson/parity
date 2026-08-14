@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from parity import __version__
 from parity.config import ConfigError, load_config
@@ -28,7 +29,12 @@ migration_app = typer.Typer(
     help="Check that every declared migration unit is covered and passing.",
     no_args_is_help=True,
 )
+evidence_app = typer.Typer(
+    help="Verify retained counterexamples referenced by a Parity report.",
+    no_args_is_help=True,
+)
 app.add_typer(migration_app, name="migration")
+app.add_typer(evidence_app, name="evidence")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -306,6 +312,157 @@ def _render_migration_result(result: MigrationResult) -> None:
         console.print("[red]migration incomplete[/red]")
 
 
+@migration_app.command("init")
+def migration_init(
+    reference: Annotated[
+        str,
+        typer.Option(
+            "--reference",
+            help="Exact released requirement, for example package==1.2.3",
+        ),
+    ],
+    workspace_path: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Workspace file to create"),
+    ] = Path("parity.workspace.toml"),
+    candidate: Annotated[
+        Path,
+        typer.Option("--candidate", help="Existing local candidate checkout"),
+    ] = Path("."),
+    python_version: Annotated[
+        str | None,
+        typer.Option("--python", help="Worker Python major.minor; defaults to this Python"),
+    ] = None,
+    config_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Parity configuration path"),
+    ] = Path("parity.toml"),
+    manifest_path: Annotated[
+        Path,
+        typer.Option("--manifest", "-m", help="Migration ledger path"),
+    ] = Path("migration.toml"),
+    report_dir: Annotated[
+        Path,
+        typer.Option("--report-dir", help="Per-lane JSON report directory"),
+    ] = Path(".parity/workspace/reports"),
+    lane: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--lane",
+            help="Dependency lane as NAME or NAME=REQUIREMENTS; repeatable",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Replace an existing workspace file"),
+    ] = False,
+) -> None:
+    """Declare a local-checkout migration workspace."""
+
+    from parity.migration_workspace import (
+        WorkspaceError,
+        parse_lane_options,
+        write_workspace,
+    )
+
+    try:
+        created = write_workspace(
+            workspace_path,
+            reference=reference,
+            candidate=candidate,
+            python_version=python_version,
+            config=config_path,
+            manifest=manifest_path,
+            report_dir=report_dir,
+            lanes=parse_lane_options(lane or ()),
+            force=force,
+        )
+    except FileExistsError:
+        _fail(f"{workspace_path} already exists; pass --force to replace it")
+    except WorkspaceError as exc:
+        _fail(str(exc))
+    except OSError as exc:
+        _fail(f"migration workspace could not be written ({type(exc).__name__})")
+    console.print(f"[green]created[/green] {created}")
+    console.print("uses existing parity.toml and migration.toml; create them before setup or run")
+    console.print(f"next: parity migration run --workspace {created}")
+
+
+@migration_app.command("setup")
+def migration_setup(
+    workspace_path: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Path to parity.workspace.toml"),
+    ] = Path("parity.workspace.toml"),
+    refresh_locks: Annotated[
+        bool,
+        typer.Option("--refresh-locks", help="Upgrade dependency locks deliberately"),
+    ] = False,
+) -> None:
+    """Prepare all locked reference and candidate worker environments."""
+
+    from parity.migration_workspace import WorkspaceError, setup_workspace
+
+    try:
+        prepared = setup_workspace(workspace_path, refresh_locks=refresh_locks)
+    except WorkspaceError as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"migration environment setup failed ({type(exc).__name__})")
+    console.print(f"[green]ready[/green] {len(prepared.lanes)} dependency lane(s)")
+    for prepared_lane in prepared.lanes:
+        console.print(
+            f"  {prepared_lane.name}: {prepared_lane.reference_env}, {prepared_lane.candidate_env}"
+        )
+
+
+@migration_app.command("run")
+def migration_run(
+    workspace_path: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Path to parity.workspace.toml"),
+    ] = Path("parity.workspace.toml"),
+    refresh_locks: Annotated[
+        bool,
+        typer.Option("--refresh-locks", help="Upgrade dependency locks deliberately"),
+    ] = False,
+) -> None:
+    """Prepare environments and run the complete gate in every lane."""
+
+    from parity.migration import MigrationConfigError
+    from parity.migration_workspace import WorkspaceError, run_workspace
+
+    def show_progress(event: str, lane_name: str | None) -> None:
+        if event == "setup":
+            console.print("[cyan]preparing[/cyan] locked migration environments")
+        elif event == "lane" and lane_name is not None:
+            console.print(f"[cyan]running[/cyan] dependency lane {lane_name}")
+        elif event == "complete" and lane_name is not None:
+            console.print(f"[green]completed[/green] dependency lane {lane_name}")
+
+    try:
+        completed = run_workspace(
+            workspace_path,
+            refresh_locks=refresh_locks,
+            progress=show_progress,
+        )
+    except (ConfigError, MigrationConfigError, WorkspaceError) as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"migration workspace could not run ({type(exc).__name__})")
+
+    for index, lane_result in enumerate(completed.lanes):
+        if index:
+            console.print()
+        console.print(f"[bold]dependency lane: {lane_result.name}[/bold]")
+        _render_migration_result(lane_result.result)
+        console.print(f"[green]report[/green] {lane_result.report}")
+    if any(lane.result.status is Status.ERROR for lane in completed.lanes):
+        raise typer.Exit(2)
+    if any(lane.result.status is Status.FAILED for lane in completed.lanes):
+        raise typer.Exit(1)
+
+
 @migration_app.command("check")
 def migration_check(
     manifest_path: Annotated[
@@ -342,6 +499,72 @@ def migration_check(
         except OSError as exc:
             _fail(f"migration report could not be written ({type(exc).__name__})")
     _render_migration_result(result)
+    if result.status is Status.ERROR:
+        raise typer.Exit(2)
+    if result.status is Status.FAILED:
+        raise typer.Exit(1)
+
+
+def _render_evidence_result(result: object) -> None:
+    """Render data-safe retained-evidence status without Rich markup injection."""
+
+    from parity.evidence import EvidenceResult, evidence_summary
+
+    if not isinstance(result, EvidenceResult):  # pragma: no cover - internal contract
+        raise TypeError("invalid evidence result")
+    colors = {"verified": "green", "stale": "yellow", "error": "red"}
+    table = Table("Case", "Artifact", "Status")
+    for artifact in result.artifacts:
+        status = artifact.status.value
+        table.add_row(
+            Text(artifact.case),
+            Text(artifact.artifact),
+            Text(status, style=colors[status]),
+        )
+    console.print(table)
+    summary = evidence_summary(result)
+    console.print(
+        " · ".join(
+            [
+                f"{summary['verified']} verified",
+                f"{summary['stale']} stale",
+                f"{summary['error']} error",
+            ]
+        )
+    )
+
+
+@evidence_app.command("verify")
+def evidence_verify(
+    report: Annotated[Path, typer.Argument(help="Suite or migration JSON report")],
+    artifact_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--artifact-root",
+            help="Actual artifact_dir when it is not directly below the current directory",
+        ),
+    ] = None,
+    json_output: Annotated[
+        Path | None,
+        typer.Option("--json", help="Write the data-safe verification report"),
+    ] = None,
+) -> None:
+    """Replay every report-referenced finding under its recorded runtime."""
+
+    from parity.evidence import EvidenceError, verify_evidence, write_evidence_json
+
+    try:
+        result = verify_evidence(report, artifact_root=artifact_root)
+    except EvidenceError as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"evidence verification could not run ({type(exc).__name__})")
+    if json_output is not None:
+        try:
+            write_evidence_json(result, json_output)
+        except OSError as exc:
+            _fail(f"evidence report could not be written ({type(exc).__name__})")
+    _render_evidence_result(result)
     if result.status is Status.ERROR:
         raise typer.Exit(2)
     if result.status is Status.FAILED:
@@ -422,12 +645,19 @@ def _runtime_label(worker: WorkerRuntimeReport, field: str) -> str:
     if field == "python":
         return f"{worker.python_implementation} {worker.python_version}"
     if field == "parity":
-        return worker.parity_version or "unavailable"
+        version = worker.parity_version or "unavailable"
+        return version if worker.parity_satisfied is not False else f"{version} (incompatible)"
     distributions = {item.name: item for item in worker.distributions}
     item = distributions.get(field)
     if item is None:
         return "not requested"
-    return item.version if item.status == "installed" and item.version is not None else item.status
+    observed = (
+        item.version if item.status == "installed" and item.version is not None else item.status
+    )
+    if item.satisfied is False:
+        requirement = item.requirement or "a valid PEP 440 version"
+        return f"{observed} (requires {requirement})"
+    return observed
 
 
 def _render_config_doctor(report: ConfigDoctorReport) -> None:

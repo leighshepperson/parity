@@ -1,4 +1,5 @@
 .parity-*/
+candidate-src/
 environments/*/candidate/src/
 environments/*/reference/src/
 environments/*/candidate/.venv/

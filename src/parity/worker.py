@@ -43,11 +43,13 @@ def run_request(request_path: Path, response_path: Path) -> None:
         pandas_input=raw_spec.get("pandas_input", "arrow"),
         workdir=raw_spec.get("workdir"),
         record_distributions=raw_spec.get("record_distributions", []),
+        required_distributions=raw_spec.get("required_distributions", {}),
     )
     expected_raw = request.get("expected_runtime")
     expected_runtime = (
         RuntimeProvenance.model_validate(expected_raw) if expected_raw is not None else None
     )
+    expected_parity_version = request.get("expected_parity_version")
     inputs = _read_input_bundle(request.get("inputs"), request_path.parent)
     operation = request.get("operation", "execute")
     static_args = request.get("static_args", [])
@@ -70,15 +72,18 @@ def run_request(request_path: Path, response_path: Path) -> None:
         observation = Observation(
             outcome=ExecutionOutcome.RETURNED,
             metrics=RunMetrics(duration_seconds=0),
-            runtime=collect_runtime_provenance(spec.record_distributions),
+            runtime=collect_runtime_provenance(spec.provenance_distributions),
         )
     elif operation == "execute":
+        if not isinstance(expected_parity_version, str):
+            raise ValueError("worker expected_parity_version must be a string")
         observation = execute_current(
             spec,
             inputs.as_public_bundle(),
             static_args=static_args,
             static_kwargs=static_kwargs,
             expected_runtime=expected_runtime,
+            expected_parity_version=expected_parity_version,
         )
     else:
         raise ValueError("unsupported worker operation")

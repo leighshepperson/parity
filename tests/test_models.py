@@ -239,11 +239,37 @@ def test_keyword_bundle_rejects_ambiguous_static_arguments() -> None:
     }
     with pytest.raises(ValidationError, match="cannot be combined with static_args"):
         CaseConfig(**base, static_args=[1])
-    with pytest.raises(ValidationError, match="collide with static_kwargs"):
+    with pytest.raises(ValidationError, match="collide with invocation kwargs"):
         CaseConfig(**base, static_kwargs={"left": 1})
+    with pytest.raises(ValidationError, match="collide with invocation kwargs"):
+        CaseConfig(**base, reference_kwargs={"left": 1})
+    with pytest.raises(ValidationError, match="collide with invocation kwargs"):
+        CaseConfig(**base, candidate_kwargs={"right": 1})
 
     positional = bundle.model_copy(update={"binding": "positional"})
     assert CaseConfig(**{**base, "input_bundle": positional}, static_args=[1]).static_args == [1]
+
+
+def test_endpoint_kwargs_are_disjoint_from_shared_kwargs() -> None:
+    base = {
+        "name": "engines",
+        "reference": CallableSpec(target="example:transform"),
+        "candidate": CallableSpec(target="example:transform"),
+        "input_schema": schema(),
+        "static_kwargs": {"window": 3},
+    }
+
+    case = CaseConfig(
+        **base,
+        reference_kwargs={"engine": "pandas"},
+        candidate_kwargs={"engine": "polars"},
+    )
+    assert case.reference_kwargs == {"engine": "pandas"}
+    assert case.candidate_kwargs == {"engine": "polars"}
+    with pytest.raises(ValidationError, match="reference_kwargs overlap static_kwargs"):
+        CaseConfig(**base, reference_kwargs={"window": 4})
+    with pytest.raises(ValidationError, match="candidate_kwargs overlap static_kwargs"):
+        CaseConfig(**base, candidate_kwargs={"window": 4})
 
 
 def test_case_requires_fixture_or_schema() -> None:
@@ -303,6 +329,37 @@ def test_callable_record_distributions_are_explicit_normalized_and_unique() -> N
         )
     with pytest.raises(ValidationError, match="ASCII"):
         CallableSpec(target="example:reference", record_distributions=["private/package"])
+
+
+def test_callable_required_distributions_use_normalized_pep440_specifiers() -> None:
+    spec = CallableSpec(
+        target="example:reference",
+        record_distributions=["pytest"],
+        required_distributions={"Scikit_Learn": ">=1, <2", "pandas": ""},
+    )
+
+    assert spec.required_distributions == {"pandas": "", "scikit-learn": "<2,>=1"}
+    assert spec.provenance_distributions == ("pandas", "pytest", "scikit-learn")
+    with pytest.raises(ValidationError, match="duplicate distribution requirement"):
+        CallableSpec(
+            target="example:reference",
+            required_distributions={"Scikit-Learn": ">=1", "scikit_learn": "<2"},
+        )
+    with pytest.raises(ValidationError, match="invalid PEP 440"):
+        CallableSpec(
+            target="example:reference",
+            required_distributions={"pandas": "latest"},
+        )
+    with pytest.raises(ValidationError, match="arbitrary equality"):
+        CallableSpec(
+            target="example:reference",
+            required_distributions={"pandas": "===PRIVATE_TOKEN=secret"},
+        )
+    with pytest.raises(ValidationError, match="printable ASCII"):
+        CallableSpec(
+            target="example:reference",
+            required_distributions={"pandas": ">=2\nPRIVATE_TOKEN=secret"},
+        )
 
 
 def test_case_accepts_schema_alias_and_serializes_it() -> None:

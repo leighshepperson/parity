@@ -640,6 +640,62 @@ def test_execute_isolated_round_trips_and_honours_workdir(transform_module: Path
     assert {"numpy", "pandas", "polars", "pyarrow"}.issubset(recorded)
 
 
+def test_required_distribution_fails_before_target_import(tmp_path: Path) -> None:
+    imported = tmp_path / "target-imported.txt"
+    (tmp_path / "must_not_import.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(imported)!r}).write_text('imported', encoding='utf-8')\n"
+        "def transform(frame):\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="must_not_import:transform",
+        adapter="arrow",
+        workdir=tmp_path,
+        required_distributions={"definitely-missing-parity-contract": ">=1"},
+    )
+
+    observation = execute_current(spec, _table())
+
+    assert observation.outcome is ExecutionOutcome.CRASHED
+    assert observation.exception is not None
+    assert observation.exception.type == "RuntimeContractError"
+    assert observation.exception.message == (
+        "worker runtime requirements not satisfied: "
+        "distributions.definitely-missing-parity-contract.missing"
+    )
+    assert observation.runtime is not None
+    assert imported.exists() is False
+
+
+def test_disposable_worker_parity_mismatch_fails_before_target_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported = tmp_path / "disposable-target-imported.txt"
+    (tmp_path / "disposable_must_not_import.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(imported)!r}).write_text('imported', encoding='utf-8')\n"
+        "def transform(frame):\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="disposable_must_not_import:transform",
+        adapter="arrow",
+        workdir=tmp_path,
+    )
+    monkeypatch.setattr("parity.execution.__version__", "999.0.0")
+
+    observation = execute_isolated(spec, _table(), timeout_seconds=5)
+
+    assert observation.outcome is ExecutionOutcome.CRASHED
+    assert observation.exception is not None
+    assert observation.exception.type == "RuntimeContractError"
+    assert observation.exception.message.endswith("parity_version")
+    assert imported.exists() is False
+
+
 def test_isolated_workers_apply_relative_workdir_once(
     transform_module: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

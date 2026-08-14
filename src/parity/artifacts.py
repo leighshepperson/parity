@@ -117,6 +117,7 @@ def _spec_for_replay(
         "adapter": spec.adapter,
         "pandas_input": spec.pandas_input,
         "record_distributions": spec.record_distributions,
+        "required_distributions": spec.required_distributions,
         # Replays inherit environment from the caller.  Recording even innocent
         # values makes accidental credential persistence much more likely.
         "python": python,
@@ -159,6 +160,8 @@ def _case_for_replay(
             case.candidate, invocation_directory=invocation_directory
         )
         config["static_kwargs"] = _sanitize_json(config.get("static_kwargs", {}))
+        config["reference_kwargs"] = _sanitize_json(config.get("reference_kwargs", {}))
+        config["candidate_kwargs"] = _sanitize_json(config.get("candidate_kwargs", {}))
         config["static_args"] = _sanitize_json(config.get("static_args", []))
         return config
     replay_case: dict[str, Any] = {

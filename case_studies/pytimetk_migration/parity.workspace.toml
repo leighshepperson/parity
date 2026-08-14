@@ -1,0 +1,15 @@
+version = 1
+reference = "pytimetk==2.5.1"
+candidate = "candidate-src/pytimetk"
+python = "3.12"
+config = "parity.workspace-config.toml"
+manifest = "migration.toml"
+report_dir = ".parity/workspace/reports"
+
+[[lanes]]
+name = "release"
+requirements = "environments/release/workspace.in"
+
+[[lanes]]
+name = "current"
+requirements = "environments/current/workspace.in"

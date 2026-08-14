@@ -139,6 +139,28 @@ tests use controlled fake observations; they do not assert machine-specific spee
 Examples in documentation should parse or run in tests where practical. Release tags are `vX.Y.Z`
 and must exactly match the package version. The protected release workflow independently reruns
 lint, formatting, strict typing and the coverage suite; it then builds once, checks distributions,
-attests them and publishes through PyPI trusted publishing.
+attests them and publishes through PyPI trusted publishing. After publication succeeds, the release
+workflow advances the matching Action major tag through `scripts/promote_action_major.py`. The
+promoter accepts only final releases, verifies the source version, rejects rollback or rewritten
+release identity and uses a force-with-lease against the observed remote tag.
+
+When the promotion workflow and script first land on `main`, the push-triggered workflow obtains the
+latest stable GitHub Release and automatically bootstraps its missing major tag. The
+`workflow_dispatch` entry point is reserved for a dry-run or deliberate recovery against an
+immutable release tag; leave `dry_run` enabled while reviewing the validated commit, and disable it
+only for the intended recovery. The same monotonic and lease guards apply; do not create or
+force-move the alias by hand.
+
+Before a workspace feature is published, build its wheel locally and point uv at that private
+wheel directory for the integration smoke:
+
+```bash
+python -m build
+UV_FIND_LINKS="$PWD/dist" parity migration run --workspace path/to/parity.workspace.toml
+```
+
+The resulting lock must bind `parity-check` to the local wheel hash and both workers must report the
+same source version as the controller. Do not add this pre-release override to user-facing workspace
+files; published users resolve the ordinary exact package version.
 
 For contribution mechanics, see [CONTRIBUTING.md](CONTRIBUTING.md).

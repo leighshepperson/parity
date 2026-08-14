@@ -251,6 +251,49 @@ def test_incomplete_or_error_case_evidence_fails_closed(
     assert result.units[0].cases[0].status is case_status
 
 
+def test_migration_gate_propagates_runtime_contract_error_before_import(tmp_path: Path) -> None:
+    imported = tmp_path / "migration-target-imported.txt"
+    (tmp_path / "migration_contract_target.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(imported)!r}).write_text('imported', encoding='utf-8')\n"
+        "def identity(frame):\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="migration_contract_target:identity",
+        adapter="arrow",
+        workdir=tmp_path,
+        required_distributions={"definitely-missing-parity-contract": ">=1"},
+    )
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="runtime-contract",
+                reference=spec,
+                candidate=spec.model_copy(deep=True),
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="value", dtype="integer", nullable=False)]
+                ),
+                generation=GenerationConfig(adversarial_examples=False, max_examples=1),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+    manifest = MigrationManifest(
+        units=[MigrationUnit(id="runtime-contract", cases=["runtime-contract"])]
+    )
+
+    result = run_migration(manifest, config)
+
+    assert result.status is Status.ERROR
+    assert result.units[0].status is MigrationUnitStatus.ERROR
+    assert result.units[0].cases[0].status is MigrationCaseStatus.ERROR
+    assert result.units[0].cases[0].examples_run == 0
+    assert imported.exists() is False
+
+
 def test_semantic_failure_and_uncovered_units_are_incomplete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

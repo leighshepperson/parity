@@ -41,6 +41,8 @@ jobs:
           printf 'must not ship\n' > case_studies/package-safety/.parity-package-sentinel/input.arrow
           mkdir -p case_studies/package-safety/environments/current/reference/src/upstream
           printf 'must not ship\n' > case_studies/package-safety/environments/current/reference/src/upstream/sentinel.txt
+          mkdir -p case_studies/package-safety/candidate-src/upstream
+          printf 'must not ship\n' > case_studies/package-safety/candidate-src/upstream/sentinel.txt
       - run: python -m build
       - name: Verify distributions contain no local evidence or caches
         run: |
@@ -62,6 +64,7 @@ jobs:
               "/htmlcov/",
               "/reference/src/",
               "/candidate/src/",
+              "/candidate-src/",
               ".pyc",
           )
           archives = [*pathlib.Path("dist").glob("*.tar.gz"), *pathlib.Path("dist").glob("*.whl")]
@@ -111,3 +114,24 @@ jobs:
         with:
           subject-path: dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  promote-action-major:
+    name: Promote stable Action major tag
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: parity-action-major-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Promote Action major tag after publication
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          python scripts/promote_action_major.py
+          --release-tag "$RELEASE_TAG"
+          --skip-non-final

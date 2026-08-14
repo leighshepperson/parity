@@ -12,6 +12,8 @@ That property reduces exposure; it does not make every output non-sensitive.
 | Terminal/Markdown/JSON/JUnit report | No dataframe/value payloads | Console or requested path | Developers and CI |
 | Migration manifest | No dataframe/value payloads; contains unit IDs and exclusion reasons | User-selected repository path | Developers and reviewers |
 | Migration JSON/terminal report | No dataframe/value payloads; contains redacted inventory metadata | Console or requested path | Developers and CI |
+| Evidence-verification JSON | No dataframe/value payloads; contains redacted case/artifact labels and mismatch digests | User-selected path | Developers and CI |
+| Workspace locks and generated tox config | Package versions/hashes and local source/interpreter paths | `.parity/workspace/` | Developers and CI |
 | `input.arrow` or bundled `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
 | `manifest.json` | Metadata, paths and hashes | Counterexample directory | Restricted engineering team |
 | `result.json` in artifact | Structured mismatch evidence | Counterexample directory | Restricted engineering team |
@@ -35,6 +37,8 @@ Treat the entire artifact directory at the same classification as its source fix
 8. Pin Parity and dependency versions for release gates; verify published package provenance.
 9. Keep secrets, customer names, private paths and copied data out of migration unit IDs and
    exclusion reasons, even though report projections apply ordinary diagnostic redaction.
+10. Review the candidate checkout and package indexes before a managed workspace installs from
+    either source; use an approved mirror or offline cache where policy requires it.
 
 ## Secrets
 
@@ -58,6 +62,13 @@ configuration bodies. Redaction removes common absolute-path and secret-assignme
 a general secret scanner. The manifest is project-controlled text and should itself be reviewed
 before it is committed, uploaded or passed to an external AI system.
 
+Evidence-verification reports apply the same data-safe projection. The `ms1:...` value binds a
+stable mismatch-shape classification, not source identity: despite the word “signature” in the
+model, it is not a digital signature, MAC, package attestation or authorization decision. Artifact
+manifest hashes detect local file changes, but a party able to replace the artifact can replace its
+hash manifest too. Use signed release provenance or an external attestation system when evidence
+crosses trust domains.
+
 ## Supply chain
 
 Releases are built in GitHub Actions, checked with `twine`, attested and published through PyPI
@@ -67,8 +78,29 @@ repositories, or for a private repository when GitHub Advanced Security is enabl
 dependencies. Consumers with stronger requirements should pin hashes or mirror packages through
 their approved registry.
 
+The optional migration workspace asks uv to resolve hash-pinned requirements locks and asks tox
+with tox-uv to create isolated workers. Resolution and installation may access configured package
+indexes and their normal caches. The exact reference requirement, lane requirement files, candidate
+packaging metadata and every resolved dependency are supply-chain inputs. Use a trusted index,
+review lock changes and keep `.parity/workspace` private because generated configuration can contain
+local paths.
+
+When uv or tox fails, Parity captures their raw stdout and stderr under
+`.parity/workspace/logs/` while keeping it out of the data-safe terminal error. Those private logs
+can contain index URLs, credentials, paths, or packaging output. Do not upload or publish them.
+
+Parity treats tox, tox-uv and uv as environment-lifecycle details. It does not clone repositories,
+select branches or commits, apply patches, or edit the candidate checkout. That boundary prevents
+environment setup from silently choosing the source being evaluated; it does not make an existing
+checkout or its build backend safe.
+
 The composite Action installs the action's own source revision by default. A caller may request a
 strict `parity-version`; arbitrary package specifiers are rejected.
+
+Public examples use the moving `v0` Action tag so stable, interface-compatible fixes arrive without
+copying a patch version into every workflow. That convenience tag is mutable and is promoted only
+after its matching package publishes successfully. Pin a reviewed full-length commit SHA when an
+immutable Action revision is required, and do not run the default branch directly in CI.
 
 ## Executed code
 
@@ -81,6 +113,11 @@ Workers can consume resources, spawn children or exploit native dependencies.
 `parity migration check` executes the union of cases named by the manifest under the same worker
 model. Manifest unit IDs and exclusion reasons are descriptive only and are never imported or
 evaluated. Unknown case names are rejected before a worker starts.
+
+`parity migration run` additionally resolves and installs packages before executing the same union
+in every dependency lane. `parity evidence verify` checks local artifact integrity and replays every
+report-referenced finding. Both commands must be run only against trusted source and packaging
+metadata, or inside the hardened environment described below.
 
 Configured runs and artifact replay execute the selected Python interpreter path. A project-local
 virtual-environment entry point may be a symlink to a host Python binary; Parity preserves that

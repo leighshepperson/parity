@@ -20,12 +20,15 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from parity._version import __version__
 
 MAX_RECORDED_DISTRIBUTIONS = 64
 MAX_DISTRIBUTION_NAME_LENGTH = 128
+MAX_DISTRIBUTION_SPECIFIER_LENGTH = 256
 CORE_DISTRIBUTIONS = ("hypothesis", "numpy", "pandas", "polars", "pyarrow")
 
 _DISTRIBUTION_NAME = re.compile(
@@ -149,6 +152,75 @@ def normalize_distribution_names(names: Iterable[str]) -> tuple[str, ...]:
                 f"at most {MAX_RECORDED_DISTRIBUTIONS} explicit distributions may be recorded"
             )
     return tuple(sorted(normalized))
+
+
+def normalize_distribution_requirements(
+    requirements: Mapping[str, str],
+) -> dict[str, str]:
+    """Validate and canonicalize an explicit name-to-PEP-440 requirement map."""
+
+    if not isinstance(requirements, Mapping):
+        raise TypeError("required distributions must be a mapping of names to specifiers")
+    normalized: dict[str, str] = {}
+    for raw_name, raw_specifier in requirements.items():
+        name = normalize_distribution_name(raw_name)
+        if name in normalized:
+            raise ValueError(f"duplicate distribution requirement after normalization: {name}")
+        if not isinstance(raw_specifier, str):
+            raise TypeError("distribution specifiers must be strings")
+        if len(raw_specifier) > MAX_DISTRIBUTION_SPECIFIER_LENGTH:
+            raise ValueError(
+                "distribution specifiers must contain at most "
+                f"{MAX_DISTRIBUTION_SPECIFIER_LENGTH} characters"
+            )
+        if any(ord(character) < 32 or ord(character) > 126 for character in raw_specifier):
+            raise ValueError("distribution specifiers must contain only printable ASCII")
+        try:
+            specifier = SpecifierSet(raw_specifier)
+        except InvalidSpecifier as error:
+            raise ValueError(f"invalid PEP 440 specifier for {name}") from error
+        if any(item.operator == "===" for item in specifier):
+            raise ValueError("PEP 440 arbitrary equality specifiers are not supported")
+        normalized[name] = str(specifier)
+        if len(normalized) > MAX_RECORDED_DISTRIBUTIONS:
+            raise ValueError(f"at most {MAX_RECORDED_DISTRIBUTIONS} distributions may be required")
+    return dict(sorted(normalized.items()))
+
+
+def distribution_satisfies_requirement(version: str | None, specifier: str) -> bool:
+    """Whether one bounded metadata version satisfies a validated PEP 440 specifier."""
+
+    if version is None:
+        return False
+    try:
+        parsed_version = Version(version)
+        parsed_specifier = SpecifierSet(specifier)
+    except (InvalidVersion, InvalidSpecifier):
+        return False
+    return parsed_version in parsed_specifier
+
+
+def runtime_contract_failures(
+    runtime: RuntimeProvenance,
+    *,
+    expected_parity_version: str,
+    required_distributions: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Return bounded, value-free paths for unmet worker runtime requirements."""
+
+    failures: list[str] = []
+    if runtime.parity_version != expected_parity_version:
+        failures.append("parity_version")
+    observed = {distribution.name: distribution for distribution in runtime.distributions}
+    for name, specifier in normalize_distribution_requirements(required_distributions).items():
+        distribution = observed.get(name)
+        if distribution is None:
+            failures.append(f"distributions.{name}.unavailable")
+        elif distribution.status != "installed":
+            failures.append(f"distributions.{name}.{distribution.status}")
+        elif not distribution_satisfies_requirement(distribution.version, specifier):
+            failures.append(f"distributions.{name}.version")
+    return tuple(failures)
 
 
 def _safe_runtime_label(value: str) -> str:
@@ -417,12 +489,16 @@ def _common_config_base(raw: Mapping[str, Any]) -> Path | None:
 
 __all__ = [
     "CORE_DISTRIBUTIONS",
+    "MAX_DISTRIBUTION_SPECIFIER_LENGTH",
     "MAX_RECORDED_DISTRIBUTIONS",
     "DistributionProvenance",
     "RuntimeProvenance",
     "collect_runtime_provenance",
     "diff_runtime",
+    "distribution_satisfies_requirement",
     "effective_config_sha256",
     "normalize_distribution_name",
     "normalize_distribution_names",
+    "normalize_distribution_requirements",
+    "runtime_contract_failures",
 ]

@@ -50,6 +50,7 @@ from parity.models import (
     GenerationConfig,
     InputBundle,
     InputSpec,
+    JsonValue,
     Mismatch,
     MismatchKind,
     PandasInput,
@@ -902,6 +903,9 @@ def _configured_case(
             return value
         return tuple(value[name] for name in input_bundle.inputs)
 
+    reference_kwargs = {**case.static_kwargs, **case.reference_kwargs}
+    candidate_kwargs = {**case.static_kwargs, **case.candidate_kwargs}
+
     def run_clean_pair(value: CampaignInput) -> tuple[Observation, Observation]:
         """Execute one confirmation in newly started reference/candidate workers."""
 
@@ -922,13 +926,13 @@ def _configured_case(
                 clean_reference.execute,
                 bound_input(value),
                 static_args=case.static_args,
-                static_kwargs=case.static_kwargs,
+                static_kwargs=reference_kwargs,
             )
             candidate_future = clean_pool.submit(
                 clean_candidate.execute,
                 bound_input(value),
                 static_args=case.static_args,
-                static_kwargs=case.static_kwargs,
+                static_kwargs=candidate_kwargs,
             )
             return reference_future.result(), candidate_future.result()
 
@@ -948,70 +952,85 @@ def _configured_case(
         ) as candidate_session,
         ThreadPoolExecutor(max_workers=2, thread_name_prefix="parity-pair") as pool,
     ):
-        if expected_provenance is not None:
-            reference_future = pool.submit(reference_session.inspect_runtime)
-            candidate_future = pool.submit(candidate_session.inspect_runtime)
-            reference_probe = reference_future.result()
-            candidate_probe = candidate_future.result()
-            provenance_mismatches: list[Mismatch] = []
-            for label, expected, probe in (
-                ("reference", expected_provenance.reference, reference_probe),
-                ("candidate", expected_provenance.candidate, candidate_probe),
-            ):
-                if expected is None or probe.runtime is None or not probe.succeeded:
-                    provenance_mismatches.append(
-                        Mismatch(
-                            kind=MismatchKind.EXCEPTION,
-                            message=f"{label} runtime provenance could not be verified",
-                            path=f"${label}.runtime",
-                        )
-                    )
-                    continue
-                if differences := diff_runtime(expected, probe.runtime):
-                    provenance_mismatches.append(
-                        Mismatch(
-                            kind=MismatchKind.EXCEPTION,
-                            message=(
-                                f"{label} runtime provenance drifted ("
-                                + ", ".join(differences)
-                                + ")"
-                            ),
-                            path=f"${label}.runtime",
-                        )
-                    )
-            if provenance_mismatches:
-                failure = ExampleResult(
-                    source="replay:provenance",
-                    status=Status.ERROR,
-                    mismatches=provenance_mismatches,
-                    reference_metrics=reference_probe.metrics,
-                    candidate_metrics=candidate_probe.metrics,
+        reference_future = pool.submit(reference_session.preflight_runtime)
+        candidate_future = pool.submit(candidate_session.preflight_runtime)
+        reference_probe = reference_future.result()
+        candidate_probe = candidate_future.result()
+        provenance_mismatches: list[Mismatch] = []
+        for label, expected, probe in (
+            (
+                "reference",
+                expected_provenance.reference if expected_provenance else None,
+                reference_probe,
+            ),
+            (
+                "candidate",
+                expected_provenance.candidate if expected_provenance else None,
+                candidate_probe,
+            ),
+        ):
+            if probe.runtime is None or not probe.succeeded:
+                detail = (
+                    probe.exception.message
+                    if probe.exception is not None
+                    and probe.exception.type == "RuntimeContractError"
+                    else "runtime provenance could not be verified"
                 )
-                return CaseResult(
-                    name=case.name,
-                    status=Status.ERROR,
-                    failures=[failure],
-                    diagnoses=diagnose(provenance_mismatches),
-                    provenance=CaseProvenance(
-                        reference=reference_probe.runtime,
-                        candidate=candidate_probe.runtime,
-                        verification="drifted",
-                    ),
-                    elapsed_seconds=time.perf_counter() - configured_started,
+                provenance_mismatches.append(
+                    Mismatch(
+                        kind=MismatchKind.EXCEPTION,
+                        message=f"{label} {detail}",
+                        path=f"${label}.runtime",
+                    )
                 )
+                continue
+            if expected is not None and (differences := diff_runtime(expected, probe.runtime)):
+                provenance_mismatches.append(
+                    Mismatch(
+                        kind=MismatchKind.EXCEPTION,
+                        message=(
+                            f"{label} runtime provenance drifted (" + ", ".join(differences) + ")"
+                        ),
+                        path=f"${label}.runtime",
+                    )
+                )
+        if provenance_mismatches:
+            failure = ExampleResult(
+                source=("replay:provenance" if expected_provenance else "runtime:preflight"),
+                status=Status.ERROR,
+                mismatches=provenance_mismatches,
+                reference_metrics=reference_probe.metrics,
+                candidate_metrics=candidate_probe.metrics,
+            )
+            return CaseResult(
+                name=case.name,
+                status=Status.ERROR,
+                failures=[failure],
+                diagnoses=diagnose(provenance_mismatches),
+                provenance=CaseProvenance(
+                    reference=reference_probe.runtime,
+                    candidate=candidate_probe.runtime,
+                    verification="drifted",
+                ),
+                elapsed_seconds=time.perf_counter() - configured_started,
+            )
 
-        def run(session: IsolatedExecutionSession, value: CampaignInput) -> Observation:
+        def run(
+            session: IsolatedExecutionSession,
+            value: CampaignInput,
+            endpoint_kwargs: Mapping[str, JsonValue],
+        ) -> Observation:
             return session.execute(
                 bound_input(value),
                 static_args=case.static_args,
-                static_kwargs=case.static_kwargs,
+                static_kwargs=endpoint_kwargs,
             )
 
         def run_pair(value: CampaignInput) -> tuple[Observation, Observation]:
             # Independent sessions make concurrent waits safe without sharing
             # callable globals or adapter arguments between the two sides.
-            reference = pool.submit(run, reference_session, value)
-            candidate = pool.submit(run, candidate_session, value)
+            reference = pool.submit(run, reference_session, value, reference_kwargs)
+            candidate = pool.submit(run, candidate_session, value, candidate_kwargs)
             return reference.result(), candidate.result()
 
         return _campaign(
@@ -1024,28 +1043,24 @@ def _configured_case(
             generation=case.generation,
             performance_config=case.performance,
             artifact_store=artifact_store,
-            reference_runner=lambda value: run(reference_session, value),
-            candidate_runner=lambda value: run(candidate_session, value),
+            reference_runner=lambda value: run(reference_session, value, reference_kwargs),
+            candidate_runner=lambda value: run(candidate_session, value, candidate_kwargs),
             pair_runner=run_pair,
             confirmation_pair_runner=run_clean_pair,
             artifact_case=case,
             reference_spec=case.reference,
             candidate_spec=case.candidate,
             benchmark=lambda value: benchmark_observations(
-                lambda: run(reference_session, value),
-                lambda: run(candidate_session, value),
+                lambda: run(reference_session, value, reference_kwargs),
+                lambda: run(candidate_session, value, candidate_kwargs),
                 case.performance,
             ),
             exact_only=exact_only,
             expected_provenance=expected_provenance,
-            observed_provenance=(
-                CaseProvenance(
-                    reference=reference_probe.runtime,
-                    candidate=candidate_probe.runtime,
-                    verification="verified",
-                )
-                if expected_provenance is not None
-                else None
+            observed_provenance=CaseProvenance(
+                reference=reference_probe.runtime,
+                candidate=candidate_probe.runtime,
+                verification="verified" if expected_provenance is not None else "captured",
             ),
             config_sha256=config_sha256,
         )
@@ -1598,9 +1613,13 @@ def replay_artifact(path: str | Path) -> SuiteResult:
             raise ReplayError("replay configuration fingerprint is missing or invalid")
         config_sha256 = raw_config_sha256
     case_data = dict(replay["case"])
-    if _contains_redaction(case_data.get("static_args")) or _contains_redaction(
-        case_data.get("static_kwargs")
-    ):
+    invocation_arguments = (
+        case_data.get("static_args"),
+        case_data.get("static_kwargs"),
+        case_data.get("reference_kwargs"),
+        case_data.get("candidate_kwargs"),
+    )
+    if any(_contains_redaction(value) for value in invocation_arguments):
         raise ReplayError("redacted static arguments cannot be replayed automatically")
     _restore_environment(case_data)
     _resolve_replay_paths(case_data, Path.cwd().resolve())

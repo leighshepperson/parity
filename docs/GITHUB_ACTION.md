@@ -19,7 +19,7 @@ jobs:
       - name: Install project dependencies
         run: python -m pip install -e .
       - id: parity
-        uses: leighshepperson/parity@v0.8.0
+        uses: leighshepperson/parity@v0
         with:
           config: migrations/parity.toml
           cases: orders,customers
@@ -32,15 +32,24 @@ jobs:
           upload-artifact: "false"
 ```
 
-Case and tag filters are combined by the CLI. `parity-version` may pin a PyPI release instead of
-the action's source revision, but normally both should move together.
+Case and tag filters are combined by the CLI.
+
+## Release selection
+
+`leighshepperson/parity@v0` is the moving channel for stable 0.x releases that preserve the
+composite Action interface. It advances only after the corresponding package has passed the release
+suite and published successfully. It never intentionally points at a prerelease or an older
+release. Do not use `@main` for CI.
+
+A tag can be moved. For immutable execution, replace `v0` with a reviewed full-length commit SHA
+from this repository and use dependency automation to review later updates. The optional
+`parity-version` input strictly pins a PyPI release instead of installing the Action's source
+revision; leave it empty unless deliberately testing a different package release.
 
 ## Migration-manifest gate
 
-The published `v0.8.0` composite Action runs ordinary Parity cases and does not accept a migration
-manifest. When using a later release or source checkout that provides `parity migration check`, run
-the declared-inventory gate as a separate CLI step after installing the project and that Parity
-revision:
+The composite Action runs ordinary Parity cases and does not accept a migration manifest. Run the
+declared-inventory gate as a separate CLI step after installing the project and Parity:
 
 ```yaml
 - name: Gate declared migration surface

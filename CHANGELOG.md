@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.10.0
+
+- Add an optional managed migration workspace: `parity migration init/setup/run` uses tox,
+  tox-uv and uv behind the CLI to resolve hash-pinned locks, prepare isolated reference/candidate
+  workers and run every declared dependency lane with its own migration report.
+- Add `cases_file` and bounded `case_defaults` loader syntax for reusable large migration suites.
+  Defaults can cover callable environment policy, comparison, generation, performance,
+  side-specific keywords and timeouts without hiding case identity, targets or input contracts.
+- Add `required_distributions` with normalized PEP 440 ranges. Configured workers now fail closed
+  before target import/invocation when a required package is missing or incompatible, or when the
+  worker and controller carry different Parity versions.
+- Add `reference_kwargs` and `candidate_kwargs` so otherwise identical wrappers can receive
+  endpoint-specific switches while shared keyword precedence remains unambiguous and replayable.
+- Add `parity evidence verify` to integrity-check and replay every mismatch-classified artifact
+  referenced by a suite or migration JSON report, distinguishing reproduced, stale and errored
+  evidence with stable `0`/`1`/`2` exits and an optional data-safe JSON report.
+- Publish current Action documentation through the stable moving `v0` channel and promote that
+  channel only after its matching package release succeeds. Controller-version examples derive the
+  installed version instead of copying a patch number into worker setup commands.
+
+### Compatibility notes
+
+- The workspace is an optional `parity-check[workspace]` install. It consumes an exact released
+  reference requirement and an existing local candidate checkout; it never clones, patches or
+  modifies source. Managed setup requires a static candidate distribution name matching the
+  reference; dynamic legacy metadata can continue to use explicitly provisioned worker Python
+  paths.
+- Generated requirements locks, environments and tox configuration live under
+  `.parity/workspace`. Existing locks keep dependency selection stable; pass `--refresh-locks` only
+  to request a deliberate dependency upgrade.
+- The `parity.toml` format remains version 1. Inline `[[cases]]` remains supported; a root document
+  must choose exactly one of inline cases or `cases_file`. The expanded effective configuration is
+  validated and hashed normally.
+- Required package ranges are opt-in, but exact worker/controller Parity agreement is now mandatory
+  for configured execution. Install the same `parity-check` release in externally managed workers.
+- Evidence report schema 1 is new and data-safe. Its `ms1:...` mismatch value is a classifier, not a
+  cryptographic signature, source attestation or trust decision; verification executes trusted
+  project code and does not turn process isolation into a sandbox.
+
 ## 0.9.2
 
 - Keep installed reference and candidate worker environments isolated. A wheel-installed

@@ -1,0 +1,12 @@
+version = 1
+artifact_dir = ".parity/workspace/artifacts"
+cases_file = "parity.cases.toml"
+fail_fast = false
+
+[case_defaults.reference]
+record_distributions = ["pytimetk"]
+required_distributions = { pytimetk = "==2.5.1" }
+
+[case_defaults.candidate]
+record_distributions = ["pytimetk"]
+required_distributions = { pytimetk = "==2.5.1+parity.1" }

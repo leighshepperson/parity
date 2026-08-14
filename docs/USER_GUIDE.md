@@ -93,6 +93,22 @@ drifted, neither callable runs and replay returns an error. A legacy artifact wi
 still usable, but terminal and Markdown reports mark it unverified rather than claiming an exact
 reproduction.
 
+When a JSON suite or migration report retains several failures, verify all of its referenced
+artifacts in report order:
+
+```bash
+parity evidence verify .parity/migration-status.json \
+  --json .parity/evidence-status.json
+```
+
+By default, the reported artifact directory must exist below the current directory. Use
+`--artifact-root PATH` when the same directory has been restored elsewhere. Exit `0` means every
+finding replayed with the same mismatch signature, `1` means at least one valid finding is stale
+(it now passes or produces a different mismatch shape), and `2` means report, artifact, runtime or
+execution evidence could not be verified. Parity verifies integrity and behavioural reproduction;
+the `ms1:...` mismatch classifier is not a cryptographic signature or source attestation. Replay
+executes the configured project code, so verify only artifacts and checkouts you trust.
+
 The saved Arrow input is the authority. A Parquet convenience copy is also written when its
 format can represent the input schema. A diagnosis is a deterministic hypothesis, not an automatic
 repair instruction. Add the artifact input (or an appropriately sanitized equivalent) to your own
@@ -182,10 +198,85 @@ or establish that a mapped case genuinely exercises the unit named in the ledger
 exports, documentation, signatures, upstream tests, wrappers and exclusions. The
 [agent migration protocol](AGENT_MIGRATION.md) provides a complete inventory-to-release workflow.
 
+## Managed migration workspaces
+
+The shortest repeatable setup starts from three things already under review: a candidate checkout,
+`parity.toml`, and `migration.toml`.
+
+```bash
+python -m pip install "parity-check[workspace]"
+parity migration init --reference 'your-library==1.2.3' --candidate .
+parity migration run
+```
+
+`migration init` writes only `parity.workspace.toml`. The exact released requirement supplies the
+reference package; the existing checkout is installed as the candidate. `migration run` resolves a
+hash-pinned requirements lock, creates both isolated workers, runs the unfiltered migration gate,
+and writes `.parity/workspace/reports/default.json`. Re-running uses the existing lock; pass
+`--refresh-locks` only for a deliberate dependency update. `parity migration setup` prepares the
+same workers without executing project callables.
+
+tox owns the environment lifecycle, tox-uv supplies uv-backed environments, and uv resolves the
+locks. These are implementation details behind the Parity commands. Parity does not clone a
+repository, choose a source revision, apply a patch or change candidate source. Prepare and review
+the checkout before running it.
+
+The managed path also verifies that the candidate's statically declared distribution name matches
+the exact reference requirement. Supported declarations are `project.name`, `tool.poetry.name`,
+and `setup.cfg` `[metadata] name`. For dynamic `setup.py`-only metadata, provision the two worker
+interpreters yourself and keep using the explicit `reference.python` and `candidate.python` fields.
+
+Add repeatable dependency lanes when the same migration must pass under more than one constraints
+file:
+
+```bash
+parity migration init \
+  --reference 'your-library==1.2.3' \
+  --candidate . \
+  --lane minimum=requirements/minimum.txt \
+  --lane current=requirements/current.txt
+parity migration run
+```
+
+Each lane receives its own lock, reference/candidate workers and JSON report. Lane requirement
+files are resolver inputs and may use ordinary compatible ranges; the generated lock records the
+exact transitive result with hashes. The configured reference and candidate targets, input domain,
+comparison policy and migration inventory stay identical across lanes.
+
+The workspace is optional. Existing teams may keep managing virtual environments themselves and
+set `reference.python` and `candidate.python` explicitly. This is useful for externally provisioned
+runners or environment systems that Parity must not own.
+
+### Reusing cases without hiding the contract
+
+Large migrations can move case declarations into one contained, non-recursive file and keep bounded
+defaults at the root:
+
+```toml
+version = 1
+cases_file = "cases.toml"
+
+[case_defaults.reference]
+workdir = "."
+
+[case_defaults.candidate]
+workdir = "."
+
+[case_defaults.generation]
+max_examples = 500
+stability_repeats = 2
+```
+
+`cases.toml` contains only `version = 1` and one or more `[[cases]]`. A case overrides a default;
+nested tables merge while lists replace. Defaults deliberately cannot hide names, targets, inputs,
+tags or shared invocation arguments. Paths still resolve beside the root `parity.toml`, and the
+expanded configuration is what Parity validates and fingerprints.
+
 ## Callables and environments
 
 Targets use `package.module:function` syntax. The callable receives the input frame as its first
-positional argument, followed by `static_args` and `static_kwargs` from the case.
+positional argument, followed by `static_args`. Both sides receive `static_kwargs`; the reference
+also receives `reference_kwargs` and the candidate receives `candidate_kwargs`.
 
 For an existing migration, `parity init` can write a minimal fixture-backed case directly. The
 three project inputs are all-or-none, and the command validates the target syntax, adapters and
@@ -207,16 +298,18 @@ Repeat `--record-distribution` or `--row-key` for additional names. Distribution
 on both sides, while adapters and Python executables are configured per side. With no project
 options, `parity init` retains the editable starter behaviour and creates `parity_example.py`.
 
-### Comparing dependency versions
+### Explicit environment setup
 
-The same import target can run in two prepared environments. For example, this compares one Polars
-wrapper under two releases without teaching Parity how to create or mutate virtual environments:
+The managed workspace is the recommended setup for a declared library migration. The same import
+target can also run in two environments prepared by another tool. For example, this compares one
+Polars wrapper under two releases while keeping the interpreter paths explicit:
 
 ```bash
 python -m venv .venv-polars-old
 python -m venv .venv-polars-new
-.venv-polars-old/bin/python -m pip install parity-check==0.8.1 polars==1.0.0
-.venv-polars-new/bin/python -m pip install parity-check==0.8.1 polars==1.41.1
+PARITY_RELEASE="$(parity version)"
+.venv-polars-old/bin/python -m pip install "parity-check==$PARITY_RELEASE" polars==1.0.0
+.venv-polars-new/bin/python -m pip install "parity-check==$PARITY_RELEASE" polars==1.41.1
 
 parity init parity.toml \
   --reference project.polars_transform:run \
@@ -231,6 +324,10 @@ parity doctor --config parity.toml
 parity check --config parity.toml
 ```
 
+Reading `PARITY_RELEASE` from the installed controller keeps the guide current while ensuring both
+isolated workers install the exact same Parity release. Each configured worker must carry its own
+installation; `parity doctor --config parity.toml` verifies the observed versions before execution.
+
 `doctor --config` asks each worker only for bounded runtime provenance; it does not import or invoke
 the configured target. Its terminal and JSON output place reference and candidate Python, Parity
 and explicitly requested distribution versions side by side without executable paths, working
@@ -238,6 +335,14 @@ directories or environment values. A worker failure or missing requested distrib
 code 2. Use `--case NAME` to inspect one case in a multi-case file.
 
 ```toml
+[[cases]]
+name = "orders"
+fixture = "tests/fixtures/orders.parquet"
+static_args = ["GBP"]
+static_kwargs = { include_tax = true }
+reference_kwargs = { engine = "pandas" }
+candidate_kwargs = { engine = "polars" }
+
 [cases.reference]
 target = "legacy.orders:transform"
 adapter = "pandas"
@@ -245,6 +350,7 @@ pandas_input = "native"
 python = ".venv-legacy/bin/python"
 workdir = "."
 record_distributions = ["orders-lib", "scikit-learn"]
+required_distributions = { orders-lib = "==1.2.*", pandas = ">=2,<3" }
 
 [cases.candidate]
 target = "rewrite.orders:transform"
@@ -252,15 +358,15 @@ adapter = "polars"
 python = ".venv-candidate/bin/python"
 workdir = "."
 record_distributions = ["orders-lib", "scikit-learn"]
-
-static_args = ["GBP"]
-static_kwargs = { include_tax = true }
+required_distributions = { orders-lib = ">=2,<3", polars = ">=1,<2" }
 ```
 
 For a keyword-bound input bundle, each logical name is passed as a frame keyword and cannot collide
-with `static_kwargs`; `static_args` are disallowed. Positional bundles pass frames in declared order
-before `static_args`. See the [configuration reference](CONFIG_REFERENCE.md) for the relationship
-syntax and validation rules.
+with `static_kwargs`, `reference_kwargs` or `candidate_kwargs`; `static_args` are disallowed.
+Positional bundles pass frames in declared order before `static_args`. Shared and side-specific
+keyword names may not overlap. This lets one wrapper receive `engine="pandas"` and the other
+`engine="polars"` without duplicating otherwise identical wrapper functions or cases. See the
+[configuration reference](CONFIG_REFERENCE.md) for the relationship syntax and validation rules.
 
 `adapter = "auto"` is convenient when both functions accept Arrow-compatible input, but explicit
 adapters make reviews and errors clearer. A distinct `python` executable lets Parity compare
@@ -271,6 +377,14 @@ dependency whose version is part of the migration contract with `record_distribu
 sides are collected independently, so a reference environment can legitimately report a different
 version from the candidate environment. Reports never contain environment values, executable
 paths, hostnames or a broad `pip freeze` inventory.
+
+Use `required_distributions` when a version is a prerequisite rather than provenance alone. It maps
+normalized distribution names to PEP 440 specifiers. Before importing or invoking the target,
+Parity probes the worker and returns a `RuntimeContractError` if a named distribution is missing,
+unavailable or outside its range. Required names are recorded automatically. Every configured
+worker must also run the exact Parity version used by the controller; that requirement is automatic
+and does not need a config entry. `parity doctor --config parity.toml` reports both the requested
+range and whether the observed version satisfies it.
 
 Pandas callables receive Arrow-backed pandas dtypes by default because that preserves the canonical
 input's nullable integers and its distinction between null and IEEE NaN. Set
@@ -388,6 +502,15 @@ parity check [--config PATH] [--case NAME]    run campaigns
              [--json PATH] [--junit PATH] [--markdown PATH]
 parity migration check --manifest PATH        gate the declared migration inventory
                        --config PATH [--json PATH]
+parity migration init --reference PACKAGE==VERSION
+                      [--candidate PATH]       declare a managed workspace
+                      [--lane NAME[=REQUIREMENTS]]
+parity migration setup [--workspace PATH]     prepare locked worker environments
+                       [--refresh-locks]
+parity migration run [--workspace PATH]       prepare and run every dependency lane
+                     [--refresh-locks]
+parity evidence verify REPORT                 replay report-referenced findings
+                       [--artifact-root PATH] [--json PATH]
 parity replay ARTIFACT                        reproduce a counterexample
 parity doctor [--json]                        report runtime readiness
 parity doctor --config PATH [--case NAME]     inspect configured workers
@@ -397,8 +520,8 @@ parity version                                print the installed version
 
 ## Current boundaries
 
-The first release supports pandas, Polars and Arrow frames and Python callables. It is designed to
+Parity currently supports pandas, Polars and Arrow frames and Python callables. It is designed to
 add engines through adapters, but SQL warehouses, Spark clusters, distributed schedulers, GPU
 engines and arbitrary side-effect comparison are not present yet. Worker processes isolate
-failures; they do not securely sandbox hostile code. See the [roadmap](ROADMAP.md), [architecture](ARCHITECTURE.md)
-and [threat model](THREAT_MODEL.md).
+failures; they do not securely sandbox hostile code. See the [roadmap](ROADMAP.md),
+[architecture](ARCHITECTURE.md) and [threat model](THREAT_MODEL.md).
