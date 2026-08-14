@@ -10,6 +10,8 @@ That property reduces exposure; it does not make every output non-sensitive.
 | Material | May contain input values | Default location | Intended audience |
 |---|---:|---|---|
 | Terminal/Markdown/JSON/JUnit report | No dataframe/value payloads | Console or requested path | Developers and CI |
+| Migration manifest | No dataframe/value payloads; contains unit IDs and exclusion reasons | User-selected repository path | Developers and reviewers |
+| Migration JSON/terminal report | No dataframe/value payloads; contains redacted inventory metadata | Console or requested path | Developers and CI |
 | `input.arrow` or bundled `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
 | `manifest.json` | Metadata, paths and hashes | Counterexample directory | Restricted engineering team |
 | `result.json` in artifact | Structured mismatch evidence | Counterexample directory | Restricted engineering team |
@@ -31,6 +33,8 @@ Treat the entire artifact directory at the same classification as its source fix
 6. Keep callable wrappers pure and offline. Inject no credentials unless unavoidable.
 7. Run untrusted implementations inside a hardened container/VM with no credentials or network.
 8. Pin Parity and dependency versions for release gates; verify published package provenance.
+9. Keep secrets, customer names, private paths and copied data out of migration unit IDs and
+   exclusion reasons, even though report projections apply ordinary diagnostic redaction.
 
 ## Secrets
 
@@ -47,6 +51,12 @@ platform and installed-version strings for Parity's core dependencies plus distr
 named in `record_distributions`. They never contain environment values, executable paths, cwd,
 hostnames, command lines or a complete installed-package inventory. Distribution metadata that
 cannot be represented by the bounded safe contract is reported only as unavailable.
+
+Migration reports contain redacted unit IDs, case names and exclusion reasons plus the ordinary
+data-safe Parity case report. They omit compared values and do not reproduce callable targets or
+configuration bodies. Redaction removes common absolute-path and secret-assignment forms; it is not
+a general secret scanner. The manifest is project-controlled text and should itself be reviewed
+before it is committed, uploaded or passed to an external AI system.
 
 ## Supply chain
 
@@ -67,6 +77,10 @@ crash and cross-implementation state isolation but can still access the filesyst
 inherited environment permitted to the invoking user. A configured campaign reuses each side's
 worker, so module state and spawned activity may persist between examples until campaign teardown.
 Workers can consume resources, spawn children or exploit native dependencies.
+
+`parity migration check` executes the union of cases named by the manifest under the same worker
+model. Manifest unit IDs and exclusion reasons are descriptive only and are never imported or
+evaluated. Unknown case names are rejected before a worker starts.
 
 Configured runs and artifact replay execute the selected Python interpreter path. A project-local
 virtual-environment entry point may be a symlink to a host Python binary; Parity preserves that

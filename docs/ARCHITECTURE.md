@@ -41,6 +41,17 @@ Pydantic models reject unknown fields and validate constraints before code execu
 paths are resolved against the TOML location. `SuiteResult`, `CaseResult`, structured mismatches,
 diagnoses and performance models are usable by the CLI, pytest and downstream automation.
 
+The migration coverage layer has a separate strict manifest. Each declared unit maps to one or
+more configured case names, carries an explicit exclusion, or remains visibly uncovered. The gate
+cross-validates all mapped names before execution, runs their union once and derives unit status
+from case evidence. It does not execute metadata from the manifest, discover APIs or infer that a
+case genuinely covers its declared unit.
+
+Migration execution deliberately ignores configured `fail_fast` so every mapped case is attempted.
+A missing, skipped, zero-example or errored case is uncertain evidence and makes the unit an error.
+At least one unit must pass, preventing an empty or all-excluded inventory from succeeding. The
+ordinary `parity check`, configuration and suite-result contracts are unchanged.
+
 ### Adapters and Arrow boundary
 
 Every input is represented canonically as an Apache Arrow table. An adapter converts it to pandas,
@@ -161,6 +172,13 @@ while a keyed case reuses the existing single-input or bundle replay version. Ex
 version 2 and 3 artifacts still requires the recorded Parity and worker runtimes; version 1 replay
 remains explicitly unverified.
 
+Migration JSON is a separate report schema, currently version 1. It binds derived unit results to a
+canonical migration-manifest hash and nests the existing data-safe suite report for the exact
+mapped-case union; that report retains its effective configuration hash. Unit IDs, case names and
+exclusion reasons pass through redaction. Compared values remain artifact-only. A migration report
+therefore demonstrates the result for one declared inventory and configuration, not that the
+inventory was exhaustive.
+
 ## Extension seams
 
 - **Engine adapter:** Arrow conversion plus environment/runtime capability description.
@@ -173,11 +191,13 @@ These seams make engine-neutral growth possible without turning the core into a 
 
 ## Versioning
 
-Three independently versioned contracts matter:
+Five independently versioned contracts matter:
 
 1. TOML configuration version.
-2. Pydantic result/report schema and package version.
-3. Counterexample manifest/replay artifact version.
+2. Migration-manifest version.
+3. Pydantic suite-result/report schema and package version.
+4. Migration-report schema version.
+5. Counterexample manifest/replay artifact version.
 
 Before `1.0`, breaking changes may occur with release notes and migration guidance. Runtime
 fingerprints detect drift but are not environment lockfiles or container attestations; projects

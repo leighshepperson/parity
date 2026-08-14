@@ -2,6 +2,12 @@
 
 from parity._version import __version__
 from parity.api import check, verify
+from parity.migration import (
+    MigrationManifest,
+    MigrationResult,
+    MigrationUnit,
+    check_migration,
+)
 from parity.models import (
     AdapterName,
     Cardinality,
@@ -43,6 +49,9 @@ __all__ = [
     "InputSpec",
     "KeyOverlap",
     "KeyRef",
+    "MigrationManifest",
+    "MigrationResult",
+    "MigrationUnit",
     "PandasInput",
     "ParityConfig",
     "Relationship",
@@ -53,5 +62,6 @@ __all__ = [
     "SuiteResult",
     "__version__",
     "check",
+    "check_migration",
     "verify",
 ]

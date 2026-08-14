@@ -125,6 +125,63 @@ outputs stop discovery as an error.
 Keep seeds in version control for reproducibility, but retain shrinking. Store artifacts with
 restricted access because a counterexample derived from a fixture may contain fixture values.
 
+### 7. Gate the declared migration surface
+
+A set of passing cases does not say which APIs were never considered. Keep a separate, reviewed
+`migration.toml` that maps every declared migration unit to its evidence:
+
+```toml
+version = 1
+
+[[units]]
+id = "orders-transform"
+cases = ["orders-control", "orders-null-keys", "orders-empty"]
+
+[[units]]
+id = "customer-summary"
+
+[[units]]
+id = "plot-orders"
+excluded_reason = "Presentation-only figure output is outside this migration."
+```
+
+`customer-summary` is uncovered: it is valid while work is in progress but makes the gate fail.
+An exclusion cannot also list cases, and an exclusion reason must contain non-whitespace text.
+
+```bash
+parity migration check \
+  --manifest migrations/migration.toml \
+  --config migrations/parity.toml \
+  --json .parity/migration-status.json
+```
+
+The command validates every mapped case name before executing project code, runs the union of
+mapped cases once and attempts the complete union even if `parity.toml` sets `fail_fast = true`.
+Several units may share a case; unrelated exploratory cases in `parity.toml` are not selected.
+There are deliberately no case, tag, generation-budget or performance overrides on the migration
+gate. Use ordinary `parity check --case ... --no-performance` commands while iterating, then let the
+final gate enforce the committed configuration.
+
+Each unit is derived as `passed`, `failed`, `error`, `excluded` or `uncovered`. A mapped unit is an
+error when a case errors, is skipped, produces zero observations or is unexpectedly absent; it can
+never pass without execution evidence. Overall exit codes are:
+
+- `0`: at least one unit passed and every other unit passed or was explicitly excluded;
+- `1`: a unit failed or remained uncovered, or the entire manifest was excluded; and
+- `2`: the manifest/configuration was invalid, a mapped case was unknown, or execution evidence was
+  errored or incomplete.
+
+Error takes precedence over failure. The JSON output uses migration report schema version 1 and
+contains derived counts, per-unit case status, a canonical manifest hash and the existing data-safe
+Parity report for the selected case union. That nested report carries the effective configuration
+hash. Reports omit compared values and redact unit identifiers, case names and exclusion reasons;
+counterexample artifacts still contain actual fixture-derived or generated inputs.
+
+The ledger proves completion only against its declared inventory. It cannot discover an omitted API
+or establish that a mapped case genuinely exercises the unit named in the ledger. Review public
+exports, documentation, signatures, upstream tests, wrappers and exclusions. The
+[agent migration protocol](AGENT_MIGRATION.md) provides a complete inventory-to-release workflow.
+
 ## Callables and environments
 
 Targets use `package.module:function` syntax. The callable receives the input frame as its first
@@ -325,6 +382,8 @@ parity check [--config PATH] [--case NAME]    run campaigns
              [--stability-repeats N]
              [--performance|--no-performance]
              [--json PATH] [--junit PATH] [--markdown PATH]
+parity migration check --manifest PATH        gate the declared migration inventory
+                       --config PATH [--json PATH]
 parity replay ARTIFACT                        reproduce a counterexample
 parity doctor [--json]                        report runtime readiness
 parity doctor --config PATH [--case NAME]     inspect configured workers

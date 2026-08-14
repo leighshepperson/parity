@@ -12,6 +12,89 @@ fall back to a default. Paths are resolved relative to the configuration file.
 | `fail_fast` | boolean | `false` | Stop the suite after the first failed/error case. |
 | `cases` | array of tables | required | One or more uniquely named campaigns. |
 
+## Migration manifest
+
+`parity migration check` loads a separate strict TOML manifest. This inventory is not part of
+`parity.toml` and does not change its version 1 configuration contract. The default paths are
+`migration.toml` and `parity.toml`; pass `--manifest` and `--config` explicitly when they differ.
+
+```toml
+version = 1
+
+[[units]]
+id = "orders-transform"
+cases = ["orders-control", "orders-null-keys"]
+
+[[units]]
+id = "plot-orders"
+excluded_reason = "Presentation output is outside this migration."
+
+[[units]]
+id = "customer-summary"
+```
+
+Top-level fields are:
+
+| Key | Type | Default | Meaning |
+|---|---:|---:|---|
+| `version` | integer | `1` | Migration-manifest format; only version 1 is accepted. |
+| `units` | array of tables | required | One or more uniquely identified declared migration units. |
+
+Each `[[units]]` accepts:
+
+| Key | Type | Default | Meaning |
+|---|---:|---:|---|
+| `id` | string | required | Unique `[A-Za-z0-9_.-]+` inventory identifier. |
+| `cases` | string array | `[]` | Unique case names from the selected `parity.toml`. |
+| `excluded_reason` | string | none | Non-whitespace reason that this unit is outside scope. |
+
+`cases` and `excluded_reason` are mutually exclusive. Omitting both is valid and derives an
+`uncovered` unit so work can remain visible without making the manifest invalid. Unknown mapped
+case names are configuration errors detected before any project callable executes. A case may
+support several units and is executed only once. Cases that occur in `parity.toml` but nowhere in
+the manifest are not selected by the migration command.
+
+The migration command attempts the complete mapped-case union even when `fail_fast = true`. It has
+no case, tag, generation-budget or performance override, because a partial or weakened execution
+cannot certify the inventory:
+
+```bash
+parity migration check \
+  --manifest migrations/migration.toml \
+  --config migrations/parity.toml \
+  --json .parity/migration-status.json
+```
+
+Derived unit statuses are `passed`, `failed`, `error`, `excluded` and `uncovered`. A mapped case
+that errors, is skipped, produces zero observations or is unexpectedly absent makes its unit an
+error. A unit passes only when every mapped case passes with execution evidence. Error takes
+precedence over failure.
+
+The overall result passes only when at least one unit passed and every remaining unit passed or was
+explicitly excluded. A failed or uncovered unit, and an all-excluded manifest, return exit `1`.
+Invalid configuration and error/incomplete execution evidence return exit `2`.
+
+`--json` writes migration report schema version 1 with these top-level fields:
+
+| Key | Meaning |
+|---|---|
+| `schema_version` | Migration report format, currently `1`. |
+| `status` | Overall `passed`, `failed` or `error` result. |
+| `summary` | Derived `total`, `passed`, `failed`, `error`, `excluded` and `uncovered` counts. |
+| `units` | Unit ID/status, redacted exclusion reason and mapped case name/status/example count. |
+| `manifest_sha256` | Canonical fingerprint of the effective migration inventory. |
+| `parity` | Existing data-safe Parity report schema version 3 for the mapped-case union. |
+
+The nested Parity report's provenance contains its effective `config_sha256`. Unit IDs, case names
+and exclusion reasons pass through report redaction. No report contains compared dataframe or scalar
+values, but counterexample artifacts referenced by the nested report may contain fixture-derived or
+generated inputs.
+
+This manifest is a reviewed declaration, not an API-discovery mechanism. Parity cannot detect a
+public API omitted from `units` or prove that a mapped case exercises the behaviour its unit ID
+claims. Split partially excluded behaviour into separate units and review the inventory, wrappers
+and exclusions before relying on the gate.
+
 ## Case
 
 Declare cases with `[[cases]]`.

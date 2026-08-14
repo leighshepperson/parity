@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from rich.console import Console
@@ -15,12 +15,20 @@ from parity.config import ConfigError, load_config
 from parity.doctor import ConfigDoctorReport, WorkerRuntimeReport, diagnose, diagnose_config
 from parity.models import Status
 
+if TYPE_CHECKING:
+    from parity.migration import MigrationResult
+
 app = typer.Typer(
     name="parity",
     help="Verify that a changed computation still means the same thing.",
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
 )
+migration_app = typer.Typer(
+    help="Check that every declared migration unit is covered and passing.",
+    no_args_is_help=True,
+)
+app.add_typer(migration_app, name="migration")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -247,6 +255,93 @@ def check(
             stream.write(markdown)
             if not markdown.endswith("\n"):
                 stream.write("\n")
+    if result.status is Status.ERROR:
+        raise typer.Exit(2)
+    if result.status is Status.FAILED:
+        raise typer.Exit(1)
+
+
+def _render_migration_result(result: MigrationResult) -> None:
+    """Render the bounded migration ledger without result values or local paths."""
+
+    from parity.execution import redact_text
+    from parity.migration import migration_summary
+
+    colors = {
+        "passed": "green",
+        "failed": "red",
+        "error": "red",
+        "excluded": "yellow",
+        "uncovered": "yellow",
+    }
+    table = Table("Migration unit", "Status", "Mapped cases")
+    for unit in result.units:
+        mapped = (
+            ", ".join(f"{redact_text(case.name)} ({case.status.value})" for case in unit.cases)
+            or "—"
+        )
+        status = unit.status.value
+        table.add_row(
+            redact_text(unit.id), f"[{colors[status]}]{status}[/{colors[status]}]", mapped
+        )
+    console.print(table)
+
+    summary = migration_summary(result)
+    console.print(
+        " · ".join(
+            [
+                f"{summary['passed']} passed",
+                f"{summary['failed']} failed",
+                f"{summary['error']} error",
+                f"{summary['excluded']} excluded",
+                f"{summary['uncovered']} uncovered",
+            ]
+        )
+    )
+    if result.status is Status.PASSED:
+        console.print("[green]all declared in-scope migration units passed[/green]")
+    elif result.status is Status.ERROR:
+        console.print("[red]migration coverage could not be established[/red]")
+    else:
+        console.print("[red]migration incomplete[/red]")
+
+
+@migration_app.command("check")
+def migration_check(
+    manifest_path: Annotated[
+        Path,
+        typer.Option("--manifest", "-m", help="Path to migration.toml"),
+    ] = Path("migration.toml"),
+    config_path: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="Path to parity.toml"),
+    ] = Path("parity.toml"),
+    json_output: Annotated[
+        Path | None,
+        typer.Option("--json", help="Write the data-safe migration report"),
+    ] = None,
+) -> None:
+    """Run the complete declared migration coverage gate."""
+
+    from parity.migration import (
+        MigrationConfigError,
+        check_migration,
+        write_migration_json,
+    )
+
+    try:
+        result = check_migration(manifest_path, config_path)
+    except (ConfigError, MigrationConfigError) as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"migration coverage could not run ({type(exc).__name__})")
+
+    if json_output is not None:
+        try:
+            write_migration_json(result, json_output)
+        except OSError as exc:
+            _fail(f"migration report could not be written ({type(exc).__name__})")
+    _render_migration_result(result)
     if result.status is Status.ERROR:
         raise typer.Exit(2)
     if result.status is Status.FAILED:
