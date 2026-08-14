@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -40,8 +42,37 @@ error_console = Console(stderr=True)
 
 
 def _fail(message: str, code: int = 2) -> None:
-    error_console.print(f"[bold red]error:[/bold red] {message}")
+    rendered = Text()
+    rendered.append("error:", style="bold red")
+    rendered.append(f" {message}")
+    error_console.print(rendered)
     raise typer.Exit(code)
+
+
+def _print_path_status(label: str, path: Path, *, style: str = "green") -> None:
+    """Render a user-selected path without interpreting Rich markup."""
+
+    rendered = Text()
+    rendered.append(label, style=style)
+    rendered.append(f" {path}")
+    console.print(rendered)
+
+
+def _atomic_write_output(path: Path, content: str) -> None:
+    """Write one CLI output atomically, including missing parent directories."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 @app.command("version")
@@ -149,7 +180,7 @@ def init(
     except Exception as exc:
         _fail(str(exc))
     for item in created:
-        console.print(f"[green]created[/green] {item}")
+        _print_path_status("created", item)
 
 
 @app.command("inspect")
@@ -169,8 +200,11 @@ def inspect_fixture(
         _fail(str(exc))
     rendered = schema.model_dump_json(indent=2)
     if output is not None:
-        output.write_text(rendered + "\n", encoding="utf-8")
-        console.print(f"[green]wrote[/green] {output}")
+        try:
+            _atomic_write_output(output, rendered + "\n")
+        except OSError as exc:
+            _fail(f"schema output could not be written ({type(exc).__name__})")
+        _print_path_status("wrote", output)
     else:
         console.print_json(rendered)
 
@@ -181,10 +215,18 @@ def check(
         "parity.toml"
     ),
     case: Annotated[
-        list[str] | None, typer.Option("--case", help="Run only a named case; repeatable")
+        list[str] | None,
+        typer.Option(
+            "--case",
+            help="Run a named case; repeatable and combined with any --tag matches",
+        ),
     ] = None,
     tag: Annotated[
-        list[str] | None, typer.Option("--tag", help="Run cases carrying this tag; repeatable")
+        list[str] | None,
+        typer.Option(
+            "--tag",
+            help="Run cases carrying this tag; repeatable and combined with --case",
+        ),
     ] = None,
     max_examples: Annotated[
         int | None, typer.Option("--max-examples", min=1, help="Override generated examples")
@@ -244,23 +286,31 @@ def check(
             item.performance.enabled = False
 
     result = run_suite(config, selected_cases=selected or None)
-    render_terminal(result, console=console)
-    if json_output is not None:
-        write_report(result, "json", json_output)
-    if junit_output is not None:
-        write_report(result, "junit", junit_output)
+    written: list[Path] = []
+    try:
+        if json_output is not None:
+            written.append(write_report(result, "json", json_output))
+        if junit_output is not None:
+            written.append(write_report(result, "junit", junit_output))
+        if markdown_output is not None:
+            written.append(write_report(result, "markdown", markdown_output))
+    except (OSError, ValueError) as exc:
+        _fail(f"verification report could not be written ({type(exc).__name__})")
     markdown = render_markdown(result)
-    if markdown_output is not None:
-        markdown_output.write_text(markdown, encoding="utf-8")
     # GitHub supplies this path. Avoid reading or writing any other environment variables.
-    import os
-
     if github_summary := os.environ.get("GITHUB_STEP_SUMMARY"):
-        summary_file = Path(github_summary)
-        with summary_file.open("a", encoding="utf-8") as stream:
-            stream.write(markdown)
-            if not markdown.endswith("\n"):
-                stream.write("\n")
+        try:
+            summary_file = Path(github_summary)
+            summary_file.parent.mkdir(parents=True, exist_ok=True)
+            with summary_file.open("a", encoding="utf-8") as stream:
+                stream.write(markdown)
+                if not markdown.endswith("\n"):
+                    stream.write("\n")
+        except OSError as exc:
+            _fail(f"GitHub summary could not be written ({type(exc).__name__})")
+    render_terminal(result, console=console)
+    for path in written:
+        _print_path_status("wrote", Path(path.name))
     if result.status is Status.ERROR:
         raise typer.Exit(2)
     if result.status is Status.FAILED:
@@ -310,6 +360,11 @@ def _render_migration_result(result: MigrationResult) -> None:
         console.print("[red]migration coverage could not be established[/red]")
     else:
         console.print("[red]migration incomplete[/red]")
+    if result.suite.status is not Status.PASSED:
+        from parity.reporting import render_terminal
+
+        console.print("[bold]case evidence[/bold]")
+        render_terminal(result.suite, console=console)
 
 
 @migration_app.command("init")
@@ -324,7 +379,7 @@ def migration_init(
     workspace_path: Annotated[
         Path,
         typer.Option("--workspace", "-w", help="Workspace file to create"),
-    ] = Path("parity.workspace.toml"),
+    ] = Path("migrations/parity.workspace.toml"),
     candidate: Annotated[
         Path,
         typer.Option("--candidate", help="Existing local candidate checkout"),
@@ -336,15 +391,15 @@ def migration_init(
     config_path: Annotated[
         Path,
         typer.Option("--config", "-c", help="Parity configuration path"),
-    ] = Path("parity.toml"),
+    ] = Path("migrations/parity.toml"),
     manifest_path: Annotated[
         Path,
         typer.Option("--manifest", "-m", help="Migration ledger path"),
-    ] = Path("migration.toml"),
+    ] = Path("migrations/migration.toml"),
     report_dir: Annotated[
-        Path,
+        Path | None,
         typer.Option("--report-dir", help="Per-lane JSON report directory"),
-    ] = Path(".parity/workspace/reports"),
+    ] = None,
     lane: Annotated[
         list[str] | None,
         typer.Option(
@@ -357,15 +412,60 @@ def migration_init(
         typer.Option("--force", help="Replace an existing workspace file"),
     ] = False,
 ) -> None:
-    """Declare a local-checkout migration workspace."""
+    """Declare one active released-reference to local-candidate migration."""
 
+    from parity.migration import (
+        MigrationConfigError,
+        MigrationManifest,
+        MigrationUnit,
+        load_migration_manifest,
+        write_migration_manifest,
+    )
     from parity.migration_workspace import (
         WorkspaceError,
         parse_lane_options,
+        rebase_workspace_path,
         write_workspace,
     )
 
+    invocation = Path.cwd()
+    absolute_workspace = (
+        workspace_path if workspace_path.is_absolute() else invocation / workspace_path
+    )
+    absolute_config = config_path if config_path.is_absolute() else invocation / config_path
+    absolute_manifest = manifest_path if manifest_path.is_absolute() else invocation / manifest_path
+    if os.path.lexists(absolute_workspace) and not force:
+        _fail(f"{workspace_path} already exists; pass --force to replace it")
+
+    generated_manifest = False
     try:
+        configured = load_config(absolute_config)
+        if os.path.lexists(absolute_manifest):
+            load_migration_manifest(absolute_manifest)
+        else:
+            write_migration_manifest(
+                MigrationManifest(
+                    units=[
+                        MigrationUnit(
+                            id="core-regression",
+                            cases=[case.name for case in configured.cases],
+                        )
+                    ]
+                ),
+                absolute_manifest,
+            )
+            generated_manifest = True
+        effective_report_dir = (
+            Path(".parity/workspace/reports")
+            if report_dir is None
+            else rebase_workspace_path(
+                report_dir,
+                workspace_path=workspace_path,
+                invocation_cwd=invocation,
+            )
+        )
+        if report_dir is not None and ".." in effective_report_dir.parts:
+            raise WorkspaceError("--report-dir must stay inside the workspace directory")
         created = write_workspace(
             workspace_path,
             reference=reference,
@@ -373,19 +473,59 @@ def migration_init(
             python_version=python_version,
             config=config_path,
             manifest=manifest_path,
-            report_dir=report_dir,
+            report_dir=effective_report_dir,
             lanes=parse_lane_options(lane or ()),
             force=force,
+            invocation_cwd=invocation,
         )
-    except FileExistsError:
-        _fail(f"{workspace_path} already exists; pass --force to replace it")
+    except FileExistsError as exc:
+        if generated_manifest:
+            absolute_manifest.unlink(missing_ok=True)
+        _fail(str(exc))
+    except (ConfigError, MigrationConfigError, WorkspaceError) as exc:
+        if generated_manifest:
+            absolute_manifest.unlink(missing_ok=True)
+        _fail(str(exc))
+    except OSError as exc:
+        if generated_manifest:
+            absolute_manifest.unlink(missing_ok=True)
+        _fail(f"migration workspace could not be written ({type(exc).__name__})")
+    _print_path_status("created", created)
+    if generated_manifest:
+        _print_path_status("created starter ledger; review", absolute_manifest)
+    console.print(
+        "active pair declared; setup will validate candidate packaging without modifying it"
+    )
+    console.print(f"next: parity migration run --workspace {created}", markup=False)
+
+
+@migration_app.command("advance")
+def migration_advance(
+    reference: Annotated[
+        str,
+        typer.Option(
+            "--reference",
+            help="New exact released baseline, using the same distribution name",
+        ),
+    ],
+    workspace_path: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Path to parity.workspace.toml"),
+    ] = Path("migrations/parity.workspace.toml"),
+) -> None:
+    """Move the active adjacent pair to a newer released baseline."""
+
+    from parity.migration_workspace import WorkspaceError, advance_workspace
+
+    try:
+        advanced = advance_workspace(workspace_path, reference=reference)
     except WorkspaceError as exc:
         _fail(str(exc))
     except OSError as exc:
-        _fail(f"migration workspace could not be written ({type(exc).__name__})")
-    console.print(f"[green]created[/green] {created}")
-    console.print("uses existing parity.toml and migration.toml; create them before setup or run")
-    console.print(f"next: parity migration run --workspace {created}")
+        _fail(f"migration workspace could not be advanced ({type(exc).__name__})")
+    _print_path_status("advanced", advanced)
+    console.print("previous active lane reports were invalidated")
+    console.print(f"next: parity migration run --workspace {advanced}", markup=False)
 
 
 @migration_app.command("setup")
@@ -393,7 +533,7 @@ def migration_setup(
     workspace_path: Annotated[
         Path,
         typer.Option("--workspace", "-w", help="Path to parity.workspace.toml"),
-    ] = Path("parity.workspace.toml"),
+    ] = Path("migrations/parity.workspace.toml"),
     refresh_locks: Annotated[
         bool,
         typer.Option("--refresh-locks", help="Upgrade dependency locks deliberately"),
@@ -403,6 +543,7 @@ def migration_setup(
 
     from parity.migration_workspace import WorkspaceError, setup_workspace
 
+    console.print("[cyan]preparing[/cyan] locked migration environments")
     try:
         prepared = setup_workspace(workspace_path, refresh_locks=refresh_locks)
     except WorkspaceError as exc:
@@ -421,7 +562,7 @@ def migration_run(
     workspace_path: Annotated[
         Path,
         typer.Option("--workspace", "-w", help="Path to parity.workspace.toml"),
-    ] = Path("parity.workspace.toml"),
+    ] = Path("migrations/parity.workspace.toml"),
     refresh_locks: Annotated[
         bool,
         typer.Option("--refresh-locks", help="Upgrade dependency locks deliberately"),
@@ -454,9 +595,9 @@ def migration_run(
     for index, lane_result in enumerate(completed.lanes):
         if index:
             console.print()
-        console.print(f"[bold]dependency lane: {lane_result.name}[/bold]")
+        console.print(Text(f"dependency lane: {lane_result.name}", style="bold"))
         _render_migration_result(lane_result.result)
-        console.print(f"[green]report[/green] {lane_result.report}")
+        _print_path_status("report", Path(lane_result.report.name))
     if any(lane.result.status is Status.ERROR for lane in completed.lanes):
         raise typer.Exit(2)
     if any(lane.result.status is Status.FAILED for lane in completed.lanes):
@@ -495,9 +636,10 @@ def migration_check(
 
     if json_output is not None:
         try:
-            write_migration_json(result, json_output)
+            written = write_migration_json(result, json_output)
         except OSError as exc:
             _fail(f"migration report could not be written ({type(exc).__name__})")
+        _print_path_status("wrote", Path(written.name))
     _render_migration_result(result)
     if result.status is Status.ERROR:
         raise typer.Exit(2)
@@ -513,13 +655,14 @@ def _render_evidence_result(result: object) -> None:
     if not isinstance(result, EvidenceResult):  # pragma: no cover - internal contract
         raise TypeError("invalid evidence result")
     colors = {"verified": "green", "stale": "yellow", "error": "red"}
-    table = Table("Case", "Artifact", "Status")
+    table = Table("Case", "Artifact", "Status", "Reason")
     for artifact in result.artifacts:
         status = artifact.status.value
         table.add_row(
             Text(artifact.case),
             Text(artifact.artifact),
             Text(status, style=colors[status]),
+            Text(artifact.reason_code.value if artifact.reason_code is not None else "—"),
         )
     console.print(table)
     summary = evidence_summary(result)
@@ -561,9 +704,10 @@ def evidence_verify(
         _fail(f"evidence verification could not run ({type(exc).__name__})")
     if json_output is not None:
         try:
-            write_evidence_json(result, json_output)
+            written = write_evidence_json(result, json_output)
         except OSError as exc:
             _fail(f"evidence report could not be written ({type(exc).__name__})")
+        _print_path_status("wrote", Path(written.name))
     _render_evidence_result(result)
     if result.status is Status.ERROR:
         raise typer.Exit(2)
@@ -683,7 +827,7 @@ def _render_config_doctor(report: ConfigDoctorReport) -> None:
             )
     console.print(table)
     if report.healthy:
-        console.print("[green]configured workers ready[/green]")
+        console.print("[green]worker runtimes ready[/green]; targets were not imported")
     else:
         console.print("[red]configured workers not ready[/red]")
 

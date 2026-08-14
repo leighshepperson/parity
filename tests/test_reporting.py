@@ -4,6 +4,8 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
+
 from parity.models import (
     CaseProvenance,
     CaseResult,
@@ -147,9 +149,31 @@ def test_report_writer_is_atomic_for_every_file_format(tmp_path: Path) -> None:
     json_path = write_report(suite, "json", tmp_path / "reports" / "result.json")
     junit_path = write_report(suite, "junit", tmp_path / "reports" / "junit.xml")
     markdown_path = write_report(suite, "markdown", tmp_path / "reports" / "summary.md")
+    github_path = write_report(suite, "github", tmp_path / "github" / "summary.md")
+    terminal_path = write_report(suite, "terminal", tmp_path / "terminal" / "summary.txt")
     assert json.loads(json_path.read_text(encoding="utf-8"))["status"] == "failed"
     assert ET.parse(junit_path).getroot().tag == "testsuite"
     assert markdown_path.read_text(encoding="utf-8").startswith("# Parity")
+    assert github_path.read_text(encoding="utf-8").startswith("# Parity")
+    assert terminal_path.read_text(encoding="utf-8").startswith("Parity FAILED")
+
+
+def test_report_writer_preserves_destination_and_cleans_temporary_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "nested" / "report.json"
+    destination.parent.mkdir()
+    destination.write_text("previous\n", encoding="utf-8")
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("destination unavailable")
+
+    monkeypatch.setattr("parity.reporting.os.replace", fail_replace)
+    with pytest.raises(OSError, match="destination unavailable"):
+        write_report(_suite(tmp_path), "json", destination)
+
+    assert destination.read_text(encoding="utf-8") == "previous\n"
+    assert list(destination.parent.glob(".report.json.*")) == []
 
 
 def test_json_orders_signed_findings_by_signature_then_unsigned_errors(tmp_path: Path) -> None:

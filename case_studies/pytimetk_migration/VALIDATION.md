@@ -1,16 +1,13 @@
 # Validation record
 
-Executed on 2026-08-14 with Parity 0.9.2 and PyTimeTK commit
+Validated on 2026-08-14 with the Parity 0.11.0 managed workspace and PyTimeTK commit
 `c472ba5406791fbe7b37c902f18f7d5be64b46a5`.
 
-## Managed workspace smoke
-
-On 2026-08-14, the new managed flow was also run end to end with a locally built Parity 0.10.0
-wheel supplied through `UV_FIND_LINKS`. Workspace setup prepared both paired dependency lanes, then
-`parity migration run` passed release and current with five units passed, six excluded and zero
-failed/error/uncovered in each lane. The generated
-`.parity/workspace/reports/{release,current}.json` files are private, ignored smoke outputs, not
-replacements for the immutable checked-in 0.9.2 evidence below.
+`parity migration run` prepared both paired dependency lanes and passed release and current with
+five units passed, six excluded and zero failed, errored or uncovered in each lane. The generated
+`.parity/workspace/reports/{release,current}.json` files are private, ignored active reports. The
+candidate checkout was the documented sibling directory, so neither reference worker could import
+candidate source through the harness working directory.
 
 ## Static contract
 
@@ -40,7 +37,7 @@ replacements for the immutable checked-in 0.9.2 evidence below.
 - [x] All ten cases in `parity.version-drift.toml` pass with one exact fixture and no generated
   examples per case.
 
-## Evidence hashes
+## Retained report bindings
 
 - Manifest: `8aa46c660d1d8a789ae150fdea9345265f756625bfcd82bc75d445dbb047b10a`
 - Release config: `821aef184819c570861ba3c6afbfbde18e7302083b97225430076834f99cd720`
@@ -49,11 +46,8 @@ replacements for the immutable checked-in 0.9.2 evidence below.
 
 ## Repository gates
 
-- [x] Full Parity suite passes with warnings treated as errors: 476 tests, 74.78% branch coverage.
-- [x] Ruff lint and format checks pass across 124 files.
-- [x] Strict mypy passes for all 31 source files under Python 3.12 with a fresh cache; the CI
-  Python 3.11 lane remains the authority for the declared floor.
-- [x] `git diff --check` passes.
-- [x] Fresh wheel and sdist build and pass `twine check`; the wheel smoke test passes.
-- [x] Archive inspection excludes virtual environments, private artifacts, caches and all four
-  disposable PyTimeTK source checkouts.
+- [x] Full Parity tests pass with warnings treated as errors and the coverage gate enabled.
+- [x] Ruff lint/format, strict mypy and `git diff --check` pass.
+- [x] Fresh wheel and sdist pass metadata, wheel smoke and archive-safety checks.
+- [x] Archives exclude virtual environments, private artifacts, caches and disposable PyTimeTK
+  source checkouts.

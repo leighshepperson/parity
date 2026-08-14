@@ -28,7 +28,7 @@ jobs:
           max-findings: "3"
           stability-repeats: "2"
           performance: "false"
-          artifact-path: .parity
+          artifact-path: migrations/.parity
           upload-artifact: "false"
 ```
 
@@ -56,13 +56,22 @@ declared-inventory gate as a separate CLI step after installing the project and 
     parity migration check
     --manifest migrations/migration.toml
     --config migrations/parity.toml
-    --json .parity/migration-status.json
+    --json migrations/.parity/migration-status.json
+- name: Upload declared-migration evidence
+  if: ${{ always() }}
+  uses: actions/upload-artifact@v4
+  with:
+    name: parity-migration-report
+    path: migrations/.parity
+    include-hidden-files: true
+    retention-days: 14
 ```
 
 Do not pass case, tag, search-budget or performance overrides to the completion gate. Use the
 ordinary Action or `parity check` for focused iteration. The migration JSON report omits compared
-values, but mapped cases may create sensitive replay artifacts under `.parity/`; retain the Action's
-opt-in upload policy for that directory.
+values, but mapped cases may create sensitive replay artifacts under `migrations/.parity/`. The
+composite Action cannot upload files created by a later, separate CLI step, so add a subsequent
+`if: always()` upload only when policy permits remote evidence storage.
 
 ## Inputs
 
@@ -76,7 +85,7 @@ opt-in upload policy for that directory.
 | `stability-repeats` | empty | Override same-input observations per implementation, from 1 through 10. |
 | `performance` | `true` | `true` or `false`. |
 | `python-version` | `3.12` | setup-python interpreter. |
-| `artifact-path` | `.parity` | Uploaded evidence path. |
+| `artifact-path` | `.parity` | Uploaded evidence path; set it to the config-relative artifact root when the config is nested. |
 | `upload-artifact` | `false` | Opt in to uploading reports and raw counterexamples on pass, mismatch or error. |
 | `artifact-name` | `parity-report` | GitHub artifact name. |
 | `retention-days` | `14` | Artifact lifetime. |

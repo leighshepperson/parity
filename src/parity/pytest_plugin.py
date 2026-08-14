@@ -45,9 +45,13 @@ class ParityAssertions:
     ) -> SuiteResult:
         """Run a configured suite and fail the current pytest test on mismatch."""
 
-        result = parity_api.check(
-            config or self.config, cases=cases if cases is not None else self.cases
-        )
+        selected = cases if cases is not None else self.cases
+        if selected is not None and not selected:
+            pytest.fail(
+                "parity case selection must contain at least one case name",
+                pytrace=False,
+            )
+        result = parity_api.check(config or self.config, cases=selected)
         return self.assert_passed(result)
 
     def verify(
@@ -114,6 +118,10 @@ def parity(request: pytest.FixtureRequest) -> ParityAssertions:
             if isinstance(marker_cases, str):
                 marker_cases = [marker_cases]
             selected = set(marker_cases)
+            if not selected:
+                raise pytest.UsageError(
+                    "@pytest.mark.parity cases must contain at least one case name"
+                )
     return ParityAssertions(config_path, selected)
 
 

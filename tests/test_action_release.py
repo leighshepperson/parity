@@ -231,8 +231,8 @@ def test_release_and_bootstrap_workflows_share_the_guarded_promoter() -> None:
     assert "--skip-non-final" in release
     assert "python scripts/promote_action_major.py" in release
     assert "workflow_dispatch:" in bootstrap
-    assert "push:" in bootstrap
-    assert "releases/latest" in bootstrap
+    assert "push:" not in bootstrap
+    assert "releases/latest" not in bootstrap
     assert "default: true" in bootstrap
     assert "python scripts/promote_action_major.py" in bootstrap
     assert "parity-action-major-${{ github.repository }}" in release

@@ -47,7 +47,8 @@ deterministic cases and can infer a broader generation schema from them.
 parity inspect tests/fixtures/orders.parquet --output orders-schema.json
 ```
 
-Inspect inferred bounds. A sample that contains only positive values can accidentally exclude the
+The command writes a review-oriented JSON model; it is not a TOML include. Translate the accepted
+columns and bounds into the case's `[cases.schema]` section. Inspect inferred bounds. A sample that contains only positive values can accidentally exclude the
 negative domain; a unique-looking sample can accidentally imply uniqueness. Prefer a reviewed
 schema in `parity.toml` for important cases.
 
@@ -101,11 +102,14 @@ parity evidence verify .parity/migration-status.json \
   --json .parity/evidence-status.json
 ```
 
-By default, the reported artifact directory must exist below the current directory. Use
-`--artifact-root PATH` when the same directory has been restored elsewhere. Exit `0` means every
-finding replayed with the same mismatch signature, `1` means at least one valid finding is stale
-(it now passes or produces a different mismatch shape), and `2` means report, artifact, runtime or
-execution evidence could not be verified. Parity verifies integrity and behavioural reproduction;
+By default, a report anywhere beneath its reported artifact directory is self-locating. Otherwise,
+Parity looks for that directory below the current directory. Use `--artifact-root PATH` when the
+same directory has been restored elsewhere. Exit `0` means every finding replayed with the same
+mismatch signature, `1` means at least one valid finding is stale (it now passes or produces a
+different mismatch shape), and `2` means report, artifact, runtime or execution evidence could not
+be verified. Terminal and JSON output include a bounded, data-safe reason code for every stale or
+errored artifact, without echoing a private path or caught exception.
+Parity verifies integrity and behavioural reproduction;
 the `ms1:...` mismatch classifier is not a cryptographic signature or source attestation. Replay
 executes the configured project code, so verify only artifacts and checkouts you trust.
 
@@ -132,6 +136,9 @@ Run quick critical cases on every pull request and a larger campaign on a schedu
 parity check --tag critical --max-examples 250 --no-performance
 parity check --max-examples 5000 --json .parity/nightly.json
 ```
+
+When `--case` and `--tag` are supplied together, Parity runs their union. It never treats the tag
+as a further filter on the explicitly named cases.
 
 Set `max_findings` above one when one campaign should continue searching for other observable
 difference shapes. Each distinct signature receives a separate `max_examples` budget. Signatures
@@ -168,7 +175,7 @@ An exclusion cannot also list cases, and an exclusion reason must contain non-wh
 parity migration check \
   --manifest migrations/migration.toml \
   --config migrations/parity.toml \
-  --json .parity/migration-status.json
+  --json migrations/.parity/migration-status.json
 ```
 
 The command validates every mapped case name before executing project code, runs the union of
@@ -200,19 +207,28 @@ exports, documentation, signatures, upstream tests, wrappers and exclusions. The
 
 ## Managed migration workspaces
 
-The shortest repeatable setup starts from three things already under review: a candidate checkout,
-`parity.toml`, and `migration.toml`.
+Keep migration wrappers and declarations in `migrations/`, outside the candidate package's import
+root. Start with one fixture-backed core case:
 
 ```bash
 python -m pip install "parity-check[workspace]"
-parity migration init --reference 'your-library==1.2.3' --candidate .
+parity init migrations/parity.toml \
+  --reference your_library.api:transform \
+  --candidate your_library.api:transform \
+  --fixture tests/fixtures/input.parquet
+parity migration init --reference 'your-library==1.2.3'
 parity migration run
 ```
 
-`migration init` writes only `parity.workspace.toml`. The exact released requirement supplies the
-reference package; the candidate checkout is installed as the candidate. `migration run` resolves a
-hash-pinned requirements lock, creates both isolated workers, runs the unfiltered migration gate,
-and writes `.parity/workspace/reports/default.json`. Re-running uses the existing lock; pass
+`migration init` writes `migrations/parity.workspace.toml`. If the configured ledger is absent, it
+also creates `migrations/migration.toml` with one `core-regression` unit mapped to every configured
+case; review that inventory before treating it as a completion gate. The exact released requirement
+supplies the reference package and the current checkout is installed as the candidate.
+
+`migration run` resolves a hash-pinned requirements lock, creates both isolated workers, enforces
+the exact reference distribution before target import, records the subject distribution on both
+sides, runs the complete ledger and writes
+`migrations/.parity/workspace/reports/default.json`. Re-running uses the existing lock; pass
 `--refresh-locks` only for a deliberate dependency update. `parity migration setup` prepares the
 same workers without executing project callables.
 
@@ -225,6 +241,46 @@ The managed path also verifies that the candidate's statically declared distribu
 the exact reference requirement. Supported declarations are `project.name`, `tool.poetry.name`,
 and `setup.cfg` `[metadata] name`. For dynamic `setup.py`-only metadata, provision the two worker
 interpreters yourself and keep using the explicit `reference.python` and `candidate.python` fields.
+
+### Rolling A→B→C migrations
+
+The workspace represents exactly one active adjacent pair. It is not a migration-history database.
+For A→B, keep durable checks in a `core-regression` unit and add units or cases specific to that
+transition. Once B is published and becomes the next baseline:
+
+```bash
+parity migration advance --reference 'your-library==B_VERSION'
+# update or remove only the B→C-specific cases and manifest units
+parity migration run
+```
+
+`advance` preserves the candidate checkout, Python, lanes, case config, ledger and report location.
+It atomically changes only the exact reference and invalidates the previous active lane reports.
+The next run may retain compatible transitive pins; use `--refresh-locks` only when dependency
+selection itself should change. Old counterexample directories are inert local evidence and may be
+deleted when the previous transition is no longer needed.
+
+Only cases mapped by `migration.toml` contribute to completion. Keeping a case in `parity.toml`
+without retaining its manifest mapping does not run or certify it. A typical rolling ledger keeps
+this permanent unit and replaces the remaining units per hop:
+
+```toml
+version = 1
+
+[[units]]
+id = "core-regression"
+cases = ["import-smoke", "public-contract", "nullable-inputs"]
+
+[[units]]
+id = "b-to-c-transition"
+cases = ["new-engine-path", "changed-default"]
+```
+
+Managed workers execute from the directory containing `parity.workspace.toml`. This prevents a
+flat-layout candidate checkout from shadowing the installed reference package. Put wrapper modules
+in `migrations/`; import the candidate through its editable installation, not by adding the project
+root to `PYTHONPATH`. Parity rejects a managed layout that exposes the candidate checkout to the
+reference worker.
 
 Add repeatable dependency lanes when the same migration must pass under more than one constraints
 file:
@@ -328,7 +384,8 @@ isolated workers install the exact same Parity release. Each configured worker m
 installation; `parity doctor --config parity.toml` verifies the observed versions before execution.
 
 `doctor --config` asks each worker only for bounded runtime provenance; it does not import or invoke
-the configured target. Its terminal and JSON output place reference and candidate Python, Parity
+the configured target. “Ready” therefore means the worker runtime contract is ready, not that a
+target import has succeeded. Its terminal and JSON output place reference and candidate Python, Parity
 and explicitly requested distribution versions side by side without executable paths, working
 directories or environment values. A worker failure or missing requested distribution returns exit
 code 2. Use `--case NAME` to inspect one case in a multi-case file.
@@ -439,7 +496,9 @@ receives a freshly deserialized input. Python module globals and other process s
 between examples on each side. Avoid call counters, mutable caches with observable behaviour,
 background threads and other hidden state: they can make generated search and shrinking depend on
 execution order. Parity repeats deterministic passing inputs and compares each implementation with
-its own first observation; matching drift is therefore an error rather than a pass. Configure the
+its own first observation using exact, reflexive canonical identity. Cross-side tolerances,
+row alignment and null/NaN inequality do not turn a stable output into a nondeterminism error;
+matching actual drift is still an error rather than a pass. Configure the
 total observations with `generation.stability_repeats` (default `2`, or `1` to disable). If an
 invocation times out or crashes, Parity terminates that session and reports an error instead of
 restarting it with clean state. Use `parity.execution.execute_isolated` when every call requires a
@@ -504,6 +563,8 @@ parity migration check --manifest PATH        gate the declared migration invent
 parity migration init --reference PACKAGE==VERSION
                       [--candidate PATH]       declare a managed workspace
                       [--lane NAME[=REQUIREMENTS]]
+parity migration advance --reference PACKAGE==VERSION
+                                              move the active adjacent pair
 parity migration setup [--workspace PATH]     prepare locked worker environments
                        [--refresh-locks]
 parity migration run [--workspace PATH]       prepare and run every dependency lane

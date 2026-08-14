@@ -229,6 +229,54 @@ def migration_manifest_sha256(manifest: MigrationManifest) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def render_migration_manifest(manifest: MigrationManifest) -> str:
+    """Render the small, reviewable migration ledger as TOML."""
+
+    lines = ["# migration.toml — review this declared migration surface", "version = 1", ""]
+    for unit in manifest.units:
+        lines.extend(["[[units]]", f"id = {json.dumps(unit.id)}"])
+        if unit.excluded_reason is not None:
+            lines.append(f"excluded_reason = {json.dumps(unit.excluded_reason)}")
+        else:
+            cases = ", ".join(json.dumps(case) for case in unit.cases)
+            lines.append(f"cases = [{cases}]")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def write_migration_manifest(
+    manifest: MigrationManifest,
+    destination: str | Path,
+    *,
+    force: bool = False,
+) -> Path:
+    """Atomically publish a manifest without replacing one by default."""
+
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(render_migration_manifest(manifest))
+            stream.flush()
+            os.fsync(stream.fileno())
+        if force:
+            if os.path.lexists(path) and not (path.is_file() or path.is_symlink()):
+                raise MigrationConfigError("migration manifest destination is not a file")
+            os.replace(temporary, path)
+        else:
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                raise FileExistsError(f"migration manifest already exists: {path}") from None
+            temporary.unlink()
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return path
+
+
 def _mapped_cases(manifest: MigrationManifest) -> set[str]:
     return {case for unit in manifest.units for case in unit.cases}
 
@@ -442,6 +490,8 @@ __all__ = [
     "migration_report_payload",
     "migration_summary",
     "render_migration_json",
+    "render_migration_manifest",
     "run_migration",
     "write_migration_json",
+    "write_migration_manifest",
 ]

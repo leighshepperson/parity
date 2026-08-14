@@ -85,6 +85,34 @@ Runner = Callable[[CampaignInput], Observation]
 PairRunner = Callable[[CampaignInput], tuple[Observation, Observation]]
 
 
+# Repeat observations answer a different question from cross-side comparison:
+# did this implementation return the same canonical result twice?  Keep that
+# identity reflexive even when a user deliberately configures null/null or
+# NaN/NaN as cross-side contract failures, and make it exact rather than
+# inheriting tolerances, ignored columns, or relaxed ordering from that policy.
+_STABILITY_IDENTITY_POLICY = ComparisonPolicy(
+    column_order="strict",
+    row_order="strict",
+    row_keys=[],
+    dtype="strict",
+    names="strict",
+    null_equal=True,
+    nan_equal=True,
+    null_nan_equal=False,
+    signed_zero_equal=False,
+    check_exceptions=True,
+    check_input_mutation=True,
+    rtol=0.0,
+    atol=0.0,
+    datetime_tolerance_ns=0,
+    ignored_columns=[],
+)
+
+
+def _observation_changed(initial: Observation, repeated: Observation) -> bool:
+    return bool(compare_observations(initial, repeated, _STABILITY_IDENTITY_POLICY))
+
+
 class _StopGeneratedCampaign(BaseException):
     """Control-flow signal preventing Hypothesis from shrinking operational errors."""
 
@@ -433,12 +461,8 @@ def _campaign(
             # executor supplies a fresh adapter argument for every invocation.
             for repeat in range(2, generation.stability_repeats + 1):
                 repeated_reference, repeated_candidate, _, repeated_status = observe(value)
-                reference_changed = bool(
-                    compare_observations(reference, repeated_reference, comparison)
-                )
-                candidate_changed = bool(
-                    compare_observations(candidate, repeated_candidate, comparison)
-                )
+                reference_changed = _observation_changed(reference, repeated_reference)
+                candidate_changed = _observation_changed(candidate, repeated_candidate)
                 if (
                     repeated_status is Status.PASSED
                     and not reference_changed
@@ -517,11 +541,11 @@ def _campaign(
                     for label, differences in (
                         (
                             "reference",
-                            compare_observations(reference, repeated_reference, comparison),
+                            _observation_changed(reference, repeated_reference),
                         ),
                         (
                             "candidate",
-                            compare_observations(candidate, repeated_candidate, comparison),
+                            _observation_changed(candidate, repeated_candidate),
                         ),
                     )
                     if differences
@@ -703,12 +727,8 @@ def _campaign(
         else:
             first_signature = mismatch_signature(first_mismatches)
             second_signature = mismatch_signature(second_mismatches)
-            reference_instability = compare_observations(
-                first_reference, second_reference, comparison
-            )
-            candidate_instability = compare_observations(
-                first_candidate, second_candidate, comparison
-            )
+            reference_instability = _observation_changed(first_reference, second_reference)
+            candidate_instability = _observation_changed(first_candidate, second_candidate)
             if first_signature != second_signature:
                 confirmation_message = (
                     "the minimized witness produced different mismatch signatures "

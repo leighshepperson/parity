@@ -17,8 +17,10 @@ from parity.migration import (
     migration_manifest_sha256,
     migration_report_payload,
     render_migration_json,
+    render_migration_manifest,
     run_migration,
     write_migration_json,
+    write_migration_manifest,
 )
 from parity.models import (
     CallableSpec,
@@ -444,6 +446,22 @@ def test_json_writer_is_atomic_shape_compatible_and_replaces_existing(
     assert written == output
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "passed"
     assert render_migration_json(checked).endswith("\n")
+
+
+def test_manifest_writer_round_trips_and_refuses_implicit_replacement(tmp_path: Path) -> None:
+    manifest = MigrationManifest(
+        units=[
+            MigrationUnit(id="core-regression", cases=["orders", "customers"]),
+            MigrationUnit(id="gpu", excluded_reason="outside the active CPU scope"),
+        ]
+    )
+    destination = tmp_path / "checks" / "migration.toml"
+
+    assert write_migration_manifest(manifest, destination) == destination
+    assert load_migration_manifest(destination) == manifest
+    assert render_migration_manifest(manifest).startswith("# migration.toml")
+    with pytest.raises(FileExistsError):
+        write_migration_manifest(manifest, destination)
 
 
 def test_check_migration_loads_both_documents(

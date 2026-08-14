@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from packaging.requirements import InvalidRequirement, Requirement
-from packaging.specifiers import Specifier
+from packaging.specifiers import Specifier, SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 from pydantic import Field, field_validator, model_validator
@@ -36,7 +36,7 @@ from parity.migration import (
     run_migration,
     write_migration_json,
 )
-from parity.models import StrictModel
+from parity.models import ParityConfig, StrictModel
 
 _WORKSPACE_NAME_PATTERN = r"^[A-Za-z0-9_.-]+$"
 WorkspaceName = Annotated[str, Field(min_length=1, pattern=_WORKSPACE_NAME_PATTERN)]
@@ -300,6 +300,44 @@ def parse_lane_options(values: Sequence[str]) -> list[WorkspaceLane]:
     return lanes
 
 
+def rebase_workspace_path(
+    value: str | Path,
+    *,
+    workspace_path: str | Path,
+    invocation_cwd: str | Path,
+) -> Path:
+    """Express one invocation-relative source path beside a workspace document.
+
+    CLI paths are conventionally interpreted from the directory in which the
+    command was invoked, while workspace paths are deliberately interpreted
+    beside ``parity.workspace.toml``.  This helper bridges those two contracts
+    without requiring the process-wide current directory to match either one.
+    """
+
+    source = Path(value)
+    invocation = Path(invocation_cwd).resolve()
+    workspace = Path(workspace_path)
+    if not workspace.is_absolute():
+        workspace = invocation / workspace
+    absolute = source.resolve() if source.is_absolute() else (invocation / source).resolve()
+    return Path(os.path.relpath(absolute, workspace.resolve().parent))
+
+
+def _resolve_report_dir(root: Path, value: Path) -> Path:
+    """Resolve and require one dedicated report directory below the workspace root."""
+
+    resolved_root = root.resolve()
+    report_dir = (resolved_root / value).resolve() if not value.is_absolute() else value.resolve()
+    _path_text(report_dir)
+    if report_dir == resolved_root:
+        raise WorkspaceError("workspace report_dir must be a dedicated contained subdirectory")
+    try:
+        report_dir.relative_to(resolved_root)
+    except ValueError as exc:
+        raise WorkspaceError("workspace report_dir must stay inside the workspace project") from exc
+    return report_dir
+
+
 def write_workspace(
     destination: str | Path = "parity.workspace.toml",
     *,
@@ -311,10 +349,50 @@ def write_workspace(
     report_dir: Path = Path(".parity/workspace/reports"),
     lanes: Sequence[WorkspaceLane] = (),
     force: bool = False,
+    invocation_cwd: str | Path | None = None,
 ) -> Path:
     """Validate and atomically create one migration workspace document."""
 
-    effective_lanes = list(lanes) or [WorkspaceLane(name="default")]
+    path = Path(destination)
+    if invocation_cwd is not None:
+        invocation = Path(invocation_cwd).resolve()
+        if not path.is_absolute():
+            path = invocation / path
+        candidate = rebase_workspace_path(
+            candidate,
+            workspace_path=path,
+            invocation_cwd=invocation,
+        )
+        config = rebase_workspace_path(
+            config,
+            workspace_path=path,
+            invocation_cwd=invocation,
+        )
+        manifest = rebase_workspace_path(
+            manifest,
+            workspace_path=path,
+            invocation_cwd=invocation,
+        )
+        # Generated reports belong to the workspace root.  Unlike source and
+        # resolver inputs, their default is not an invocation-relative input.
+        effective_lanes = [
+            WorkspaceLane(
+                name=lane.name,
+                requirements=(
+                    rebase_workspace_path(
+                        lane.requirements,
+                        workspace_path=path,
+                        invocation_cwd=invocation,
+                    )
+                    if lane.requirements is not None
+                    else None
+                ),
+            )
+            for lane in lanes
+        ]
+    else:
+        effective_lanes = list(lanes)
+    effective_lanes = effective_lanes or [WorkspaceLane(name="default")]
     try:
         workspace = MigrationWorkspace(
             reference=reference,
@@ -327,7 +405,7 @@ def write_workspace(
         )
     except ValueError as exc:
         raise WorkspaceError(f"invalid migration workspace: {exc}") from exc
-    path = Path(destination)
+    _resolve_report_dir(path.resolve().parent, workspace.report_dir)
     _atomic_write_text(path, render_workspace(workspace), force=force)
     return path
 
@@ -341,6 +419,14 @@ def _resolve_path(root: Path, value: Path) -> Path:
 def _reference_name(requirement: str) -> str:
     parsed, _, _ = _reference_requirement(requirement)
     return str(canonicalize_name(parsed.name))
+
+
+def _reference_contract(requirement: str) -> tuple[str, str, Version]:
+    """Return the normalized subject name and exact released-version contract."""
+
+    parsed, specifier, _ = _reference_requirement(requirement)
+    version = Version(specifier.version)
+    return str(canonicalize_name(parsed.name)), str(specifier), version
 
 
 def _candidate_name(candidate: Path) -> str:
@@ -384,8 +470,8 @@ def _candidate_name(candidate: Path) -> str:
     return normalized.pop()
 
 
-def load_workspace(path: str | Path = "parity.workspace.toml") -> ResolvedWorkspace:
-    """Load a workspace and validate every setup-time source input."""
+def _load_workspace_document(path: str | Path) -> tuple[Path, MigrationWorkspace]:
+    """Load the strict human-authored document without resolving its sources."""
 
     workspace_path = Path(path).resolve()
     try:
@@ -398,6 +484,13 @@ def load_workspace(path: str | Path = "parity.workspace.toml") -> ResolvedWorksp
         document = MigrationWorkspace.model_validate(raw)
     except ValueError as exc:
         raise WorkspaceError(f"invalid migration workspace: {exc}") from exc
+    return workspace_path, document
+
+
+def load_workspace(path: str | Path = "parity.workspace.toml") -> ResolvedWorkspace:
+    """Load a workspace and validate every setup-time source input."""
+
+    workspace_path, document = _load_workspace_document(path)
 
     root = workspace_path.parent
     candidate = _resolve_path(root, document.candidate)
@@ -443,11 +536,7 @@ def load_workspace(path: str | Path = "parity.workspace.toml") -> ResolvedWorksp
             "migration.toml"
         )
 
-    report_dir = _resolve_path(root, document.report_dir)
-    try:
-        report_dir.relative_to(root)
-    except ValueError as exc:
-        raise WorkspaceError("workspace report_dir must stay inside the workspace project") from exc
+    report_dir = _resolve_report_dir(root, document.report_dir)
 
     return ResolvedWorkspace(
         path=workspace_path,
@@ -464,23 +553,171 @@ def load_workspace(path: str | Path = "parity.workspace.toml") -> ResolvedWorksp
     )
 
 
+def _existing_report_directory(workspace: ResolvedWorkspace) -> Path | None:
+    """Return a safe existing report directory without creating new state."""
+
+    if not os.path.lexists(workspace.report_dir):
+        return None
+    resolved = workspace.report_dir.resolve()
+    try:
+        resolved.relative_to(workspace.root)
+    except ValueError as exc:
+        raise WorkspaceError("workspace report_dir resolves outside the project") from exc
+    if not resolved.is_dir():
+        raise WorkspaceError("workspace report_dir is not a directory")
+    return resolved
+
+
+def _invalidate_lane_report(report_dir: Path, lane_name: str) -> None:
+    """Remove one fixed active report so a failed run cannot leave stale success."""
+
+    if re.fullmatch(_WORKSPACE_NAME_PATTERN, lane_name) is None:  # pragma: no cover
+        raise WorkspaceError("invalid migration workspace lane name")
+    report = report_dir / f"{lane_name}.json"
+    if not os.path.lexists(report):
+        return
+    if not (report.is_file() or report.is_symlink()):
+        raise WorkspaceError("active migration report is not a replaceable file")
+    try:
+        report.unlink()
+    except OSError as exc:
+        raise WorkspaceError("active migration report could not be invalidated") from exc
+
+
+def _is_generated_lane_report(path: Path) -> bool:
+    """Recognize the exact top-level shape written by ``write_migration_json``."""
+
+    if path.is_symlink():
+        return False
+    try:
+        payload: Any = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and set(payload)
+        == {"schema_version", "status", "summary", "units", "manifest_sha256", "parity"}
+        and type(payload.get("schema_version")) is int
+        and payload["schema_version"] == 1
+    )
+
+
+def _invalidate_active_reports(report_dir: Path, lane_names: Sequence[str]) -> None:
+    """Discard generated lane reports while preserving unrelated files."""
+
+    try:
+        entries = tuple(report_dir.iterdir())
+    except OSError as exc:
+        raise WorkspaceError("active migration reports could not be inspected") from exc
+    active_names = set(lane_names)
+    for entry in entries:
+        if entry.suffix != ".json" or re.fullmatch(_WORKSPACE_NAME_PATTERN, entry.stem) is None:
+            continue
+        if entry.stem not in active_names and not _is_generated_lane_report(entry):
+            continue
+        _invalidate_lane_report(report_dir, entry.stem)
+
+
+def _invalidate_declared_workspace_reports(path: str | Path) -> None:
+    """Invalidate active evidence before any environment or project validation."""
+
+    workspace_path, document = _load_workspace_document(path)
+    report_dir = _resolve_report_dir(workspace_path.parent, document.report_dir)
+    if not os.path.lexists(report_dir):
+        return
+    if not report_dir.is_dir():
+        raise WorkspaceError("workspace report_dir is not a directory")
+    _invalidate_active_reports(report_dir, [lane.name for lane in document.lanes])
+
+
+def advance_workspace(
+    path: str | Path = "parity.workspace.toml",
+    *,
+    reference: str,
+) -> Path:
+    """Atomically promote a released baseline while preserving the active harness.
+
+    The workspace remains a description of one adjacent pair.  Lanes, source
+    paths and compatible locks are retained; only disposable active lane reports
+    are invalidated.  Advancing to a different distribution is rejected.
+    """
+
+    workspace_path, document = _load_workspace_document(path)
+    try:
+        advanced = document.model_copy(update={"reference": reference})
+        # ``model_copy(update=...)`` intentionally does not validate updates.
+        advanced = MigrationWorkspace.model_validate(advanced.model_dump(mode="python"))
+    except ValueError as exc:
+        raise WorkspaceError(f"invalid migration workspace: {exc}") from exc
+    current_name = _reference_name(document.reference)
+    advanced_name = _reference_name(advanced.reference)
+    if advanced_name != current_name:
+        raise WorkspaceError("an adjacent migration cannot change the subject distribution")
+    _, _, current_version = _reference_contract(document.reference)
+    _, _, advanced_version = _reference_contract(advanced.reference)
+    if advanced_version <= current_version:
+        raise WorkspaceError("the advanced reference version must be newer than the active one")
+
+    resolved = load_workspace(workspace_path)
+    if report_dir := _existing_report_directory(resolved):
+        _invalidate_active_reports(report_dir, [lane.name for lane in resolved.lanes])
+    _atomic_write_text(workspace_path, render_workspace(advanced), force=True)
+    return workspace_path
+
+
 def _state_root(workspace: ResolvedWorkspace) -> Path:
     """Create the private state root, rejecting redirects outside the project."""
 
-    state = workspace.root / _STATE_DIRECTORY
+    project_root = workspace.root.resolve()
+    private_root = project_root / _STATE_DIRECTORY.parent
+    if os.path.lexists(private_root):
+        if private_root.is_symlink():
+            raise WorkspaceError("private migration workspace root cannot be a symbolic link")
+        if not private_root.is_dir():
+            raise WorkspaceError("private migration workspace root is not a directory")
     try:
-        state.mkdir(parents=True, exist_ok=True)
+        private_root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise WorkspaceError("could not create private migration workspace state") from exc
+    resolved_private_root = private_root.resolve()
+    try:
+        resolved_private_root.relative_to(project_root)
+    except ValueError as exc:
+        raise WorkspaceError(
+            "private migration workspace root resolves outside the project"
+        ) from exc
+    if not resolved_private_root.is_dir():
+        raise WorkspaceError("private migration workspace root is not a directory")
+
+    state = resolved_private_root / _STATE_DIRECTORY.name
+    try:
+        if os.path.lexists(state) and state.is_symlink():
+            raise WorkspaceError("private migration workspace state cannot be a symbolic link")
+        state.mkdir(parents=False, exist_ok=True)
+    except WorkspaceError:
+        raise
+    except OSError as exc:
+        raise WorkspaceError("could not create private migration workspace state") from exc
+    if state.is_symlink():
+        raise WorkspaceError("private migration workspace state cannot be a symbolic link")
     resolved = state.resolve()
     try:
-        resolved.relative_to(workspace.root)
+        resolved.relative_to(resolved_private_root)
     except ValueError as exc:
         raise WorkspaceError(
             "private migration workspace state resolves outside the project"
         ) from exc
     if not resolved.is_dir():
         raise WorkspaceError("private migration workspace state is not a directory")
+    ignore = resolved_private_root / ".gitignore"
+    if not os.path.lexists(ignore):
+        try:
+            _atomic_write_text(ignore, "*\n", force=False)
+        except FileExistsError:
+            # A concurrent creator owns the policy; never replace it.
+            pass
+        except OSError as exc:
+            raise WorkspaceError("could not protect private migration workspace state") from exc
     return resolved
 
 
@@ -767,14 +1004,13 @@ def _query_env_python(
     return python
 
 
-def setup_workspace(
-    path: str | Path = "parity.workspace.toml",
+def _setup_resolved_workspace(
+    workspace: ResolvedWorkspace,
     *,
     refresh_locks: bool = False,
 ) -> WorkspaceSetup:
-    """Resolve locks, prepare every tox environment and return worker paths."""
+    """Provision one already validated workspace without reloading its contract."""
 
-    workspace = load_workspace(path)
     uv = _tool("uv")
     tox = _tool("tox")
     state_root = _state_root(workspace)
@@ -834,6 +1070,98 @@ def setup_workspace(
     )
 
 
+def setup_workspace(
+    path: str | Path = "parity.workspace.toml",
+    *,
+    refresh_locks: bool = False,
+) -> WorkspaceSetup:
+    """Resolve locks, prepare every tox environment and return worker paths."""
+
+    return _setup_resolved_workspace(
+        load_workspace(path),
+        refresh_locks=refresh_locks,
+    )
+
+
+def _bind_subject_distribution(
+    workspace: ResolvedWorkspace,
+    config: ParityConfig,
+) -> ParityConfig:
+    """Bind the managed workspace's subject into every effective worker contract."""
+
+    subject, exact_requirement, reference_version = _reference_contract(workspace.reference)
+    effective = config.model_copy(deep=True)
+    for case in effective.cases:
+        existing = case.reference.required_distributions.get(subject)
+        if existing is not None and reference_version not in SpecifierSet(existing):
+            raise WorkspaceError(
+                "reference runtime requirements conflict with the workspace subject version"
+            )
+        case.reference.required_distributions = {
+            **case.reference.required_distributions,
+            subject: exact_requirement,
+        }
+        for endpoint in (case.reference, case.candidate):
+            endpoint.record_distributions = sorted(
+                set(endpoint.record_distributions).union({subject})
+            )
+            # A managed worker must import harness modules from the workspace,
+            # never from a configured candidate checkout directory.
+            endpoint.workdir = workspace.root
+    return effective
+
+
+def _pythonpath_entries(value: str, *, base: Path) -> tuple[Path, ...]:
+    """Resolve the effective Python import roots using subprocess cwd semantics."""
+
+    entries: list[Path] = []
+    for raw in value.split(os.pathsep):
+        # An empty PYTHONPATH component denotes the worker current directory.
+        path = Path(raw) if raw else base
+        if not path.is_absolute():
+            path = base / path
+        entries.append(path.resolve())
+    return tuple(entries)
+
+
+def _validate_reference_import_isolation(
+    workspace: ResolvedWorkspace,
+    config: ParityConfig,
+) -> None:
+    """Reject managed layouts that can put candidate source on reference sys.path."""
+
+    def exposes_candidate(import_root: Path) -> bool:
+        root = import_root.resolve()
+        candidate = workspace.candidate.resolve()
+        if root == candidate or root == (candidate / "src").resolve():
+            return True
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return False
+        return True
+
+    if exposes_candidate(workspace.root):
+        raise WorkspaceError(
+            "workspace root exposes the candidate checkout to the reference worker; place the "
+            "workspace and wrappers in a contained subdirectory such as migrations"
+        )
+
+    inherited = os.environ.get("PYTHONPATH", "")
+    for case in config.cases:
+        effective_pythonpath = case.reference.environment.get("PYTHONPATH", inherited)
+        for import_root in _pythonpath_entries(
+            effective_pythonpath,
+            base=workspace.root,
+        ):
+            if not exposes_candidate(import_root):
+                continue
+            raise WorkspaceError(
+                "reference PYTHONPATH exposes the candidate checkout; remove that import root "
+                "before running the managed workspace"
+            )
+
+
 def run_workspace(
     path: str | Path = "parity.workspace.toml",
     *,
@@ -842,14 +1170,24 @@ def run_workspace(
 ) -> WorkspaceRunResult:
     """Prepare the workspace and run its migration gate in every lane."""
 
+    _invalidate_declared_workspace_reports(path)
+    workspace = load_workspace(path)
+    manifest = load_migration_manifest(workspace.manifest)
+    config = _bind_subject_distribution(
+        workspace,
+        load_config(workspace.config),
+    )
+    _validate_reference_import_isolation(workspace, config)
     if progress is not None:
         progress("setup", None)
-    setup = setup_workspace(path, refresh_locks=refresh_locks)
-    manifest = load_migration_manifest(setup.workspace.manifest)
-    config = load_config(setup.workspace.config)
+    setup = _setup_resolved_workspace(
+        workspace,
+        refresh_locks=refresh_locks,
+    )
     report_dir = _report_directory(setup.workspace)
     lane_results: list[LaneMigrationResult] = []
     for lane in setup.lanes:
+        _invalidate_lane_report(report_dir, lane.name)
         if progress is not None:
             progress("lane", lane.name)
         effective = config.model_copy(deep=True)
@@ -874,8 +1212,10 @@ __all__ = [
     "WorkspaceLane",
     "WorkspaceRunResult",
     "WorkspaceSetup",
+    "advance_workspace",
     "load_workspace",
     "parse_lane_options",
+    "rebase_workspace_path",
     "render_tox_config",
     "render_workspace",
     "run_workspace",

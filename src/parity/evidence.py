@@ -30,6 +30,39 @@ class EvidenceArtifactStatus(StrEnum):
     ERROR = "error"
 
 
+class EvidenceArtifactReason(StrEnum):
+    """Bounded, data-safe explanation for a non-verified artifact outcome."""
+
+    FINDING_NOT_REPRODUCED = "finding_not_reproduced"
+    FINDING_CHANGED = "finding_changed"
+    ARTIFACT_UNAVAILABLE = "artifact_unavailable"
+    ARTIFACT_INVALID = "artifact_invalid"
+    SIGNATURE_MISMATCH = "signature_mismatch"
+    REPLAY_FAILED = "replay_failed"
+    CASE_MISMATCH = "case_mismatch"
+    PROVENANCE_UNVERIFIED = "provenance_unverified"
+    REPLAY_ERROR = "replay_error"
+
+
+_STALE_REASONS = frozenset(
+    {
+        EvidenceArtifactReason.FINDING_NOT_REPRODUCED,
+        EvidenceArtifactReason.FINDING_CHANGED,
+    }
+)
+_ERROR_REASONS = frozenset(
+    {
+        EvidenceArtifactReason.ARTIFACT_UNAVAILABLE,
+        EvidenceArtifactReason.ARTIFACT_INVALID,
+        EvidenceArtifactReason.SIGNATURE_MISMATCH,
+        EvidenceArtifactReason.REPLAY_FAILED,
+        EvidenceArtifactReason.CASE_MISMATCH,
+        EvidenceArtifactReason.PROVENANCE_UNVERIFIED,
+        EvidenceArtifactReason.REPLAY_ERROR,
+    }
+)
+
+
 class EvidenceArtifactResult(StrictModel):
     """Data-safe verification result for one counterexample artifact."""
 
@@ -38,6 +71,7 @@ class EvidenceArtifactResult(StrictModel):
     status: EvidenceArtifactStatus
     expected_signature: str = Field(pattern=r"^ms1:[0-9a-f]{64}$")
     actual_signature: str | None = Field(default=None, pattern=r"^ms1:[0-9a-f]{64}$")
+    reason_code: EvidenceArtifactReason | None = None
 
     @field_validator("artifact")
     @classmethod
@@ -54,11 +88,28 @@ class EvidenceArtifactResult(StrictModel):
         if self.status is EvidenceArtifactStatus.VERIFIED:
             if self.actual_signature != self.expected_signature:
                 raise ValueError("verified evidence must reproduce its expected signature")
+            if self.reason_code is not None:
+                raise ValueError("verified evidence cannot carry a failure reason")
         elif self.status is EvidenceArtifactStatus.STALE:
             if self.actual_signature == self.expected_signature:
                 raise ValueError("stale evidence cannot reproduce only its expected signature")
-        elif self.actual_signature is not None:
-            raise ValueError("errored evidence cannot claim an actual signature")
+            if self.reason_code not in _STALE_REASONS:
+                raise ValueError("stale evidence must carry a stale reason")
+            if (
+                self.reason_code is EvidenceArtifactReason.FINDING_CHANGED
+                and self.actual_signature is None
+            ):
+                raise ValueError("changed evidence must identify its actual signature")
+            if (
+                self.reason_code is EvidenceArtifactReason.FINDING_NOT_REPRODUCED
+                and self.actual_signature is not None
+            ):
+                raise ValueError("absent evidence cannot claim an actual signature")
+        else:
+            if self.actual_signature is not None:
+                raise ValueError("errored evidence cannot claim an actual signature")
+            if self.reason_code not in _ERROR_REASONS:
+                raise ValueError("errored evidence must carry an error reason")
         return self
 
 
@@ -131,6 +182,7 @@ def _report_entries(payload: dict[str, Any]) -> list[tuple[str, str, str]]:
                     artifact=artifact,
                     status=EvidenceArtifactStatus.ERROR,
                     expected_signature=signature,
+                    reason_code=EvidenceArtifactReason.ARTIFACT_INVALID,
                 )
             except ValueError as exc:
                 raise EvidenceError(f"case {case!r} contains invalid artifact evidence") from exc
@@ -164,9 +216,27 @@ def _reported_artifact_root(entries: list[tuple[str, str, str]]) -> str:
 def _resolve_artifact_root(
     entries: list[tuple[str, str, str]],
     artifact_root: str | Path | None,
+    *,
+    report: Path,
 ) -> Path:
     reported_name = _reported_artifact_root(entries)
-    declared = Path.cwd() / reported_name if artifact_root is None else Path(artifact_root)
+    if artifact_root is None:
+        # Reports normally live inside their private artifact root. Infer that
+        # root from the report's lexical location so a nested workspace report
+        # remains self-locating without depending on the caller's cwd. Keep the
+        # path lexical until the symlink guard below has inspected the declared
+        # root itself.
+        report_parent = Path(os.path.abspath(report)).parent
+        declared = next(
+            (
+                parent
+                for parent in (report_parent, *report_parent.parents)
+                if parent.name == reported_name
+            ),
+            Path.cwd() / reported_name,
+        )
+    else:
+        declared = Path(artifact_root)
     if declared.name != reported_name:
         raise EvidenceError("artifact root name does not match the report")
     if declared.is_symlink():
@@ -243,35 +313,96 @@ def _verify_one(
 
     try:
         artifact = _contained_artifact(artifact_root, artifact_name)
+    except Exception:
+        return _error_result(
+            case=case,
+            artifact_name=artifact_name,
+            expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.ARTIFACT_UNAVAILABLE,
+        )
+    try:
         stored = _stored_finding(artifact)
-        if stored.finding_signature != expected_signature:
-            raise EvidenceError("report signature does not match its artifact result")
+    except Exception:
+        return _error_result(
+            case=case,
+            artifact_name=artifact_name,
+            expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.ARTIFACT_INVALID,
+        )
+    if stored.finding_signature != expected_signature:
+        return _error_result(
+            case=case,
+            artifact_name=artifact_name,
+            expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.SIGNATURE_MISMATCH,
+        )
+    try:
         replayed = replay_artifact(artifact)
-        if len(replayed.cases) != 1 or replayed.cases[0].name != case:
-            raise EvidenceError("artifact case identity does not match its report entry")
-        replay_case = replayed.cases[0]
-        provenance = replay_case.provenance
-        if (
-            provenance is None
-            or provenance.verification != "verified"
-            or provenance.reference is None
-            or provenance.candidate is None
-        ):
-            raise EvidenceError("artifact runtime provenance was not verified")
+    except Exception:
+        return _error_result(
+            case=case,
+            artifact_name=artifact_name,
+            expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.REPLAY_FAILED,
+        )
+    try:
+        replay_cases = replayed.cases
+        case_matches = len(replay_cases) == 1 and replay_cases[0].name == case
+    except Exception:
+        return _error_result(
+            case=case,
+            artifact_name=artifact_name,
+            expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.REPLAY_FAILED,
+        )
+    if not case_matches:
+        return _error_result(
+            case=case,
+            artifact_name=artifact_name,
+            expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.CASE_MISMATCH,
+        )
+    replay_case = replay_cases[0]
+    provenance = replay_case.provenance
+    if (
+        provenance is None
+        or provenance.verification != "verified"
+        or provenance.reference is None
+        or provenance.candidate is None
+    ):
+        return _error_result(
+            case=case,
+            artifact_name=artifact_name,
+            expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.PROVENANCE_UNVERIFIED,
+        )
+    try:
         replay_status, actual_signature = _actual_signature(replayed, expected_signature)
     except Exception:
-        return EvidenceArtifactResult(
+        return _error_result(
             case=case,
-            artifact=redact_text(artifact_name),
-            status=EvidenceArtifactStatus.ERROR,
+            artifact_name=artifact_name,
             expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.REPLAY_FAILED,
+        )
+    if replay_status is Status.ERROR:
+        return _error_result(
+            case=case,
+            artifact_name=artifact_name,
+            expected_signature=expected_signature,
+            reason_code=EvidenceArtifactReason.REPLAY_ERROR,
         )
     status = (
         EvidenceArtifactStatus.VERIFIED
         if replay_status is Status.PASSED
-        else EvidenceArtifactStatus.ERROR
-        if replay_status is Status.ERROR
         else EvidenceArtifactStatus.STALE
+    )
+    reason_code = (
+        None
+        if status is EvidenceArtifactStatus.VERIFIED
+        else EvidenceArtifactReason.FINDING_CHANGED
+        if actual_signature is not None
+        else EvidenceArtifactReason.FINDING_NOT_REPRODUCED
     )
     return EvidenceArtifactResult(
         case=case,
@@ -279,6 +410,25 @@ def _verify_one(
         status=status,
         expected_signature=expected_signature,
         actual_signature=actual_signature,
+        reason_code=reason_code,
+    )
+
+
+def _error_result(
+    *,
+    case: str,
+    artifact_name: str,
+    expected_signature: str,
+    reason_code: EvidenceArtifactReason,
+) -> EvidenceArtifactResult:
+    """Return one bounded error without exposing paths or exception text."""
+
+    return EvidenceArtifactResult(
+        case=case,
+        artifact=redact_text(artifact_name),
+        status=EvidenceArtifactStatus.ERROR,
+        expected_signature=expected_signature,
+        reason_code=reason_code,
     )
 
 
@@ -307,7 +457,7 @@ def verify_evidence(
     if not isinstance(payload, dict):
         raise EvidenceError("evidence report must contain a JSON object")
     entries = _report_entries(payload)
-    root = _resolve_artifact_root(entries, artifact_root)
+    root = _resolve_artifact_root(entries, artifact_root, report=report_path)
     artifacts = [
         _verify_one(
             case=case,
@@ -381,6 +531,7 @@ def write_evidence_json(result: EvidenceResult, destination: str | Path) -> Path
 
 
 __all__ = [
+    "EvidenceArtifactReason",
     "EvidenceArtifactResult",
     "EvidenceArtifactStatus",
     "EvidenceError",

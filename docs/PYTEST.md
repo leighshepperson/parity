@@ -31,6 +31,8 @@ def test_critical_migrations(parity):
 ```
 
 The marker accepts keyword arguments only. Unknown keys are usage errors.
+An explicit empty `cases=[]` marker or `cases=set()` fixture call is also an error; omit the
+selection entirely to run every configured case.
 
 ## Live assertion
 

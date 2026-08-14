@@ -40,7 +40,7 @@ inputs:
     required: false
     default: "3.12"
   artifact-path:
-    description: Report and counterexample path to upload
+    description: Report output and evidence path to upload; match the config artifact_dir
     required: false
     default: .parity
   upload-artifact:

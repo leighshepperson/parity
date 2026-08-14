@@ -108,6 +108,7 @@ def test_project_template_is_minimal_fixture_backed_and_allows_same_target() -> 
         row_keys=["account_id", "period"],
     )
     raw = tomllib.loads(rendered)
+    assert raw["artifact_dir"] == ".parity"
     case = raw["cases"][0]
     assert case["fixture"] == "fixtures/input.json"
     assert case["reference"]["target"] == case["candidate"]["target"]
