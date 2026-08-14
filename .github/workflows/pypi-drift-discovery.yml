@@ -104,6 +104,7 @@ jobs:
           search = true
           shrink = true
           derandomize = true
+          adversarial_examples = false
 
           [cases.performance]
           enabled = false
@@ -130,8 +131,7 @@ jobs:
           import json, subprocess
           from pathlib import Path
 
-          cfg = Path("parity-drift.toml").read_text()
-          cfg = cfg.replace("search = true", "search = false\nadversarial_examples = false")
+          cfg = Path("parity-drift.toml").read_text().replace("search = true", "search = false")
           Path("parity-fixture-only.toml").write_text(cfg)
           result = subprocess.run([
               ".venv-candidate/bin/parity", "check",
@@ -148,7 +148,7 @@ jobs:
           assert case["generated_examples"] == 0
           PY
 
-      - name: Let Parity search for the drift
+      - name: Let Parity property-search for the drift
         id: discovery
         shell: bash
         run: |
@@ -177,6 +177,7 @@ jobs:
           print("FINDINGS_DISCOVERED=", case["findings_discovered"])
           assert report["status"] == "failed"
           assert case["findings_discovered"] == 1
+          assert case["generated_examples"] > 0
           failure = case["failures"][0]
           print("FAILURE_SOURCE=", failure["source"])
           print("MISMATCH_COUNTS=", failure["mismatch_counts"])
@@ -189,6 +190,7 @@ jobs:
           print("SHRUNK_ROWS=", table.num_rows)
           print("SHRUNK_CODES=", table.column("code").to_pylist())
           print("SHRUNK_VALUES=", table.column("value").to_pylist())
+          assert table.num_rows <= 3
           PY
 
       - name: Replay the discovered counterexample
