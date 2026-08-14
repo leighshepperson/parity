@@ -634,7 +634,7 @@ class CaseProvenance(StrictModel):
 
     reference: RuntimeProvenance | None = None
     candidate: RuntimeProvenance | None = None
-    verification: Literal["captured", "verified", "unverified", "drifted"] = "captured"
+    verification: Literal["captured", "verified", "drifted"] = "captured"
 
 
 class CaseResult(StrictModel):

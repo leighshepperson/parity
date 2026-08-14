@@ -39,10 +39,6 @@ inputs:
     description: Python version used to run Parity
     required: false
     default: "3.12"
-  parity-version:
-    description: Optional parity-check release; blank installs the same source revision as this action
-    required: false
-    default: ""
   artifact-path:
     description: Report and counterexample path to upload
     required: false
@@ -84,19 +80,10 @@ runs:
       shell: bash
       env:
         PARITY_ACTION_PATH: ${{ github.action_path }}
-        PARITY_VERSION: ${{ inputs.parity-version }}
       run: |
         set -euo pipefail
         python -m pip install --upgrade pip
-        if [[ -z "$PARITY_VERSION" ]]; then
-          python -m pip install "$PARITY_ACTION_PATH"
-        else
-          if [[ ! "$PARITY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9.-]+)?$ ]]; then
-            echo "Invalid parity-version: $PARITY_VERSION" >&2
-            exit 2
-          fi
-          python -m pip install "parity-check==$PARITY_VERSION"
-        fi
+        python -m pip install "$PARITY_ACTION_PATH"
 
     - name: Run semantic verification
       id: run

@@ -146,7 +146,7 @@ Invalid configuration and error/incomplete execution evidence return exit `2`.
 | `summary` | Derived `total`, `passed`, `failed`, `error`, `excluded` and `uncovered` counts. |
 | `units` | Unit ID/status, redacted exclusion reason and mapped case name/status/example count. |
 | `manifest_sha256` | Canonical fingerprint of the effective migration inventory. |
-| `parity` | Existing data-safe Parity report schema version 3 for the mapped-case union. |
+| `parity` | Data-safe Parity report schema version 3 for the mapped-case union. |
 
 The nested Parity report's provenance contains its effective `config_sha256`. Unit IDs, case names
 and exclusion reasons pass through report redaction. No report contains compared dataframe or scalar
@@ -160,7 +160,7 @@ and exclusions before relying on the gate.
 
 ## Migration workspace
 
-Install the optional environment support and declare an existing candidate checkout against one
+Install the optional environment support and declare a candidate checkout against one
 exact released reference:
 
 ```bash
@@ -176,10 +176,10 @@ and `migration.toml` to exist by setup time. The document fields are:
 |---|---:|---:|---|
 | `version` | integer | `1` | Workspace format; only version 1 is accepted. |
 | `reference` | exact requirement | required | Released `package==version` or `package[extras]==version`. |
-| `candidate` | path | `.` | Existing local checkout with statically declared distribution metadata. |
+| `candidate` | path | `.` | Local checkout with statically declared distribution metadata. |
 | `python` | `major.minor` | invoking Python | Worker Python, at least 3.11. |
-| `config` | path | `parity.toml` | Existing Parity case configuration. |
-| `manifest` | path | `migration.toml` | Existing migration inventory. |
+| `config` | path | `parity.toml` | Parity case configuration. |
+| `manifest` | path | `migration.toml` | Migration inventory. |
 | `report_dir` | contained path | `.parity/workspace/reports` | Per-lane migration JSON reports. |
 | `lanes` | array of tables | one `default` lane | Unique dependency lanes. |
 
@@ -190,7 +190,7 @@ resolved beside the workspace file. `report_dir` must remain inside that project
 `parity migration setup` resolves one hash-pinned requirements lock per lane and prepares an
 isolated reference/candidate worker pair. `parity migration run` performs that setup and then runs
 the complete manifest in every lane, overriding only the two worker interpreter paths in the
-loaded config. It writes `<report_dir>/<lane>.json`. Existing locks keep dependency selection
+loaded config. It writes `<report_dir>/<lane>.json`. Locks keep dependency selection
 stable on later runs; `--refresh-locks` deliberately asks the resolver to upgrade them. The command
 returns `2` if any lane errors, otherwise `1` if any lane fails, otherwise `0`.
 
@@ -198,14 +198,14 @@ tox, tox-uv and uv implement this lifecycle behind the Parity commands. Generate
 environments and tox configuration are private state under `.parity/workspace`; users do not need
 to author tox configuration. Parity never clones a repository, selects or changes its revision,
 applies patches or edits candidate source. The candidate packaging metadata and resolved
-dependencies are executable supply-chain inputs and must be trusted. Explicit `python` paths in an
-ordinary `parity.toml` remain fully supported when environments are provisioned elsewhere.
+dependencies are executable supply-chain inputs and must be trusted. Use explicit `python` paths in
+`parity.toml` when environments are provisioned elsewhere.
 
 Managed setup requires the candidate distribution name to match the reference name and to be
 declared statically as `project.name`, `tool.poetry.name`, or `setup.cfg` `[metadata] name`. It
 rejects dynamic `setup.py`-only names because a stale or differently named editable package could
 otherwise make the candidate import the reference implementation. Provision both worker
-interpreters explicitly for such legacy projects.
+interpreters explicitly for projects with dynamic distribution metadata.
 
 ## Retained evidence verification
 
@@ -239,7 +239,7 @@ Declare cases with `[[cases]]`.
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
 | `name` | string | required | Unique `[A-Za-z0-9_.-]+` case identifier. |
-| `reference` | table | required | Existing implementation. |
+| `reference` | table | required | Baseline implementation. |
 | `candidate` | table | required | Replacement implementation. |
 | `fixture` | path | none | Seed input; Parquet, Arrow IPC, CSV or JSON according to loader support. |
 | `schema` | table | none | Generated input contract. At least `fixture` or `schema` is required. |
@@ -363,8 +363,8 @@ shows each requirement and satisfaction state without importing the targets.
 
 `pandas_input = "arrow"` converts the canonical input to pandas with Arrow extension dtypes. It
 preserves distinctions such as nullable integers and Arrow null versus a valid IEEE NaN, and is the
-stable default. `pandas_input = "native"` uses PyArrow's default pandas conversion for legacy code
-that expects conventional NumPy/object dtypes. Native conversion is pandas-version-dependent and
+stable default. `pandas_input = "native"` uses PyArrow's default pandas conversion for callables
+that expect conventional NumPy/object dtypes. Native conversion is pandas-version-dependent and
 can widen nullable integers or collapse null and NaN into the same missing value. This setting
 changes only the callable's input; returned pandas objects still use Parity's normal Arrow
 canonicalization.
@@ -497,8 +497,8 @@ useful missing or unexpected key evidence instead of a generic shape mismatch.
 A seed improves repeatability but a saved replay artifact is the strongest reproduction mechanism.
 With `search = false`, Parity still checks deterministic fixtures or enabled adversarial examples,
 including stability repeats, but skips property-based search beyond them. A searchless case without
-any deterministic input is rejected instead of passing without evidence. Performance policy is
-unchanged; set `[cases.performance] enabled = false` separately for a semantic-only fixture check.
+any deterministic input is rejected instead of passing without evidence. Set
+`[cases.performance] enabled = false` separately for a semantic-only fixture check.
 Mismatch signatures classify observable difference shapes, not root causes or separate bugs. Every
 generated witness is observed twice after shrinking; changing signatures or side-specific output
 nondeterminism stops the campaign as an execution error rather than creating questionable evidence.

@@ -34,7 +34,7 @@ ArtifactInput: TypeAlias = pa.Table | Mapping[str, pa.Table]
 
 
 def _normalize_inputs(value: ArtifactInput) -> tuple[list[tuple[str, pa.Table]], bool]:
-    """Return ordered, validated inputs and whether this is the legacy single-table shape."""
+    """Return ordered, validated inputs and whether this is a single-table campaign."""
 
     if isinstance(value, pa.Table):
         return [("input", value)], True
@@ -80,6 +80,39 @@ def _sanitize_json(value: Any, *, key: str | None = None) -> Any:
     if isinstance(value, (type(None), bool, int, float)):
         return value
     return f"<{type(value).__module__}.{type(value).__qualname__}>"
+
+
+def _contains_redaction(value: Any) -> bool:
+    if isinstance(value, str):
+        return "<redacted>" in value or "<path>" in value
+    if isinstance(value, dict):
+        return any(_contains_redaction(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_redaction(item) for item in value)
+    return False
+
+
+def _case_supports_automatic_replay(
+    case: Mapping[str, Any], *, input_files: Mapping[str, str], single_input: bool
+) -> bool:
+    if not all(isinstance(case.get(side), dict) for side in ("reference", "candidate")):
+        return False
+    invocation_arguments = (
+        case.get("static_args"),
+        case.get("static_kwargs"),
+        case.get("reference_kwargs"),
+        case.get("candidate_kwargs"),
+    )
+    if any(_contains_redaction(value) for value in invocation_arguments):
+        return False
+    if single_input:
+        return case.get("fixture") == next(iter(input_files.values()))
+    bundle = case.get("input_bundle")
+    return (
+        isinstance(bundle, dict)
+        and isinstance(bundle.get("inputs"), dict)
+        and set(bundle["inputs"]) == set(input_files)
+    )
 
 
 def _spec_for_replay(
@@ -133,11 +166,11 @@ def _case_for_replay(
     *,
     invocation_directory: Path,
     input_files: Mapping[str, str],
-    legacy_single: bool,
+    single_input: bool,
 ) -> dict[str, Any]:
     if isinstance(case, CaseConfig):
         config = case.model_dump(mode="json", by_alias=True)
-        if legacy_single:
+        if single_input:
             config["fixture"] = next(iter(input_files.values()))
         else:
             bundle = config.get("input_bundle")
@@ -169,7 +202,7 @@ def _case_for_replay(
         "reference": _spec_for_replay(reference, invocation_directory=invocation_directory),
         "candidate": _spec_for_replay(candidate, invocation_directory=invocation_directory),
     }
-    if legacy_single:
+    if single_input:
         replay_case["fixture"] = next(iter(input_files.values()))
     else:
         replay_case["input_bundle"] = {
@@ -219,11 +252,11 @@ class ArtifactStore:
         case_root.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=".pending-", dir=case_root))
         try:
-            normalized, legacy_single = _normalize_inputs(input_table)
+            normalized, single_input = _normalize_inputs(input_table)
             if isinstance(case, CaseConfig):
-                if legacy_single and case.input_bundle is not None:
+                if single_input and case.input_bundle is not None:
                     raise ValueError("a bundled case requires all configured input tables")
-                if not legacy_single and case.input_bundle is None:
+                if not single_input and case.input_bundle is None:
                     raise ValueError("a single-input case cannot store an input bundle")
                 if case.input_bundle is not None:
                     expected_names = tuple(case.input_bundle.inputs)
@@ -236,7 +269,7 @@ class ArtifactStore:
             arrow_paths: list[Path] = []
             parquet_paths: list[Path] = []
             for index, (input_name, table) in enumerate(normalized):
-                stem = "input" if legacy_single else f"input-{index:03d}"
+                stem = "input" if single_input else f"input-{index:03d}"
                 arrow_path = temporary / f"{stem}.arrow"
                 parquet_path = temporary / f"{stem}.parquet"
                 _write_arrow(table, arrow_path)
@@ -264,34 +297,35 @@ class ArtifactStore:
                 and runtime_provenance.candidate is not None
                 and config_sha256 is not None
             )
+            replay_case = _case_for_replay(
+                case,
+                reference,
+                candidate,
+                invocation_directory=Path.cwd(),
+                input_files=input_files,
+                single_input=single_input,
+            )
             replay: dict[str, Any] = {
-                "version": (2 if complete_runtime else 1) if legacy_single else 3,
-                "command": ["parity", "replay", "<artifact-path>"],
+                # The current replay transport covers both single inputs and
+                # named bundles. A failure without complete bindings remains
+                # useful inspection evidence, but cannot execute automatically.
+                "version": 1,
                 "working_directory": "original invocation directory",
                 "path_base": "invocation_cwd",
-                "case": _case_for_replay(
-                    case,
-                    reference,
-                    candidate,
-                    invocation_directory=Path.cwd(),
-                    input_files=input_files,
-                    legacy_single=legacy_single,
-                ),
+                "case": replay_case,
                 "environment": "inherited; values are never stored in artifacts",
-            }
-            if legacy_single:
-                replay["input"] = next(iter(input_files.values()))
-            else:
-                replay["inputs"] = [
+                "inputs": [
                     {"name": name, "file": filename} for name, filename in input_files.items()
-                ]
-            if complete_runtime:
-                replay["expected_runtime"] = (
-                    runtime_provenance.model_dump(mode="json")
-                    if runtime_provenance is not None
-                    else None
-                )
+                ],
+            }
+            if runtime_provenance is not None:
+                replay["expected_runtime"] = runtime_provenance.model_dump(mode="json")
+            if config_sha256 is not None:
                 replay["config_sha256"] = config_sha256
+            if complete_runtime and _case_supports_automatic_replay(
+                replay_case, input_files=input_files, single_input=single_input
+            ):
+                replay["command"] = ["parity", "replay", "<artifact-path>"]
             replay_path.write_text(
                 json.dumps(replay, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
@@ -303,7 +337,7 @@ class ArtifactStore:
             input_hash = input_digest.hexdigest()
             campaign_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ") + "-" + input_hash[:12]
             manifest: dict[str, Any] = {
-                "version": 1 if legacy_single else 2,
+                "version": 1,
                 "campaign_id": campaign_id,
                 "case": name,
                 "created_at": datetime.now(UTC).isoformat(),
@@ -335,16 +369,4 @@ class ArtifactStore:
             raise
 
 
-def write_failure(
-    root: str | Path,
-    case_name: str | CaseConfig,
-    input_table: ArtifactInput,
-    result: ExampleResult | BaseModel | Observation | dict[str, Any],
-    **kwargs: Any,
-) -> Path:
-    """Functional convenience wrapper around :class:`ArtifactStore`."""
-
-    return ArtifactStore(root).write_failure(case_name, input_table, result, **kwargs)
-
-
-__all__ = ["ArtifactStore", "write_failure"]
+__all__ = ["ArtifactStore"]

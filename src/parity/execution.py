@@ -124,7 +124,6 @@ class Observation:
     value: JsonValue = None
     has_value: bool = False
     exception: ExceptionInfo | None = None
-    mutated_input: bool = False
     mutated_inputs: tuple[str, ...] = ()
     return_type: str | None = None
     runtime: RuntimeProvenance | None = None
@@ -142,7 +141,6 @@ class Observation:
             "has_table": self.table is not None,
             "has_value": self.has_value,
             "exception": self.exception.to_dict() if self.exception else None,
-            "mutated_input": self.mutated_input,
             "mutated_inputs": list(self.mutated_inputs),
             "return_type": self.return_type,
             "runtime": self.runtime.model_dump(mode="json") if self.runtime else None,
@@ -659,7 +657,6 @@ def execute_current(
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(error),
-                        mutated_input=bool(mutated_inputs),
                         mutated_inputs=mutated_inputs,
                         metrics=RunMetrics(
                             duration_seconds=time.perf_counter() - started,
@@ -682,7 +679,6 @@ def execute_current(
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(conversion_error),
-                        mutated_input=bool(mutated_inputs),
                         mutated_inputs=mutated_inputs,
                         return_type=return_type,
                         metrics=RunMetrics(
@@ -695,7 +691,6 @@ def execute_current(
                     return Observation(
                         outcome=ExecutionOutcome.RETURNED,
                         table=table,
-                        mutated_input=bool(mutated_inputs),
                         mutated_inputs=mutated_inputs,
                         return_type=return_type,
                         metrics=RunMetrics(
@@ -712,7 +707,6 @@ def execute_current(
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(return_error),
-                        mutated_input=bool(mutated_inputs),
                         mutated_inputs=mutated_inputs,
                         return_type=return_type,
                         metrics=RunMetrics(
@@ -725,7 +719,6 @@ def execute_current(
                     outcome=ExecutionOutcome.RETURNED,
                     value=value,
                     has_value=True,
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
@@ -795,7 +788,6 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(error),
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     metrics=RunMetrics(
                         duration_seconds=time.perf_counter() - started,
@@ -814,7 +806,6 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(conversion_error),
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
@@ -827,7 +818,6 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RETURNED,
                     table=table,
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
@@ -844,7 +834,6 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(return_error),
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
@@ -857,7 +846,6 @@ def execute_callable_current(
                 outcome=ExecutionOutcome.RETURNED,
                 value=value,
                 has_value=True,
-                mutated_input=bool(mutated_inputs),
                 mutated_inputs=mutated_inputs,
                 return_type=return_type,
                 metrics=RunMetrics(
@@ -1139,35 +1127,43 @@ def _observation_from_worker(
     expected_input_labels: tuple[str, ...],
     allow_outputless_success: bool,
 ) -> Observation:
+    expected_fields = {
+        "exception",
+        "has_table",
+        "has_value",
+        "metrics",
+        "mutated_inputs",
+        "outcome",
+        "protocol_version",
+        "return_type",
+        "runtime",
+    }
+    if set(response) != expected_fields:
+        raise ValueError("invalid worker response fields")
     if response.get("protocol_version") != _WORKER_PROTOCOL_VERSION:
         raise ValueError("unsupported worker protocol")
     outcome = ExecutionOutcome(str(response["outcome"]))
     metrics = RunMetrics.model_validate(response["metrics"])
     exception_raw = response.get("exception")
     runtime = RuntimeProvenance.model_validate(response["runtime"])
-    mutated_raw = response.get("mutated_input")
     mutated_inputs_raw = response.get("mutated_inputs")
     has_table_raw = response.get("has_table")
     has_value_raw = response.get("has_value")
-    if not isinstance(mutated_raw, bool):
-        raise ValueError("invalid mutated_input flag")
     if not isinstance(mutated_inputs_raw, list) or not all(
         isinstance(label, str) for label in mutated_inputs_raw
     ):
         raise ValueError("invalid mutated_inputs labels")
     mutated_inputs = tuple(mutated_inputs_raw)
-    mutated_input_set = set(mutated_inputs)
-    if len(mutated_input_set) != len(mutated_inputs):
+    mutated_label_set = set(mutated_inputs)
+    if len(mutated_label_set) != len(mutated_inputs):
         raise ValueError("duplicate mutated_inputs labels")
-    if not mutated_input_set.issubset(expected_input_labels):
+    if not mutated_label_set.issubset(expected_input_labels):
         raise ValueError("unknown mutated_inputs label")
     expected_mutation_order = tuple(
-        label for label in expected_input_labels if label in mutated_input_set
+        label for label in expected_input_labels if label in mutated_label_set
     )
     if mutated_inputs != expected_mutation_order:
         raise ValueError("mutated_inputs labels are out of order")
-    if mutated_raw != bool(mutated_inputs):
-        raise ValueError("inconsistent input mutation metadata")
     if not isinstance(has_table_raw, bool) or not isinstance(has_value_raw, bool):
         raise ValueError("invalid worker output flags")
     if has_table_raw and has_value_raw:
@@ -1201,7 +1197,6 @@ def _observation_from_worker(
         outcome=outcome,
         metrics=metrics,
         exception=ExceptionInfo.from_dict(exception_raw) if exception_raw else None,
-        mutated_input=mutated_raw,
         mutated_inputs=mutated_inputs,
         return_type=return_type_raw,
         has_value=has_value_raw,

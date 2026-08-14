@@ -114,13 +114,13 @@ heavy engines should generally be optional extras and execute out of process.
 Configuration and artifact changes have a larger blast radius than internal refactors. For any
 change to models or manifests:
 
-1. Add old/new serialization fixtures.
-2. Decide whether the config version must change.
-3. Keep replay errors explicit when an old artifact is unsupported.
-4. Update config reference, architecture and Action integration.
-5. Record migration instructions in release notes.
+1. Define the complete current serialization contract in focused tests.
+2. Change the contract version when a reader must distinguish the new shape.
+3. Reject unsupported versions with an explicit error.
+4. Update the config reference, architecture and Action integration.
+5. Record the user-visible change in the release notes.
 
-Never silently reinterpret an existing policy value.
+Never silently reinterpret a policy value.
 
 ## Test layers
 

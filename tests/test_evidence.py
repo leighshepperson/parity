@@ -92,7 +92,7 @@ def _replay(
     status: Status,
     signature: str | None = SIGNATURE,
     *,
-    verification: Literal["captured", "verified", "unverified", "drifted"] = "verified",
+    verification: Literal["captured", "verified", "drifted"] = "verified",
 ) -> SuiteResult:
     failures = (
         [

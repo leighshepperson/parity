@@ -138,7 +138,7 @@ environments. For an implementation migration, keep fixtures and comparison poli
 the reference and candidate.
 
 Record dependency versions rather than relying on an ambient environment. A passing current stack
-does not establish compatibility with a declared older stack.
+does not establish compatibility with any other declared stack.
 
 With `parity.workspace.toml`, use one command for the complete matrix:
 

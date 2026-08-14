@@ -8,7 +8,6 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -19,7 +18,8 @@ import pytest
 import parity.comparison as comparison_module
 from parity.canonical import CanonicalColumn, CanonicalFrame, CanonicalSeries, canonicalize
 from parity.comparison import compare, compare_observations, compare_result, mismatch_signature
-from parity.models import ComparisonPolicy, Mismatch, MismatchKind
+from parity.execution import ExecutionOutcome, Observation
+from parity.models import ComparisonPolicy, Mismatch, MismatchKind, RunMetrics
 
 
 def test_cross_library_frames_are_compatible_by_default() -> None:
@@ -843,32 +843,35 @@ def test_exceptions_are_structured_and_checked() -> None:
     assert compare(left, TypeError("different"), ComparisonPolicy(check_exceptions=False)) == []
 
 
-def test_observation_comparison_is_duck_typed_and_checks_mutation() -> None:
-    returned = "ExecutionOutcome.RETURNED"
-    left = SimpleNamespace(
-        outcome=returned, table=pa.table({"x": [1]}), has_value=False, mutated_input=False
+def test_observation_comparison_checks_single_input_mutation() -> None:
+    left = Observation(
+        outcome=ExecutionOutcome.RETURNED,
+        metrics=RunMetrics(duration_seconds=0),
+        table=pa.table({"x": [1]}),
     )
-    right = SimpleNamespace(
-        outcome=returned, table=pa.table({"x": [1]}), has_value=False, mutated_input=True
+    right = Observation(
+        outcome=ExecutionOutcome.RETURNED,
+        metrics=RunMetrics(duration_seconds=0),
+        table=pa.table({"x": [1]}),
+        mutated_inputs=("input",),
     )
     mismatches = compare_observations(left, right)
     assert [mismatch.kind for mismatch in mismatches] == [MismatchKind.MUTATION]
+    assert mismatches[0].path == "$inputs/input"
+    assert mismatches[0].details == {"input": "input"}
 
 
 def test_observation_comparison_reports_mutated_bundle_inputs_by_label() -> None:
-    returned = "ExecutionOutcome.RETURNED"
-    left = SimpleNamespace(
-        outcome=returned,
+    left = Observation(
+        outcome=ExecutionOutcome.RETURNED,
+        metrics=RunMetrics(duration_seconds=0),
         table=pa.table({"x": [1]}),
-        has_value=False,
-        mutated_input=True,
         mutated_inputs=("orders",),
     )
-    right = SimpleNamespace(
-        outcome=returned,
+    right = Observation(
+        outcome=ExecutionOutcome.RETURNED,
+        metrics=RunMetrics(duration_seconds=0),
         table=pa.table({"x": [1]}),
-        has_value=False,
-        mutated_input=True,
         mutated_inputs=("customers",),
     )
 
@@ -881,27 +884,27 @@ def test_observation_comparison_reports_mutated_bundle_inputs_by_label() -> None
     assert mismatches[0].details == {"input": "customers"}
 
 
-def test_observation_comparison_fails_closed_on_inconsistent_mutation_metadata() -> None:
-    returned = "ExecutionOutcome.RETURNED"
-    inconsistent = SimpleNamespace(
-        outcome=returned,
+def test_observation_comparison_can_disable_input_mutation_check() -> None:
+    stable = Observation(
+        outcome=ExecutionOutcome.RETURNED,
+        metrics=RunMetrics(duration_seconds=0),
         table=pa.table({"x": [1]}),
-        has_value=False,
-        mutated_input=False,
-        mutated_inputs=("orders",),
     )
-    stable = SimpleNamespace(
-        outcome=returned,
+    mutated = Observation(
+        outcome=ExecutionOutcome.RETURNED,
+        metrics=RunMetrics(duration_seconds=0),
         table=pa.table({"x": [1]}),
-        has_value=False,
-        mutated_input=False,
-        mutated_inputs=(),
+        mutated_inputs=("input",),
     )
 
-    mismatches = compare_observations(inconsistent, stable)
-
-    assert mismatches[0].message == "input mutation metadata is inconsistent"
-    assert mismatches[0].path == "$inputs"
+    assert (
+        compare_observations(
+            stable,
+            mutated,
+            ComparisonPolicy(check_input_mutation=False),
+        )
+        == []
+    )
 
 
 def test_mismatch_signature_is_stable_across_values_indices_and_secondary_symptoms() -> None:

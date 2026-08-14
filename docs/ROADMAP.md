@@ -4,10 +4,10 @@ Parity is an open-source, local-first verifier for dataframe and numerical migra
 lists technical priorities, not release dates or commitments. Work should be guided by reproducible
 public examples and the risk of false passes.
 
-## v0.10 usability foundation
+## Current usability foundation
 
-The bounded v0.10 scope makes a complete migration easier to operate without broadening Parity into
-a source manager or general build system:
+The current release makes a complete migration easier to operate without broadening Parity into a
+source manager or general build system:
 
 - an optional `parity-check[workspace]` flow creates isolated, locked reference/candidate workers
   for one or more dependency lanes behind `parity migration init/setup/run`;
@@ -72,8 +72,8 @@ cryptographic signature or attestation.
 
 - Version and document the configuration, migration-manifest, suite-report, migration-report and
   counterexample-manifest formats.
-- Provide a clear compatibility and deprecation policy.
-- Preserve replay across supported minor versions or fail with an actionable migration message.
+- Finalize the public contracts that will receive 1.x stability guarantees.
+- Keep unsupported contract errors explicit and actionable.
 - Publish a supported platform matrix and reproducible release process.
 - Demonstrate the verifier on several independent public projects without project-specific engine
   changes.

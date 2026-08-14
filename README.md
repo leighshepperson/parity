@@ -65,12 +65,12 @@ parity migration init --reference 'your-library==1.2.3' --candidate .
 parity migration run
 ```
 
-The reference is an exact released requirement and the candidate is an existing local checkout.
+The reference is an exact released requirement and the candidate is a local checkout.
 `migration run` resolves hash-pinned dependency locks, prepares a reference/candidate environment
 for each declared lane and writes a data-safe JSON report for each lane. Parity uses tox, tox-uv
 and uv as private environment-lifecycle details; it does not clone repositories, apply patches or
-modify candidate source. Existing configs with explicit `reference.python` and `candidate.python`
-paths remain supported. See the [user guide](docs/USER_GUIDE.md#managed-migration-workspaces).
+modify candidate source. Set explicit `reference.python` and `candidate.python` paths when another
+system provisions the environments. See the [user guide](docs/USER_GUIDE.md#managed-migration-workspaces).
 
 To scaffold an existing pair directly, supply the two targets and a fixture together. This mode
 writes only `parity.toml`; it does not create demo code or install environments:
@@ -129,10 +129,10 @@ max_memory_ratio = 1.5
 fail_on_regression = false
 ```
 
-Pandas callables receive Arrow-backed extension dtypes by default. If legacy code specifically
-expects pandas' conventional NumPy/object dtypes, set `pandas_input = "native"` in that callable's
-table. Native materialization can widen nullable integers and collapse null with IEEE NaN, so the
-choice is saved in replay artifacts as part of the input contract.
+Pandas callables receive Arrow-backed extension dtypes by default. If a callable requires pandas'
+conventional NumPy/object dtypes, set `pandas_input = "native"` in its table. Native materialization
+can widen nullable integers and collapse null with IEEE NaN, so the choice is saved in replay
+artifacts as part of the input contract.
 
 Run one case, a tag, or the whole suite:
 
@@ -162,10 +162,10 @@ Reproduce it without regenerating inputs:
 parity replay .parity/orders/20260813T184205Z-a18d7e91
 ```
 
-New artifacts bind replay to the Python and dependency versions observed inside both workers.
-Parity probes both environments before importing either callable and returns an error if that
-runtime contract drifted. Older artifacts remain replayable, but are visibly marked unverified
-because they did not record an environment contract.
+Replayable artifacts bind the effective configuration and the Python and dependency versions
+observed inside both workers. Parity probes both environments before importing either callable and
+returns an error if that runtime contract drifted. Evidence without this binding remains
+inspectable but cannot be replayed automatically.
 
 Exit code `0` means every selected case passed, `1` means a semantic or enforced performance
 failure, and `2` means configuration or execution error.
@@ -323,9 +323,9 @@ steps:
 The action always adds a redacted Markdown report to the job summary. The example explicitly opts
 into uploading `.parity` even on failure. Reports omit compared values, but replay artifacts contain
 generated or fixture-derived input values; leave upload disabled unless your repository's access and
-retention policy permits that data. The `v0` tag is a moving channel for stable, Action-compatible
-0.x releases; pin a reviewed full commit SHA when an immutable Action revision is required. See the
-[Action guide](docs/GITHUB_ACTION.md).
+retention policy permits that data. The `v0` tag tracks the latest final 0.x release and minor
+releases may break public contracts before 1.0. Pin a reviewed full commit SHA when an immutable
+Action and package revision is required. See the [Action guide](docs/GITHUB_ACTION.md).
 
 ## Python API
 
@@ -398,7 +398,8 @@ the [threat model](docs/THREAT_MODEL.md).
 
 ## Development status
 
-Parity is pre-1.0: useful on real migrations, but its configuration and artifact contracts may
-evolve before `1.0`. Issues and small, synthetic reproduction cases are welcome.
+Parity is pre-1.0 and supports its latest minor release. Minor releases may change configuration,
+artifacts and APIs; patch releases preserve their minor release's contracts. Issues and small,
+synthetic reproduction cases are welcome.
 
 Licensed under the [Apache License 2.0](LICENSE).

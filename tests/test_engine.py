@@ -402,7 +402,7 @@ def test_live_importable_failure_preserves_contract_for_replay(tmp_path: Path) -
     assert artifact is not None
     replay_payload = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     replay_contract = replay_payload["case"]
-    assert replay_payload["version"] == 2
+    assert replay_payload["version"] == 1
     assert replay_payload["expected_runtime"]["reference"]["python_version"]
     assert len(replay_payload["config_sha256"]) == 64
     assert replay_contract["reference"]["adapter"] == "pandas"
@@ -432,8 +432,10 @@ def test_live_bound_instance_method_is_not_claimed_as_replayable(tmp_path: Path)
     artifact = result.cases[0].failures[0].artifact
 
     assert artifact is not None
-    replay_contract = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))["case"]
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    replay_contract = replay["case"]
     assert replay_contract["candidate"] is None
+    assert "command" not in replay
     with pytest.raises(engine.ReplayError, match="live-callable"):
         replay_artifact(artifact)
 
@@ -1800,14 +1802,18 @@ def test_artifact_replay_resolves_import_root_from_invocation_cwd(
         case,
         pa.table({"x": [1, 2]}),
         ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(
+            reference=collect_runtime_provenance(),
+            candidate=collect_runtime_provenance(),
+        ),
+        config_sha256="a" * 64,
     )
 
     result = replay_artifact(artifact)
 
     assert result.status is Status.PASSED
     assert result.cases[0].provenance is not None
-    assert result.cases[0].provenance.verification == "unverified"
-    assert "not exact" in render_terminal(result)
+    assert result.cases[0].provenance.verification == "verified"
     assert not (artifact / "replay-output").exists()
 
 
@@ -1857,7 +1863,7 @@ def test_configured_named_bundle_failure_replays_atomically(
     assert result.status is Status.FAILED
     assert artifact is not None
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 3
+    assert replay["version"] == 1
     assert [item["name"] for item in replay["inputs"]] == ["left", "right"]
 
     replayed = replay_artifact(artifact)
@@ -1930,6 +1936,11 @@ def test_positional_bundle_replay_restores_hash_bound_input_order(
             "alpha": pa.table({"x": [2]}),
         },
         ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(
+            reference=collect_runtime_provenance(),
+            candidate=collect_runtime_provenance(),
+        ),
+        config_sha256="a" * 64,
     )
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     assert list(replay["case"]["input_bundle"]["inputs"]) == ["alpha", "zebra"]
@@ -1952,7 +1963,7 @@ def test_positional_bundle_replay_restores_hash_bound_input_order(
     assert observed["names"] == ("zebra", "alpha")
 
 
-def test_v2_replay_runtime_drift_blocks_both_callables_before_import(
+def test_replay_runtime_drift_blocks_both_callables_before_import(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     marker = tmp_path / "invoked.txt"
@@ -2007,7 +2018,7 @@ def test_v2_replay_runtime_drift_blocks_both_callables_before_import(
     assert not marker.exists()
 
 
-def test_v2_replay_keeps_verified_provenance_when_callable_crashes(
+def test_replay_keeps_verified_provenance_when_callable_crashes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "crash_transform.py").write_text(
@@ -2298,7 +2309,63 @@ def test_replay_manifest_must_bind_every_consumed_file(tmp_path: Path) -> None:
         replay_artifact(artifact)
 
 
-def test_replay_rejects_single_input_contract_with_bundle_manifest(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("version", True, "unsupported replay contract"),
+        ("version", 1.0, "unsupported replay contract"),
+        ("version", 2, "unsupported replay contract"),
+        ("expected_runtime", None, "runtime provenance is missing or invalid"),
+        ("config_sha256", None, "configuration fingerprint is missing or invalid"),
+    ],
+)
+def test_replay_contract_is_current_and_fail_closed(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    runtime = collect_runtime_provenance()
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        "bound-contract",
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="d" * 64,
+    )
+    replay_path = artifact / "replay.json"
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    replay[field] = value
+    replay_path.write_text(json.dumps(replay, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    replay_content = replay_path.read_bytes()
+    manifest_path = artifact / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["replay.json"] = {
+        "sha256": hashlib.sha256(replay_content).hexdigest(),
+        "bytes": len(replay_content),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(engine.ReplayError, match=message):
+        replay_artifact(artifact)
+
+
+def test_inspection_only_artifact_cannot_execute_automatically(tmp_path: Path) -> None:
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        "inspection-only",
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+    )
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    assert "command" not in replay
+
+    with pytest.raises(engine.ReplayError, match="runtime provenance is missing or invalid"):
+        replay_artifact(artifact)
+
+
+@pytest.mark.parametrize("unsupported_version", [True, 1.0, 2])
+def test_replay_rejects_unsupported_manifest_version(
+    tmp_path: Path, unsupported_version: object
+) -> None:
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "manifest-version",
         pa.table({"x": [1]}),
@@ -2306,10 +2373,10 @@ def test_replay_rejects_single_input_contract_with_bundle_manifest(tmp_path: Pat
     )
     manifest_path = artifact / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["version"] = 2
+    manifest["version"] = unsupported_version
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(engine.ReplayError, match="single-input replay requires"):
+    with pytest.raises(engine.ReplayError, match="unsupported artifact manifest"):
         replay_artifact(artifact)
 
 
@@ -2360,7 +2427,14 @@ def test_replay_rejects_sanitized_static_arguments(
         monkey_case,
         pa.table({"x": [1]}),
         ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(
+            reference=collect_runtime_provenance(),
+            candidate=collect_runtime_provenance(),
+        ),
+        config_sha256="f" * 64,
     )
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    assert "command" not in replay
 
     with pytest.raises(engine.ReplayError, match="redacted static arguments"):
         replay_artifact(artifact)

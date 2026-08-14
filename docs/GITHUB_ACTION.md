@@ -36,15 +36,14 @@ Case and tag filters are combined by the CLI.
 
 ## Release selection
 
-`leighshepperson/parity@v0` is the moving channel for stable 0.x releases that preserve the
-composite Action interface. It advances only after the corresponding package has passed the release
-suite and published successfully. It never intentionally points at a prerelease or an older
-release. Do not use `@main` for CI.
+`leighshepperson/parity@v0` is the moving channel for the latest final 0.x release. It advances only
+after the corresponding package has passed the release suite and published successfully. Parity is
+pre-1.0, so a minor release on this channel may change the Action interface or other public
+contracts. Do not use `@main` for CI.
 
 A tag can be moved. For immutable execution, replace `v0` with a reviewed full-length commit SHA
-from this repository and use dependency automation to review later updates. The optional
-`parity-version` input strictly pins a PyPI release instead of installing the Action's source
-revision; leave it empty unless deliberately testing a different package release.
+from this repository and use dependency automation to review later updates. The Action always
+installs Parity from that selected revision, so its workflow and Python package cannot drift apart.
 
 ## Migration-manifest gate
 
@@ -77,7 +76,6 @@ opt-in upload policy for that directory.
 | `stability-repeats` | empty | Override same-input observations per implementation, from 1 through 10. |
 | `performance` | `true` | `true` or `false`. |
 | `python-version` | `3.12` | setup-python interpreter. |
-| `parity-version` | empty | Optional strict package version. |
 | `artifact-path` | `.parity` | Uploaded evidence path. |
 | `upload-artifact` | `false` | Opt in to uploading reports and raw counterexamples on pass, mismatch or error. |
 | `artifact-name` | `parity-report` | GitHub artifact name. |
@@ -90,7 +88,7 @@ steps; use `if: always()` or job-level handling if a later consumer needs them.
 
 The action installs Parity, pandas, Polars and its own runtime dependencies. Install your project
 and any private packages in earlier steps. Callable `python` fields can point to separately prepared
-legacy/candidate virtual environments.
+reference and candidate virtual environments.
 
 ## Artifact privacy
 

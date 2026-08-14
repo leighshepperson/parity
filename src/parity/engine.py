@@ -826,9 +826,7 @@ def _campaign(
     ]
     status = _status_for(failures, None)
     verification = "captured"
-    if exact_only and expected_provenance is None:
-        verification = "unverified"
-    elif expected_provenance is not None:
+    if expected_provenance is not None:
         verification = (
             "verified"
             if reference_runtime == expected_provenance.reference
@@ -1428,11 +1426,11 @@ def _verify_manifest(root: Path) -> dict[str, Any]:
         manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise ReplayError("artifact manifest is missing or invalid") from error
-    if manifest.get("version") not in {1, 2} or not isinstance(manifest.get("files"), dict):
+    if type(manifest.get("version")) is not int or manifest.get("version") != 1:
+        raise ReplayError("unsupported artifact manifest")
+    if not isinstance(manifest.get("files"), dict):
         raise ReplayError("unsupported artifact manifest")
     required = {"replay.json", "result.json"}
-    if manifest.get("version") == 1:
-        required.add("input.arrow")
     missing = required - set(manifest["files"])
     if missing:
         raise ReplayError(
@@ -1474,17 +1472,15 @@ def _verify_manifest(root: Path) -> dict[str, Any]:
     return manifest
 
 
-def _replay_bundle_inputs(
-    replay: dict[str, Any], manifest: dict[str, Any], root: Path
-) -> dict[str, Path]:
+def _replay_inputs(replay: dict[str, Any], manifest: dict[str, Any], root: Path) -> dict[str, Path]:
     raw_inputs = replay.get("inputs")
-    if not isinstance(raw_inputs, list) or not 2 <= len(raw_inputs) <= 3:
-        raise ReplayError("replay input bundle must contain two or three named inputs")
+    if not isinstance(raw_inputs, list) or not 1 <= len(raw_inputs) <= 3:
+        raise ReplayError("replay must contain one to three named inputs")
     inputs: dict[str, Path] = {}
     seen_files: set[str] = set()
     for raw in raw_inputs:
         if not isinstance(raw, dict) or set(raw) != {"name", "file"}:
-            raise ReplayError("replay input bundle contains an invalid entry")
+            raise ReplayError("replay inputs contain an invalid entry")
         name, filename = raw["name"], raw["file"]
         if (
             not isinstance(name, str)
@@ -1496,9 +1492,9 @@ def _replay_bundle_inputs(
             or filename in seen_files
             or not filename.endswith(".arrow")
         ):
-            raise ReplayError("replay input bundle contains an unsafe entry")
+            raise ReplayError("replay inputs contain an unsafe entry")
         if filename not in manifest["files"]:
-            raise ReplayError(f"artifact manifest does not bind bundled input: {filename}")
+            raise ReplayError(f"artifact manifest does not bind replay input: {filename}")
         inputs[name] = root / filename
         seen_files.add(filename)
     return inputs
@@ -1583,35 +1579,27 @@ def replay_artifact(path: str | Path) -> SuiteResult:
     except (OSError, ValueError) as error:
         raise ReplayError("replay.json is missing or invalid") from error
     replay_version = replay.get("version")
-    if replay_version not in {1, 2, 3} or not isinstance(replay.get("case"), dict):
+    if (
+        type(replay_version) is not int
+        or replay_version != 1
+        or not isinstance(replay.get("case"), dict)
+    ):
         raise ReplayError("unsupported replay contract")
     if replay.get("path_base") != "invocation_cwd":
         raise ReplayError("unsupported replay path base")
-    bundled_inputs: dict[str, Path] | None = None
-    if replay_version == 3:
-        if manifest.get("version") != 2:
-            raise ReplayError("bundled replay requires a version 2 manifest")
-        bundled_inputs = _replay_bundle_inputs(replay, manifest, root)
-    else:
-        if manifest.get("version") != 1:
-            raise ReplayError("single-input replay requires a version 1 manifest")
-        if replay.get("input") != "input.arrow":
-            raise ReplayError("unsupported replay input")
-    expected_provenance: CaseProvenance | None = None
-    config_sha256: str | None = None
-    if replay_version == 2 or (replay_version == 3 and replay.get("expected_runtime") is not None):
-        try:
-            expected_provenance = CaseProvenance.model_validate(replay.get("expected_runtime"))
-        except ValueError as error:
-            raise ReplayError("replay runtime provenance is missing or invalid") from error
-        if expected_provenance.reference is None or expected_provenance.candidate is None:
-            raise ReplayError("replay runtime provenance is incomplete")
-        raw_config_sha256 = replay.get("config_sha256")
-        if not isinstance(raw_config_sha256, str) or not re.fullmatch(
-            r"[0-9a-f]{64}", raw_config_sha256
-        ):
-            raise ReplayError("replay configuration fingerprint is missing or invalid")
-        config_sha256 = raw_config_sha256
+    replay_inputs = _replay_inputs(replay, manifest, root)
+    try:
+        expected_provenance = CaseProvenance.model_validate(replay.get("expected_runtime"))
+    except ValueError as error:
+        raise ReplayError("replay runtime provenance is missing or invalid") from error
+    if expected_provenance.reference is None or expected_provenance.candidate is None:
+        raise ReplayError("replay runtime provenance is incomplete")
+    raw_config_sha256 = replay.get("config_sha256")
+    if not isinstance(raw_config_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", raw_config_sha256
+    ):
+        raise ReplayError("replay configuration fingerprint is missing or invalid")
+    config_sha256 = raw_config_sha256
     case_data = dict(replay["case"])
     invocation_arguments = (
         case_data.get("static_args"),
@@ -1623,26 +1611,29 @@ def replay_artifact(path: str | Path) -> SuiteResult:
         raise ReplayError("redacted static arguments cannot be replayed automatically")
     _restore_environment(case_data)
     _resolve_replay_paths(case_data, Path.cwd().resolve())
-    if bundled_inputs is None:
-        case_data["fixture"] = root / "input.arrow"
+    raw_bundle = case_data.get("input_bundle")
+    if raw_bundle is None:
+        if set(replay_inputs) != {"input"}:
+            raise ReplayError("single-input case requires exactly one input named 'input'")
+        case_data["fixture"] = replay_inputs["input"]
     else:
-        raw_bundle = case_data.get("input_bundle")
         if not isinstance(raw_bundle, dict):
             raise ReplayError("artifact input bundle does not match its case contract")
         raw_specs = raw_bundle.get("inputs")
         if (
             not isinstance(raw_bundle, dict)
             or not isinstance(raw_specs, dict)
-            or set(raw_specs) != set(bundled_inputs)
+            or set(raw_specs) != set(replay_inputs)
+            or not 2 <= len(replay_inputs) <= 3
         ):
             raise ReplayError("artifact input bundle does not match its case contract")
         # JSON object ordering is not a trusted invocation contract (the artifact
         # writer sorts keys for deterministic files). Replay's separately
         # hash-bound inputs list is authoritative for positional binding order.
-        ordered_specs = {name: raw_specs[name] for name in bundled_inputs}
+        ordered_specs = {name: raw_specs[name] for name in replay_inputs}
         raw_bundle["inputs"] = ordered_specs
         raw_specs = ordered_specs
-        for name, path in bundled_inputs.items():
+        for name, path in replay_inputs.items():
             raw_spec = raw_specs.get(name)
             if not isinstance(raw_spec, dict):
                 raise ReplayError("artifact contains an invalid bundled input contract")

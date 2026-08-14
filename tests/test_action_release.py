@@ -187,6 +187,41 @@ def test_current_user_guides_do_not_pin_parity_patch_versions() -> None:
     assert user_guide.count('"parity-check==$PARITY_RELEASE"') == 2
 
 
+def test_action_always_installs_its_own_revision() -> None:
+    action = (ROOT / "action.yml").read_text(encoding="utf-8")
+    action_guide = (ROOT / "docs" / "GITHUB_ACTION.md").read_text(encoding="utf-8")
+    security_guide = (ROOT / "docs" / "SECURITY.md").read_text(encoding="utf-8")
+    assert "parity-version" not in action
+    assert "parity-version" not in action_guide
+    assert "parity-version" not in security_guide
+    assert 'python -m pip install "$PARITY_ACTION_PATH"' in action
+    assert 'python -m pip install "parity-check==' not in action
+    assert "latest final 0.x release" in action_guide
+    assert "minor release on this channel may change" in action_guide
+
+
+def test_current_guides_describe_only_the_current_replay_contract() -> None:
+    guides = [
+        ROOT / "README.md",
+        ROOT / "docs" / "ARCHITECTURE.md",
+        ROOT / "docs" / "USER_GUIDE.md",
+    ]
+    content = "\n".join(path.read_text(encoding="utf-8") for path in guides).lower()
+    for stale_phrase in (
+        "legacy artifact",
+        "legacy single",
+        "older artifact",
+        "reported as unverified",
+        "replay contract 2",
+        "replay contract 3",
+        "manifest contract 2",
+    ):
+        assert stale_phrase not in content
+    architecture = guides[1].read_text(encoding="utf-8")
+    assert "Manifest contract 1" in architecture
+    assert "Replay contract 1" in architecture
+
+
 def test_release_and_bootstrap_workflows_share_the_guarded_promoter() -> None:
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     bootstrap = (ROOT / ".github" / "workflows" / "promote-action-major.yml").read_text(

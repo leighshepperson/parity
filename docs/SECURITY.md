@@ -94,13 +94,11 @@ select branches or commits, apply patches, or edit the candidate checkout. That 
 environment setup from silently choosing the source being evaluated; it does not make an existing
 checkout or its build backend safe.
 
-The composite Action installs the action's own source revision by default. A caller may request a
-strict `parity-version`; arbitrary package specifiers are rejected.
-
-Public examples use the moving `v0` Action tag so stable, interface-compatible fixes arrive without
-copying a patch version into every workflow. That convenience tag is mutable and is promoted only
-after its matching package publishes successfully. Pin a reviewed full-length commit SHA when an
-immutable Action revision is required, and do not run the default branch directly in CI.
+The composite Action always installs the Action's selected source revision. Public examples use the
+moving `v0` tag, which tracks the latest final 0.x release after its matching package publishes
+successfully. Minor releases may break public contracts before 1.0. Pin a reviewed full-length
+commit SHA when an immutable Action and package revision is required, and do not run the default
+branch directly in CI.
 
 ## Executed code
 

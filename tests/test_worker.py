@@ -52,6 +52,7 @@ def test_worker_file_protocol(tmp_path: Path, monkeypatch) -> None:
     assert response["runtime"]["python_implementation"]
     assert response["has_table"] is True
     assert response["mutated_inputs"] == []
+    assert "mutated_input" not in response
     assert "table" not in response
     assert _read_arrow(output_path).column("x").to_pylist() == [4, 5]
 
@@ -102,7 +103,6 @@ def test_worker_keyword_bundle_protocol(tmp_path: Path, monkeypatch) -> None:
 
     response = json.loads(response_path.read_text(encoding="utf-8"))
     assert response["outcome"] == "returned"
-    assert response["mutated_input"] is True
     assert response["mutated_inputs"] == ["right"]
     assert _read_arrow(output_path).column("x").to_pylist() == [5]
 

@@ -87,11 +87,11 @@ On failure, read the mismatch and diagnosis, then replay the preserved input:
 parity replay .parity/orders/<timestamp>-<hash>
 ```
 
-Current artifacts record the runtime observed inside each worker. Replay first probes both workers
-without importing the configured targets. If Python, Parity, platform or a recorded distribution
-drifted, neither callable runs and replay returns an error. A legacy artifact without provenance is
-still usable, but terminal and Markdown reports mark it unverified rather than claiming an exact
-reproduction.
+Replayable artifacts record the effective configuration and runtime observed inside each worker.
+Replay first probes both workers without importing the configured targets. If Python, Parity,
+platform or a recorded distribution drifted, neither callable runs and replay returns an error.
+Evidence without a complete runtime and configuration binding is inspectable but cannot be replayed
+automatically.
 
 When a JSON suite or migration report retains several failures, verify all of its referenced
 artifacts in report order:
@@ -188,8 +188,8 @@ never pass without execution evidence. Overall exit codes are:
   errored or incomplete.
 
 Error takes precedence over failure. The JSON output uses migration report schema version 1 and
-contains derived counts, per-unit case status, a canonical manifest hash and the existing data-safe
-Parity report for the selected case union. That nested report carries the effective configuration
+contains derived counts, per-unit case status, a canonical manifest hash and the data-safe Parity
+report for the selected case union. That nested report carries the effective configuration
 hash. Reports omit compared values and redact unit identifiers, case names and exclusion reasons;
 counterexample artifacts still contain actual fixture-derived or generated inputs.
 
@@ -210,7 +210,7 @@ parity migration run
 ```
 
 `migration init` writes only `parity.workspace.toml`. The exact released requirement supplies the
-reference package; the existing checkout is installed as the candidate. `migration run` resolves a
+reference package; the candidate checkout is installed as the candidate. `migration run` resolves a
 hash-pinned requirements lock, creates both isolated workers, runs the unfiltered migration gate,
 and writes `.parity/workspace/reports/default.json`. Re-running uses the existing lock; pass
 `--refresh-locks` only for a deliberate dependency update. `parity migration setup` prepares the
@@ -243,9 +243,8 @@ files are resolver inputs and may use ordinary compatible ranges; the generated 
 exact transitive result with hashes. The configured reference and candidate targets, input domain,
 comparison policy and migration inventory stay identical across lanes.
 
-The workspace is optional. Existing teams may keep managing virtual environments themselves and
-set `reference.python` and `candidate.python` explicitly. This is useful for externally provisioned
-runners or environment systems that Parity must not own.
+The workspace is optional. Set `reference.python` and `candidate.python` explicitly for externally
+provisioned runners or environment systems that Parity must not own.
 
 ### Reusing cases without hiding the contract
 
@@ -278,14 +277,14 @@ Targets use `package.module:function` syntax. The callable receives the input fr
 positional argument, followed by `static_args`. Both sides receive `static_kwargs`; the reference
 also receives `reference_kwargs` and the candidate receives `candidate_kwargs`.
 
-For an existing migration, `parity init` can write a minimal fixture-backed case directly. The
+`parity init` can write a minimal fixture-backed case directly. The
 three project inputs are all-or-none, and the command validates the target syntax, adapters and
 fixture before atomically writing the configuration:
 
 ```bash
 parity init migrations/parity.toml \
-  --reference legacy.orders:transform \
-  --candidate rewrite.orders:transform \
+  --reference orders.reference:transform \
+  --candidate orders.candidate:transform \
   --fixture tests/fixtures/orders.parquet \
   --case-name orders \
   --reference-adapter pandas \
@@ -305,19 +304,19 @@ target can also run in two environments prepared by another tool. For example, t
 Polars wrapper under two releases while keeping the interpreter paths explicit:
 
 ```bash
-python -m venv .venv-polars-old
-python -m venv .venv-polars-new
+python -m venv .venv-polars-reference
+python -m venv .venv-polars-candidate
 PARITY_RELEASE="$(parity version)"
-.venv-polars-old/bin/python -m pip install "parity-check==$PARITY_RELEASE" polars==1.0.0
-.venv-polars-new/bin/python -m pip install "parity-check==$PARITY_RELEASE" polars==1.41.1
+.venv-polars-reference/bin/python -m pip install "parity-check==$PARITY_RELEASE" polars==1.0.0
+.venv-polars-candidate/bin/python -m pip install "parity-check==$PARITY_RELEASE" polars==1.41.1
 
 parity init parity.toml \
   --reference project.polars_transform:run \
   --candidate project.polars_transform:run \
   --fixture tests/fixtures/input.parquet \
   --reference-adapter polars --candidate-adapter polars \
-  --reference-python .venv-polars-old/bin/python \
-  --candidate-python .venv-polars-new/bin/python \
+  --reference-python .venv-polars-reference/bin/python \
+  --candidate-python .venv-polars-candidate/bin/python \
   --record-distribution polars
 
 parity doctor --config parity.toml
@@ -344,16 +343,16 @@ reference_kwargs = { engine = "pandas" }
 candidate_kwargs = { engine = "polars" }
 
 [cases.reference]
-target = "legacy.orders:transform"
+target = "orders.reference:transform"
 adapter = "pandas"
 pandas_input = "native"
-python = ".venv-legacy/bin/python"
+python = ".venv-reference/bin/python"
 workdir = "."
 record_distributions = ["orders-lib", "scikit-learn"]
 required_distributions = { orders-lib = "==1.2.*", pandas = ">=2,<3" }
 
 [cases.candidate]
-target = "rewrite.orders:transform"
+target = "orders.candidate:transform"
 adapter = "polars"
 python = ".venv-candidate/bin/python"
 workdir = "."
@@ -402,8 +401,8 @@ versions for live checks:
 
 ```python
 result = parity.verify(
-    legacy,
-    rewrite,
+    reference_transform,
+    candidate_transform,
     fixture=sample,
     reference_adapter="pandas",
     candidate_adapter="polars",
@@ -414,8 +413,8 @@ result = parity.verify(
 ```
 
 Live joins use `input_fixtures={"orders": orders, "customers": customers}` and optionally matching
-`input_schemas`, `relationships`, and `input_binding="keyword"` or `"positional"`. Do not combine
-those arguments with the legacy single `fixture`/`schema` pair.
+`input_schemas`, `relationships`, and `input_binding="keyword"` or `"positional"`. These bundle
+arguments are mutually exclusive with the single-frame `fixture`/`schema` pair.
 
 When both live callables are plain module-level functions with stable import paths, failure
 artifacts preserve the full comparison contract and can be replayed from the same project checkout.
@@ -443,8 +442,8 @@ execution order. Parity repeats deterministic passing inputs and compares each i
 its own first observation; matching drift is therefore an error rather than a pass. Configure the
 total observations with `generation.stability_repeats` (default `2`, or `1` to disable). If an
 invocation times out or crashes, Parity terminates that session and reports an error instead of
-restarting it with clean state. Library users who specifically need a new process for each call can
-continue to use `parity.execution.execute_isolated`.
+restarting it with clean state. Use `parity.execution.execute_isolated` when every call requires a
+fresh process.
 
 The `environment` table contains literal environment overrides. Do not put credentials in
 `parity.toml`; inject secrets through the CI runner if a wrapper truly needs them. Prefer pure,

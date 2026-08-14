@@ -17,13 +17,10 @@ from parity.models import (
 )
 from parity.provenance import DistributionProvenance, RuntimeProvenance
 from parity.reporting import (
-    render_github_summary,
     render_json,
     render_junit,
     render_markdown,
     render_terminal,
-    write_json,
-    write_junit,
     write_report,
 )
 
@@ -101,25 +98,16 @@ def test_json_report_is_machine_readable_and_elides_values(tmp_path: Path) -> No
     assert str(tmp_path) not in rendered
 
 
-def test_legacy_replay_provenance_is_visibly_unverified(tmp_path: Path) -> None:
-    suite = _suite(tmp_path)
-    assert suite.cases[0].provenance is not None
-    suite.cases[0].provenance.verification = "unverified"
-
-    markdown = render_markdown(suite)
-    terminal = render_terminal(suite)
-
-    assert "not exact" in markdown
-    assert "not exact" in terminal
-
-
 def test_human_reports_show_counts_not_compared_data(tmp_path: Path) -> None:
     suite = _suite(tmp_path)
     markdown = render_markdown(suite)
     assert "# Parity verification" in markdown
     assert "1 value" in markdown
     assert "1 distinct mismatch signature" in markdown
-    assert render_github_summary(suite) == markdown
+    assert (
+        write_report(suite, "github", tmp_path / "summary.md").read_text(encoding="utf-8")
+        == markdown
+    )
     terminal = render_terminal(suite)
     assert "Parity FAILED" in terminal
     assert "1 value" in terminal
@@ -154,10 +142,10 @@ def test_junit_is_valid_and_data_safe(tmp_path: Path) -> None:
     assert "secret@example.test" not in rendered
 
 
-def test_report_writers_are_compatible_and_atomic(tmp_path: Path) -> None:
+def test_report_writer_is_atomic_for_every_file_format(tmp_path: Path) -> None:
     suite = _suite(tmp_path)
-    json_path = write_json(suite, tmp_path / "reports" / "result.json")
-    junit_path = write_junit(suite, tmp_path / "reports" / "junit.xml")
+    json_path = write_report(suite, "json", tmp_path / "reports" / "result.json")
+    junit_path = write_report(suite, "junit", tmp_path / "reports" / "junit.xml")
     markdown_path = write_report(suite, "markdown", tmp_path / "reports" / "summary.md")
     assert json.loads(json_path.read_text(encoding="utf-8"))["status"] == "failed"
     assert ET.parse(junit_path).getroot().tag == "testsuite"

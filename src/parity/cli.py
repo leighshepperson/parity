@@ -212,7 +212,7 @@ def check(
     """Run semantic verification campaigns."""
 
     from parity.engine import run_suite
-    from parity.reporting import render_markdown, render_terminal, write_json, write_junit
+    from parity.reporting import render_markdown, render_terminal, write_report
 
     try:
         config = load_config(config_path)
@@ -246,9 +246,9 @@ def check(
     result = run_suite(config, selected_cases=selected or None)
     render_terminal(result, console=console)
     if json_output is not None:
-        write_json(result, json_output)
+        write_report(result, "json", json_output)
     if junit_output is not None:
-        write_junit(result, junit_output)
+        write_report(result, "junit", junit_output)
     markdown = render_markdown(result)
     if markdown_output is not None:
         markdown_output.write_text(markdown, encoding="utf-8")

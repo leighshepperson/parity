@@ -145,8 +145,6 @@ def report_payload(result: SuiteResult) -> dict[str, Any]:
 def _provenance_warning(case: CaseResult) -> str | None:
     if case.provenance is None:
         return None
-    if case.provenance.verification == "unverified":
-        return "legacy replay has no recorded runtime provenance; this run is not exact"
     if case.provenance.verification == "drifted":
         return "runtime provenance drifted; callable execution was blocked"
     return None
@@ -249,12 +247,6 @@ def render_markdown(result: SuiteResult) -> str:
         ]
     )
     return "\n".join(lines)
-
-
-def render_github_summary(result: SuiteResult) -> str:
-    """Alias with an explicit name for ``GITHUB_STEP_SUMMARY`` output."""
-
-    return render_markdown(result)
 
 
 def render_terminal(result: SuiteResult, *, color: bool = False, console: Any | None = None) -> str:
@@ -376,7 +368,7 @@ def write_report(result: SuiteResult, format: ReportFormat, destination: str | P
     renderers = {
         "json": render_json,
         "markdown": render_markdown,
-        "github": render_github_summary,
+        "github": render_markdown,
         "terminal": render_terminal,
         "junit": render_junit,
     }
@@ -400,26 +392,11 @@ def write_report(result: SuiteResult, format: ReportFormat, destination: str | P
     return path
 
 
-def write_json(result: SuiteResult, destination: str | Path) -> Path:
-    """Compatibility convenience for CLI and CI integrations."""
-
-    return write_report(result, "json", destination)
-
-
-def write_junit(result: SuiteResult, destination: str | Path) -> Path:
-    """Compatibility convenience for CLI and CI integrations."""
-
-    return write_report(result, "junit", destination)
-
-
 __all__ = [
-    "render_github_summary",
     "render_json",
     "render_junit",
     "render_markdown",
     "render_terminal",
     "report_payload",
-    "write_json",
-    "write_junit",
     "write_report",
 ]

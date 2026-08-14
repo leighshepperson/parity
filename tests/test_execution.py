@@ -243,7 +243,7 @@ def test_execute_current_adapts_arrow_and_returns_arrow(
     if sys.platform != "win32":
         assert observation.metrics.peak_rss_bytes is not None
         assert observation.metrics.peak_rss_bytes > 0
-    assert not observation.mutated_input
+    assert observation.mutated_inputs == ()
 
 
 def test_auto_adapter_uses_annotation_and_static_kwargs(transform_module: Path) -> None:
@@ -312,9 +312,9 @@ def test_bundle_mutation_reports_the_affected_input_even_when_callable_raises(
     )
 
     assert observation.outcome is ExecutionOutcome.RAISED
-    assert observation.mutated_input
     assert observation.mutated_inputs == ("right",)
     assert observation.to_metadata()["mutated_inputs"] == ["right"]
+    assert "mutated_input" not in observation.to_metadata()
 
 
 def test_live_callable_accepts_positional_bundle_and_materializes_each_input() -> None:
@@ -328,7 +328,6 @@ def test_live_callable_accepts_positional_bundle_and_materializes_each_input() -
 
     assert observation.succeeded
     assert observation.value == {"value": 51}
-    assert observation.mutated_input
     assert observation.mutated_inputs == ("0",)
     assert left.column("left").to_pylist() == [10, 20]
 
@@ -386,8 +385,8 @@ def test_pandas_input_materialization_is_explicit_and_defaults_to_arrow(
 
     assert arrow.succeeded
     assert native.succeeded
-    assert not arrow.mutated_input
-    assert not native.mutated_input
+    assert arrow.mutated_inputs == ()
+    assert native.mutated_inputs == ()
     assert arrow.value == {
         "integer_dtype": "int64[pyarrow]",
         "floating_dtype": "double[pyarrow]",
@@ -472,7 +471,6 @@ def test_mutation_exception_and_json_return_are_observed(transform_module: Path)
         CallableSpec(target="parity_test_transforms:pandas_mutate", adapter="pandas"), _table()
     )
     assert mutated.succeeded
-    assert mutated.mutated_input
     assert mutated.mutated_inputs == ("input",)
 
     raised = execute_current(
@@ -725,7 +723,7 @@ def test_isolated_session_matches_fresh_worker_observation(transform_module: Pat
     assert persistent.table is not None
     assert fresh.table is not None
     assert persistent.table.equals(fresh.table)
-    assert persistent.mutated_input is fresh.mutated_input
+    assert persistent.mutated_inputs == fresh.mutated_inputs
     assert persistent.return_type == fresh.return_type
 
 
@@ -741,9 +739,9 @@ def test_isolated_session_preserves_module_state_but_refreshes_each_input(
         second = session.execute(pa.table({"x": [41], "name": ["fresh"]}))
 
     assert first.succeeded
-    assert first.mutated_input
+    assert first.mutated_inputs == ("input",)
     assert second.succeeded
-    assert second.mutated_input
+    assert second.mutated_inputs == ("input",)
     assert first.value == {"call": 1, "input": 1}
     assert second.value == {"call": 2, "input": 41}
     assert session.closed
@@ -868,19 +866,28 @@ def test_isolated_session_malformed_runtime_fails_closed(
     assert unavailable.exception.type == "WorkerSessionUnavailableError"
 
 
-def test_isolated_session_unknown_mutation_label_fails_closed(
-    transform_module: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("mutated_inputs", ["customer-secret"]),
+        ("mutated_input", True),
+    ],
+)
+def test_isolated_session_invalid_mutation_metadata_fails_closed(
+    transform_module: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
 ) -> None:
     original_loads = __import__("parity.execution", fromlist=["json"]).json.loads
 
-    def unknown_mutation(payload: str):
+    def invalid_mutation(payload: str):
         parsed = original_loads(payload)
         if isinstance(parsed, dict) and "outcome" in parsed:
-            parsed["mutated_input"] = True
-            parsed["mutated_inputs"] = ["customer-secret"]
+            parsed[field] = value
         return parsed
 
-    monkeypatch.setattr("parity.execution.json.loads", unknown_mutation)
+    monkeypatch.setattr("parity.execution.json.loads", invalid_mutation)
     spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
     with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
         malformed = session.execute(_table())

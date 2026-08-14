@@ -57,7 +57,9 @@ def _result() -> ExampleResult:
     )
 
 
-def test_artifact_campaign_is_complete_replayable_and_hashed(tmp_path: Path) -> None:
+def test_inspection_artifact_is_complete_hashed_and_not_claimed_as_replayable(
+    tmp_path: Path,
+) -> None:
     destination = ArtifactStore(tmp_path / "artifacts").write_failure(
         _case(tmp_path),
         pa.table({"account": ["customer-a"], "amount": [10]}),
@@ -79,9 +81,11 @@ def test_artifact_campaign_is_complete_replayable_and_hashed(tmp_path: Path) -> 
     replay = json.loads(replay_text)
     assert replay["version"] == 1
     assert "expected_runtime" not in replay
-    assert replay["command"] == ["parity", "replay", "<artifact-path>"]
+    assert "config_sha256" not in replay
+    assert "command" not in replay
     assert replay["working_directory"] == "original invocation directory"
     assert replay["path_base"] == "invocation_cwd"
+    assert replay["inputs"] == [{"name": "input", "file": "input.arrow"}]
     assert replay["case"]["fixture"] == "input.arrow"
     assert replay["case"]["reference"] is None
     assert replay["case"]["static_kwargs"]["api_key"] == "<redacted>"
@@ -101,7 +105,7 @@ def test_artifact_campaign_is_complete_replayable_and_hashed(tmp_path: Path) -> 
     assert str(tmp_path) not in replay_text
 
 
-def test_artifact_uses_v2_only_with_complete_runtime_and_config_contract(
+def test_artifact_records_complete_runtime_and_config_bindings(
     tmp_path: Path,
 ) -> None:
     runtime = collect_runtime_provenance(["definitely-not-installed-artifact-probe"])
@@ -129,28 +133,39 @@ def test_artifact_uses_v2_only_with_complete_runtime_and_config_contract(
     )
 
     replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 2
+    assert replay["version"] == 1
+    assert replay["command"] == ["parity", "replay", "<artifact-path>"]
     assert replay["config_sha256"] == "a" * 64
     assert replay["expected_runtime"]["reference"]["python_version"]
     assert replay["expected_runtime"]["candidate"]["distributions"]
     assert replay["case"]["comparison"]["row_order"] == "keyed"
     assert replay["case"]["comparison"]["row_keys"] == ["account", "sequence"]
 
-    # Keyed alignment is an additive CaseConfig field, not a new replay
-    # transport. The existing v2 contract reconstructs it without guessing.
     restored = CaseConfig.model_validate(replay["case"])
     assert restored.comparison == case.comparison
     assert restored.reference.required_distributions == {"numpy": ">=1"}
     assert restored.candidate.required_distributions == {"numpy": ">=1"}
 
-    # Replay payloads produced before keyed alignment omitted row_keys. They
-    # retain their original strict/ignore semantics through the empty default.
-    legacy_case = dict(replay["case"])
-    legacy_comparison = dict(legacy_case["comparison"])
-    legacy_comparison["row_order"] = "strict"
-    legacy_comparison.pop("row_keys")
-    legacy_case["comparison"] = legacy_comparison
-    assert CaseConfig.model_validate(legacy_case).comparison.row_keys == []
+
+def test_artifact_preserves_partial_runtime_for_inspection_without_replay_command(
+    tmp_path: Path,
+) -> None:
+    runtime = collect_runtime_provenance()
+    destination = ArtifactStore(tmp_path / "artifacts").write_failure(
+        "partial-runtime",
+        pa.table({"x": [1]}),
+        _result(),
+        reference=CallableSpec(target="project:reference"),
+        candidate=CallableSpec(target="project:candidate"),
+        runtime_provenance=CaseProvenance(reference=runtime),
+        config_sha256="b" * 64,
+    )
+
+    replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
+    assert replay["expected_runtime"]["reference"]["python_version"]
+    assert replay["expected_runtime"]["candidate"] is None
+    assert replay["config_sha256"] == "b" * 64
+    assert "command" not in replay
 
 
 def test_artifact_preserves_project_virtualenv_python_entrypoint(tmp_path: Path) -> None:
@@ -265,7 +280,7 @@ def test_artifact_persists_named_input_bundle_atomically(tmp_path: Path) -> None
         "result.json",
     }
     replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 3
+    assert replay["version"] == 1
     assert replay["inputs"] == [
         {"name": "orders", "file": "input-000.arrow"},
         {"name": "customers", "file": "input-001.arrow"},
@@ -275,7 +290,7 @@ def test_artifact_persists_named_input_bundle_atomically(tmp_path: Path) -> None
         "customers": {"fixture": "input-001.arrow"},
     }
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == 2
+    assert manifest["version"] == 1
     assert set(manifest["files"]) == names - {"manifest.json"}
     for name, metadata in manifest["files"].items():
         content = (destination / name).read_bytes()
