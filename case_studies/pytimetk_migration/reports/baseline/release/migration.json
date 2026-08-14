@@ -1,0 +1,1922 @@
+{
+  "manifest_sha256": "8aa46c660d1d8a789ae150fdea9345265f756625bfcd82bc75d445dbb047b10a",
+  "parity": {
+    "cases": [
+      {
+        "deterministic_examples": 0,
+        "diagnoses": [],
+        "elapsed_seconds": 8.92013777200009,
+        "examples_run": 100,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 100,
+        "name": "lags-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 6.867512711000018,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "lags-grouped-unsorted",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [
+          {
+            "code": "missing-values",
+            "confidence": "high",
+            "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+            "evidence": [
+              "The minimized difference contains a missing value."
+            ],
+            "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+            "title": "Missing-value semantics differ"
+          }
+        ],
+        "elapsed_seconds": 14.177306584999315,
+        "examples_run": 1,
+        "failures": [
+          {
+            "artifact": ".parity-release/lags-null-semantics/20260814T054907.860676Z-b246d79c1546",
+            "candidate_metrics": {
+              "duration_seconds": 6.4880921420008235,
+              "iterations": 1,
+              "peak_rss_bytes": 168361984
+            },
+            "finding_signature": "ms1:7d353b6ed3760e87c533d470ed4a840a6210ec9daafb3ba66466baf2a709cb10",
+            "mismatch_counts": {
+              "value": 4
+            },
+            "reference_metrics": {
+              "duration_seconds": 6.355407147999358,
+              "iterations": 1,
+              "peak_rss_bytes": 168361984
+            },
+            "source": "fixture",
+            "status": "failed"
+          }
+        ],
+        "findings_discovered": 1,
+        "generated_examples": 0,
+        "name": "lags-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "failed"
+      },
+      {
+        "deterministic_examples": 0,
+        "diagnoses": [],
+        "elapsed_seconds": 16.599522583999715,
+        "examples_run": 100,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 100,
+        "name": "rolling-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 7.6469421299989335,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "rolling-grouped-centered",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [
+          {
+            "code": "missing-values",
+            "confidence": "high",
+            "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+            "evidence": [
+              "The minimized difference contains a missing value."
+            ],
+            "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+            "title": "Missing-value semantics differ"
+          },
+          {
+            "code": "datetime",
+            "confidence": "high",
+            "documentation_url": null,
+            "evidence": [
+              "A datetime-like column or value differs."
+            ],
+            "explanation": "Check time units, timezone localization/conversion, daylight-saving boundaries and whether the transformation returns an instant or a wall-clock value.",
+            "title": "Datetime representation or timezone semantics differ"
+          }
+        ],
+        "elapsed_seconds": 15.492283957999462,
+        "examples_run": 1,
+        "failures": [
+          {
+            "artifact": ".parity-release/rolling-null-semantics/20260814T054947.868017Z-b246d79c1546",
+            "candidate_metrics": {
+              "duration_seconds": 6.380066065999927,
+              "iterations": 1,
+              "peak_rss_bytes": 171814912
+            },
+            "finding_signature": "ms1:7d353b6ed3760e87c533d470ed4a840a6210ec9daafb3ba66466baf2a709cb10",
+            "mismatch_counts": {
+              "value": 13
+            },
+            "reference_metrics": {
+              "duration_seconds": 6.490660512999966,
+              "iterations": 1,
+              "peak_rss_bytes": 171814912
+            },
+            "source": "fixture",
+            "status": "failed"
+          }
+        ],
+        "findings_discovered": 1,
+        "generated_examples": 0,
+        "name": "rolling-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "failed"
+      },
+      {
+        "deterministic_examples": 0,
+        "diagnoses": [
+          {
+            "code": "missing-values",
+            "confidence": "high",
+            "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+            "evidence": [
+              "The minimized difference contains a missing value."
+            ],
+            "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+            "title": "Missing-value semantics differ"
+          }
+        ],
+        "elapsed_seconds": 39.791274391000115,
+        "examples_run": 262,
+        "failures": [
+          {
+            "artifact": ".parity-release/ewm-control/20260814T055027.731721Z-53a70da6a0c9",
+            "candidate_metrics": {
+              "duration_seconds": 6.535264837999421,
+              "iterations": 1,
+              "peak_rss_bytes": 181907456
+            },
+            "finding_signature": "ms1:5b2402848257820de918078cc1530081bc5ac8d67225987f23d17095f17e9139",
+            "mismatch_counts": {
+              "value": 4
+            },
+            "reference_metrics": {
+              "duration_seconds": 6.5074084010011575,
+              "iterations": 1,
+              "peak_rss_bytes": 181907456
+            },
+            "source": "generated:shrunk",
+            "status": "failed"
+          }
+        ],
+        "findings_discovered": 1,
+        "generated_examples": 262,
+        "name": "ewm-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "failed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [
+          {
+            "code": "datetime",
+            "confidence": "high",
+            "documentation_url": null,
+            "evidence": [
+              "A datetime-like column or value differs."
+            ],
+            "explanation": "Check time units, timezone localization/conversion, daylight-saving boundaries and whether the transformation returns an instant or a wall-clock value.",
+            "title": "Datetime representation or timezone semantics differ"
+          }
+        ],
+        "elapsed_seconds": 17.89943035399847,
+        "examples_run": 1,
+        "failures": [
+          {
+            "artifact": ".parity-release/ewm-grouped-unsorted/20260814T055045.703944Z-ddd978bb8ee7",
+            "candidate_metrics": {
+              "duration_seconds": 7.069105126998693,
+              "iterations": 1,
+              "peak_rss_bytes": 182038528
+            },
+            "finding_signature": "ms1:41c13a73074b32f200be2fdbf6c806b7e6c260b0b64be58d5263a6de629b936a",
+            "mismatch_counts": {
+              "value": 38
+            },
+            "reference_metrics": {
+              "duration_seconds": 7.0426220939989435,
+              "iterations": 1,
+              "peak_rss_bytes": 182038528
+            },
+            "source": "fixture",
+            "status": "failed"
+          }
+        ],
+        "findings_discovered": 1,
+        "generated_examples": 0,
+        "name": "ewm-grouped-unsorted",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "failed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [
+          {
+            "code": "missing-values",
+            "confidence": "high",
+            "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+            "evidence": [
+              "The minimized difference contains a missing value."
+            ],
+            "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+            "title": "Missing-value semantics differ"
+          },
+          {
+            "code": "datetime",
+            "confidence": "high",
+            "documentation_url": null,
+            "evidence": [
+              "A datetime-like column or value differs."
+            ],
+            "explanation": "Check time units, timezone localization/conversion, daylight-saving boundaries and whether the transformation returns an instant or a wall-clock value.",
+            "title": "Datetime representation or timezone semantics differ"
+          }
+        ],
+        "elapsed_seconds": 15.323997180001243,
+        "examples_run": 1,
+        "failures": [
+          {
+            "artifact": ".parity-release/ewm-null-semantics/20260814T055101.150673Z-b246d79c1546",
+            "candidate_metrics": {
+              "duration_seconds": 6.774677030998646,
+              "iterations": 1,
+              "peak_rss_bytes": 182562816
+            },
+            "finding_signature": "ms1:ba791dbdb30b756ba35aa8333139335a314abfc8b90dbeb111ef12f882047cef",
+            "mismatch_counts": {
+              "shape": 1,
+              "value": 45
+            },
+            "reference_metrics": {
+              "duration_seconds": 6.642727833999743,
+              "iterations": 1,
+              "peak_rss_bytes": 182562816
+            },
+            "source": "fixture",
+            "status": "failed"
+          }
+        ],
+        "findings_discovered": 1,
+        "generated_examples": 0,
+        "name": "ewm-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "failed"
+      },
+      {
+        "deterministic_examples": 0,
+        "diagnoses": [],
+        "elapsed_seconds": 8.618459315999644,
+        "examples_run": 100,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 100,
+        "name": "macd-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 7.159645798001293,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "macd-grouped-unsorted",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [
+          {
+            "code": "missing-values",
+            "confidence": "high",
+            "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+            "evidence": [
+              "The minimized difference contains a missing value."
+            ],
+            "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+            "title": "Missing-value semantics differ"
+          },
+          {
+            "code": "datetime",
+            "confidence": "high",
+            "documentation_url": null,
+            "evidence": [
+              "A datetime-like column or value differs."
+            ],
+            "explanation": "Check time units, timezone localization/conversion, daylight-saving boundaries and whether the transformation returns an instant or a wall-clock value.",
+            "title": "Datetime representation or timezone semantics differ"
+          }
+        ],
+        "elapsed_seconds": 24.303727082000478,
+        "examples_run": 1,
+        "failures": [
+          {
+            "artifact": ".parity-release/macd-null-semantics/20260814T055141.516253Z-b246d79c1546",
+            "candidate_metrics": {
+              "duration_seconds": 6.357801661999474,
+              "iterations": 1,
+              "peak_rss_bytes": 184004608
+            },
+            "finding_signature": "ms1:ba791dbdb30b756ba35aa8333139335a314abfc8b90dbeb111ef12f882047cef",
+            "mismatch_counts": {
+              "shape": 1,
+              "value": 46
+            },
+            "reference_metrics": {
+              "duration_seconds": 6.375969065999016,
+              "iterations": 1,
+              "peak_rss_bytes": 184004608
+            },
+            "source": "fixture",
+            "status": "failed"
+          }
+        ],
+        "findings_discovered": 1,
+        "generated_examples": 0,
+        "name": "macd-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "failed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [
+          {
+            "code": "missing-values",
+            "confidence": "high",
+            "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+            "evidence": [
+              "The minimized difference contains a missing value."
+            ],
+            "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+            "title": "Missing-value semantics differ"
+          },
+          {
+            "code": "datetime",
+            "confidence": "high",
+            "documentation_url": null,
+            "evidence": [
+              "A datetime-like column or value differs."
+            ],
+            "explanation": "Check time units, timezone localization/conversion, daylight-saving boundaries and whether the transformation returns an instant or a wall-clock value.",
+            "title": "Datetime representation or timezone semantics differ"
+          },
+          {
+            "code": "schema-shape",
+            "confidence": "medium",
+            "documentation_url": null,
+            "evidence": [
+              "The output columns or schema are not equivalent."
+            ],
+            "explanation": "Check index materialization, selected columns, aliases, join suffixes and aggregation column names.",
+            "title": "Output schema differs"
+          }
+        ],
+        "elapsed_seconds": 15.655990195000413,
+        "examples_run": 1,
+        "failures": [
+          {
+            "artifact": ".parity-release/pad-control/20260814T055157.262505Z-d5e9a18053c4",
+            "candidate_metrics": {
+              "duration_seconds": 7.4922147519991995,
+              "iterations": 1,
+              "peak_rss_bytes": 184135680
+            },
+            "finding_signature": "ms1:652888d587ab1ed49da4fbeb6560aa3c44b4e054b7f52a20dc8cdfd0ef3002e7",
+            "mismatch_counts": {
+              "column": 1,
+              "value": 6
+            },
+            "reference_metrics": {
+              "duration_seconds": 7.484489198999654,
+              "iterations": 1,
+              "peak_rss_bytes": 184135680
+            },
+            "source": "fixture",
+            "status": "failed"
+          }
+        ],
+        "findings_discovered": 1,
+        "generated_examples": 0,
+        "name": "pad-control",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "failed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [],
+        "elapsed_seconds": 13.174791876999734,
+        "examples_run": 1,
+        "failures": [],
+        "findings_discovered": 0,
+        "generated_examples": 0,
+        "name": "pad-grouped-bounds",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "passed"
+      },
+      {
+        "deterministic_examples": 1,
+        "diagnoses": [
+          {
+            "code": "missing-values",
+            "confidence": "high",
+            "documentation_url": "https://docs.pola.rs/user-guide/migration/pandas/#missing-data",
+            "evidence": [
+              "The minimized difference contains a missing value."
+            ],
+            "explanation": "The engines may distinguish null, NaN and nullable dtypes differently. Check filters, joins, grouping keys and aggregations rather than simply widening tolerance.",
+            "title": "Missing-value semantics differ"
+          },
+          {
+            "code": "datetime",
+            "confidence": "high",
+            "documentation_url": null,
+            "evidence": [
+              "A datetime-like column or value differs."
+            ],
+            "explanation": "Check time units, timezone localization/conversion, daylight-saving boundaries and whether the transformation returns an instant or a wall-clock value.",
+            "title": "Datetime representation or timezone semantics differ"
+          },
+          {
+            "code": "exception-contract",
+            "confidence": "high",
+            "documentation_url": null,
+            "evidence": [
+              "The reference and candidate outcomes differ for the minimized input."
+            ],
+            "explanation": "The implementations return versus raise, or raise different exception types. Decide whether invalid-input behaviour is part of the public contract.",
+            "title": "Failure behaviour differs"
+          }
+        ],
+        "elapsed_seconds": 13.887508139001511,
+        "examples_run": 1,
+        "failures": [
+          {
+            "artifact": ".parity-release/pad-null-semantics/20260814T055224.506727Z-fdc72bcfbb9b",
+            "candidate_metrics": {
+              "duration_seconds": 6.3503546319989255,
+              "iterations": 1,
+              "peak_rss_bytes": 184135680
+            },
+            "finding_signature": "ms1:a7a14380e25d44e74373e61ec514710add1654d30c4cb7016d54a61a104f74a5",
+            "mismatch_counts": {
+              "exception": 1
+            },
+            "reference_metrics": {
+              "duration_seconds": 6.207381465999788,
+              "iterations": 1,
+              "peak_rss_bytes": 184135680
+            },
+            "source": "fixture",
+            "status": "failed"
+          }
+        ],
+        "findings_discovered": 1,
+        "generated_examples": 0,
+        "name": "pad-null-semantics",
+        "performance": null,
+        "provenance": {
+          "candidate": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "reference": {
+            "distributions": [
+              {
+                "name": "hypothesis",
+                "status": "installed",
+                "version": "6.165.6"
+              },
+              {
+                "name": "numpy",
+                "status": "installed",
+                "version": "2.0.2"
+              },
+              {
+                "name": "pandas",
+                "status": "installed",
+                "version": "2.2.3"
+              },
+              {
+                "name": "polars",
+                "status": "installed",
+                "version": "1.21.0"
+              },
+              {
+                "name": "pyarrow",
+                "status": "installed",
+                "version": "16.1.0"
+              },
+              {
+                "name": "pytimetk",
+                "status": "installed",
+                "version": "2.5.1"
+              }
+            ],
+            "parity_version": "0.9.2",
+            "platform_machine": "x86_64",
+            "platform_system": "Linux",
+            "python_implementation": "CPython",
+            "python_version": "3.12.13"
+          },
+          "verification": "captured"
+        },
+        "status": "failed"
+      }
+    ],
+    "elapsed_seconds": 226.86869409599967,
+    "parity_version": "0.9.2",
+    "provenance": {
+      "config_sha256": "821aef184819c570861ba3c6afbfbde18e7302083b97225430076834f99cd720",
+      "orchestrator": {
+        "distributions": [
+          {
+            "name": "hypothesis",
+            "status": "installed",
+            "version": "6.165.6"
+          },
+          {
+            "name": "numpy",
+            "status": "installed",
+            "version": "2.0.2"
+          },
+          {
+            "name": "pandas",
+            "status": "installed",
+            "version": "2.2.3"
+          },
+          {
+            "name": "polars",
+            "status": "installed",
+            "version": "1.21.0"
+          },
+          {
+            "name": "pyarrow",
+            "status": "installed",
+            "version": "16.1.0"
+          }
+        ],
+        "parity_version": "0.9.2",
+        "platform_machine": "x86_64",
+        "platform_system": "Linux",
+        "python_implementation": "CPython",
+        "python_version": "3.12.13"
+      }
+    },
+    "schema_version": 3,
+    "status": "failed"
+  },
+  "schema_version": 1,
+  "status": "failed",
+  "summary": {
+    "error": 0,
+    "excluded": 6,
+    "failed": 5,
+    "passed": 0,
+    "total": 11,
+    "uncovered": 0
+  },
+  "units": [
+    {
+      "cases": [
+        {
+          "examples_run": 100,
+          "name": "lags-control",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "lags-grouped-unsorted",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "lags-null-semantics",
+          "status": "failed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "augment-lags.cpu-core",
+      "status": "failed"
+    },
+    {
+      "cases": [
+        {
+          "examples_run": 100,
+          "name": "rolling-control",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "rolling-grouped-centered",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "rolling-null-semantics",
+          "status": "failed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "augment-rolling.cpu-builtins",
+      "status": "failed"
+    },
+    {
+      "cases": [
+        {
+          "examples_run": 262,
+          "name": "ewm-control",
+          "status": "failed"
+        },
+        {
+          "examples_run": 1,
+          "name": "ewm-grouped-unsorted",
+          "status": "failed"
+        },
+        {
+          "examples_run": 1,
+          "name": "ewm-null-semantics",
+          "status": "failed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "augment-ewm.cpu-native",
+      "status": "failed"
+    },
+    {
+      "cases": [
+        {
+          "examples_run": 100,
+          "name": "macd-control",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "macd-grouped-unsorted",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "macd-null-semantics",
+          "status": "failed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "augment-macd.cpu-core",
+      "status": "failed"
+    },
+    {
+      "cases": [
+        {
+          "examples_run": 1,
+          "name": "pad-control",
+          "status": "failed"
+        },
+        {
+          "examples_run": 1,
+          "name": "pad-grouped-bounds",
+          "status": "passed"
+        },
+        {
+          "examples_run": 1,
+          "name": "pad-null-semantics",
+          "status": "failed"
+        }
+      ],
+      "excluded_reason": null,
+      "id": "pad-by-time.cpu-fixed-frequency",
+      "status": "failed"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "This CPU pilot has no CUDA runner; cudf behavior remains outside the declared migration.",
+      "id": "cross-cutting.cudf",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Memory downcasting intentionally changes dtypes and is separate from backend semantic parity.",
+      "id": "cross-cutting.reduce-memory",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Selector and human-duration parsing is shared frontend code; this pilot covers explicit columns and integer lag forms.",
+      "id": "augment-lags.selectors-duration",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Custom callables, Ray parallelism and progress reporting require a separate execution and performance study.",
+      "id": "augment-rolling.custom-parallel",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Median and unsupported EWM keyword combinations deliberately fall back to pandas upstream; this pilot covers native mean, std and var.",
+      "id": "augment-ewm.pandas-fallbacks",
+      "status": "excluded"
+    },
+    {
+      "cases": [],
+      "excluded_reason": "Calendar offsets, timezone and DST behavior, relative bounds and selectors require a dedicated temporal contract.",
+      "id": "pad-by-time.calendar-timezone-selectors",
+      "status": "excluded"
+    }
+  ]
+}

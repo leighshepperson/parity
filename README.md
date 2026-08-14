@@ -355,6 +355,7 @@ the [threat model](docs/THREAT_MODEL.md).
 - [Same-input stability probe](case_studies/stability_probe/README.md)
 - [Keyed-output control: utilsforecast `evaluate`](case_studies/utilsforecast_evaluate/README.md)
 - [Public-project backend study: PyIndicators `ema`](case_studies/pyindicators_ema/README.md)
+- [Five-API migration pilot: PyTimeTK pandas to Polars](case_studies/pytimetk_migration/README.md)
 - [Cross-version study: Polars `group_by_dynamic`](case_studies/polars_version_dynamic/README.md)
 - [Cross-version study: pandas categorical `groupby`](case_studies/pandas_version_groupby/README.md)
 - [Development and contribution guide](docs/DEVELOPMENT.md)

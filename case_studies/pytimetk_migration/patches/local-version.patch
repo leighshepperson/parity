@@ -1,0 +1,12 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 40c40d8..a364d17 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [tool.poetry]
+ name = "pytimetk"
+-version = "2.5.1"
++version = "2.5.1+parity.1"
+ description = "The time series toolkit for Python."
+ authors = [
+     "Business Science <info@business-science.io>",

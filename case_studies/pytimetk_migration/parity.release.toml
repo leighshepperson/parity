@@ -1,0 +1,702 @@
+version = 1
+artifact_dir = ".parity-release"
+fail_fast = false
+
+[[cases]]
+name = "lags-control"
+tags = ["augment-lags", "control", "generated"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:lags_control_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:lags_control_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.schema]
+min_rows = 4
+max_rows = 12
+unique_together = [["row_id"], ["date"]]
+
+[[cases.schema.constraints]]
+kind = "sorted_by"
+columns = ["date"]
+nulls = "last"
+
+[[cases.schema.columns]]
+name = "row_id"
+dtype = "int64"
+nullable = false
+unique = true
+minimum = 0
+maximum = 100000
+
+[[cases.schema.columns]]
+name = "date"
+dtype = "datetime"
+nullable = false
+unique = true
+examples = ["2024-01-01T00:00:00", "2024-01-02T00:00:00"]
+
+[[cases.schema.columns]]
+name = "value"
+dtype = "float64"
+nullable = false
+minimum = -1000.0
+maximum = 1000.0
+examples = [-1.0, 0.0, 1.0]
+
+[[cases.schema.columns]]
+name = "volume"
+dtype = "float64"
+nullable = false
+minimum = 0.0
+maximum = 10000.0
+examples = [0.0, 1.0, 100.0]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 100
+seed = 2026081401
+stability_repeats = 2
+adversarial_examples = true
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "lags-grouped-unsorted"
+fixture = "fixtures/augment_unsorted.arrow"
+tags = ["augment-lags", "grouped", "ordering"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:lags_grouped_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:lags_grouped_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "lags-null-semantics"
+fixture = "fixtures/augment_hostile.arrow"
+tags = ["augment-lags", "grouped", "nulls", "ordering"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:lags_null_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:lags_null_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "rolling-control"
+tags = ["augment-rolling", "control", "generated"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:rolling_control_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:rolling_control_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.schema]
+min_rows = 4
+max_rows = 12
+unique_together = [["row_id"], ["date"]]
+
+[[cases.schema.constraints]]
+kind = "sorted_by"
+columns = ["date"]
+nulls = "last"
+
+[[cases.schema.columns]]
+name = "row_id"
+dtype = "int64"
+nullable = false
+unique = true
+minimum = 0
+maximum = 100000
+
+[[cases.schema.columns]]
+name = "date"
+dtype = "datetime"
+nullable = false
+unique = true
+examples = ["2024-01-01T00:00:00", "2024-01-02T00:00:00"]
+
+[[cases.schema.columns]]
+name = "value"
+dtype = "float64"
+nullable = false
+minimum = -1000.0
+maximum = 1000.0
+examples = [-1.0, 0.0, 1.0]
+
+[[cases.schema.columns]]
+name = "volume"
+dtype = "float64"
+nullable = false
+minimum = 0.0
+maximum = 10000.0
+examples = [0.0, 1.0, 100.0]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 100
+seed = 2026081402
+stability_repeats = 2
+adversarial_examples = true
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "rolling-grouped-centered"
+fixture = "fixtures/augment_unsorted.arrow"
+tags = ["augment-rolling", "grouped", "ordering", "centered"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:rolling_grouped_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:rolling_grouped_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "rolling-null-semantics"
+fixture = "fixtures/augment_hostile.arrow"
+tags = ["augment-rolling", "grouped", "nulls", "ordering"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:rolling_null_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:rolling_null_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "ewm-control"
+tags = ["augment-ewm", "control", "generated"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:ewm_control_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:ewm_control_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.schema]
+min_rows = 4
+max_rows = 12
+unique_together = [["row_id"], ["date"]]
+
+[[cases.schema.constraints]]
+kind = "sorted_by"
+columns = ["date"]
+nulls = "last"
+
+[[cases.schema.columns]]
+name = "row_id"
+dtype = "int64"
+nullable = false
+unique = true
+minimum = 0
+maximum = 100000
+
+[[cases.schema.columns]]
+name = "date"
+dtype = "datetime"
+nullable = false
+unique = true
+examples = ["2024-01-01T00:00:00", "2024-01-02T00:00:00"]
+
+[[cases.schema.columns]]
+name = "value"
+dtype = "float64"
+nullable = false
+minimum = -1000.0
+maximum = 1000.0
+examples = [-1.0, 0.0, 1.0]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 100
+seed = 2026081403
+stability_repeats = 2
+adversarial_examples = true
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "ewm-grouped-unsorted"
+fixture = "fixtures/augment_unsorted.arrow"
+tags = ["augment-ewm", "grouped", "ordering"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:ewm_grouped_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:ewm_grouped_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "ewm-null-semantics"
+fixture = "fixtures/augment_hostile.arrow"
+tags = ["augment-ewm", "grouped", "nulls", "ordering"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:ewm_null_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:ewm_null_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "macd-control"
+tags = ["augment-macd", "control", "generated"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:macd_control_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:macd_control_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.schema]
+min_rows = 4
+max_rows = 12
+unique_together = [["row_id"], ["date"]]
+
+[[cases.schema.constraints]]
+kind = "sorted_by"
+columns = ["date"]
+nulls = "last"
+
+[[cases.schema.columns]]
+name = "row_id"
+dtype = "int64"
+nullable = false
+unique = true
+minimum = 0
+maximum = 100000
+
+[[cases.schema.columns]]
+name = "date"
+dtype = "datetime"
+nullable = false
+unique = true
+examples = ["2024-01-01T00:00:00", "2024-01-02T00:00:00"]
+
+[[cases.schema.columns]]
+name = "value"
+dtype = "float64"
+nullable = false
+minimum = 0.01
+maximum = 1000.0
+examples = [0.01, 1.0, 100.0]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 100
+seed = 2026081404
+stability_repeats = 2
+adversarial_examples = true
+shrink = true
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "macd-grouped-unsorted"
+fixture = "fixtures/augment_unsorted.arrow"
+tags = ["augment-macd", "grouped", "ordering"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:macd_grouped_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:macd_grouped_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "macd-null-semantics"
+fixture = "fixtures/augment_hostile.arrow"
+tags = ["augment-macd", "grouped", "nulls", "ordering"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:macd_null_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:macd_null_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "pad-control"
+fixture = "fixtures/pad.arrow"
+tags = ["pad-by-time", "control", "column-order"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:pad_control_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:pad_control_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "pad-grouped-bounds"
+fixture = "fixtures/pad_grouped.arrow"
+tags = ["pad-by-time", "grouped", "bounds"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:pad_grouped_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:pad_grouped_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false
+
+[[cases]]
+name = "pad-null-semantics"
+fixture = "fixtures/pad_numeric_hostile.arrow"
+tags = ["pad-by-time", "grouped", "nulls", "fill"]
+timeout_seconds = 60
+
+[cases.reference]
+target = "pytimetk_pilot:pad_null_pandas"
+adapter = "pandas"
+pandas_input = "native"
+python = "environments/release/reference/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.candidate]
+target = "pytimetk_pilot:pad_null_polars"
+adapter = "polars"
+python = "environments/release/candidate/.venv/bin/python"
+record_distributions = ["pytimetk"]
+
+[cases.comparison]
+row_order = "strict"
+column_order = "strict"
+dtype = "compatible"
+null_nan_equal = true
+rtol = 1e-9
+atol = 1e-10
+
+[cases.generation]
+max_examples = 1
+stability_repeats = 2
+search = false
+adversarial_examples = false
+shrink = false
+
+[cases.performance]
+enabled = false

@@ -1,0 +1,9 @@
+parity-check==0.9.2
+pytimetk==2.5.1
+numpy==2.5.2
+pandas==3.0.5
+pandas-flavor==0.8.1
+polars==1.43.2
+pyarrow==25.0.1
+tqdm==4.70.0
+pytest==9.0.2
