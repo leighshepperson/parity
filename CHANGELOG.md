@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.1
+
+- Add a strict version 1 migration manifest and `parity migration check` coverage gate that maps
+  declared migration units to configured cases, explicit exclusions or visible uncovered work.
+- Run the complete mapped-case union once, reject unknown mappings before execution and require at
+  least one passing unit so an all-excluded inventory cannot pass.
+- Add a data-safe migration JSON report bound to canonical manifest and effective Parity
+  configuration hashes, plus an agent-oriented inventory, implementation, replay and release
+  workflow.
+- Supersede the non-publishing `v0.9.0` tag, which pointed at package version 0.8.1 and therefore
+  failed the release version guard. Version 0.9.1 is the first distributable with the migration
+  ledger.
+
+### Compatibility notes
+
+- The migration manifest and its report are new, independently versioned contracts. Existing
+  `parity.toml`, suite report, replay and counterexample formats are unchanged.
+- Migration exit `0` means at least one declared unit passed and every other unit passed or was
+  explicitly excluded. Failed, uncovered and all-excluded manifests return `1`; invalid or
+  incomplete execution evidence returns `2`.
+- Migration reports redact unit IDs, case names and exclusion reasons and omit compared values.
+  Replay artifacts retain actual inputs and require the same restricted handling as ordinary runs.
+
 ## 0.8.1
 
 - Compare finite integers, Decimals and mixed numeric types without first converting them to

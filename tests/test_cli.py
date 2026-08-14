@@ -7,9 +7,11 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from typer.testing import CliRunner
 
 from parity import cli
+from parity.migration import MigrationManifest, MigrationUnit
 from parity.models import (
     CallableSpec,
     CaseConfig,
@@ -47,10 +49,154 @@ def _suite(status: Status) -> SuiteResult:
     )
 
 
+def test_migration_check_runs_complete_gate_and_writes_json(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    manifest = MigrationManifest(
+        units=[
+            MigrationUnit(id="orders-api", cases=["orders"]),
+            MigrationUnit(id="plotting", excluded_reason="figure output"),
+        ]
+    )
+    calls: list[set[str] | None] = []
+
+    monkeypatch.setattr("parity.migration.load_config", lambda _path: config)
+    monkeypatch.setattr("parity.migration.load_migration_manifest", lambda _path: manifest)
+
+    def fake_run_suite(_config: ParityConfig, *, selected_cases=None) -> SuiteResult:
+        calls.append(selected_cases)
+        return _suite(Status.PASSED)
+
+    monkeypatch.setattr("parity.engine.run_suite", fake_run_suite)
+    output = tmp_path / "reports" / "migration.json"
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "check",
+            "--manifest",
+            str(tmp_path / "migration.toml"),
+            "--config",
+            str(tmp_path / "parity.toml"),
+            "--json",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [{"orders"}]
+    assert "all declared in-scope migration units passed" in result.stdout
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["status"] == "passed"
+    assert payload["summary"] == {
+        "total": 2,
+        "passed": 1,
+        "failed": 0,
+        "error": 0,
+        "excluded": 1,
+        "uncovered": 0,
+    }
+
+
+def test_migration_check_json_write_failure_is_operational_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("parity.migration.load_config", lambda _path: _config(tmp_path))
+    monkeypatch.setattr(
+        "parity.migration.load_migration_manifest",
+        lambda _path: MigrationManifest(units=[MigrationUnit(id="orders-api", cases=["orders"])]),
+    )
+    monkeypatch.setattr(
+        "parity.engine.run_suite",
+        lambda *_args, **_kwargs: _suite(Status.PASSED),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["migration", "check", "--json", str(tmp_path)],
+    )
+
+    assert result.exit_code == 2
+    assert "migration report could not be written" in result.stderr
+    assert "all declared in-scope migration units passed" not in result.stdout
+    assert str(tmp_path) not in result.output
+
+
+def test_migration_check_uses_exit_one_for_uncovered_unit(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("parity.migration.load_config", lambda _path: _config(tmp_path))
+    monkeypatch.setattr(
+        "parity.migration.load_migration_manifest",
+        lambda _path: MigrationManifest(units=[MigrationUnit(id="customers")]),
+    )
+    selected: list[set[str] | None] = []
+
+    def fake_run_suite(_config: ParityConfig, *, selected_cases=None) -> SuiteResult:
+        selected.append(selected_cases)
+        return SuiteResult(status=Status.PASSED, cases=[])
+
+    monkeypatch.setattr("parity.engine.run_suite", fake_run_suite)
+
+    result = runner.invoke(cli.app, ["migration", "check"])
+
+    assert result.exit_code == 1
+    assert selected == [set()]
+    assert "migration incomplete" in result.stdout
+    assert "uncovered" in result.stdout
+
+
+def test_migration_check_rejects_unknown_case_before_execution(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("parity.migration.load_config", lambda _path: _config(tmp_path))
+    monkeypatch.setattr(
+        "parity.migration.load_migration_manifest",
+        lambda _path: MigrationManifest(
+            units=[MigrationUnit(id="customers", cases=["unknown-case"])]
+        ),
+    )
+    called = False
+
+    def fake_run_suite(*_args, **_kwargs) -> SuiteResult:
+        nonlocal called
+        called = True
+        return _suite(Status.PASSED)
+
+    monkeypatch.setattr("parity.engine.run_suite", fake_run_suite)
+
+    result = runner.invoke(cli.app, ["migration", "check"])
+
+    assert result.exit_code == 2
+    assert "unknown case" in result.stderr
+    assert not called
+
+
+@pytest.mark.parametrize(
+    ("status", "exit_code"),
+    [(Status.FAILED, 1), (Status.ERROR, 2)],
+)
+def test_migration_check_preserves_failure_and_error_exit_codes(
+    tmp_path: Path,
+    monkeypatch,
+    status: Status,
+    exit_code: int,
+) -> None:
+    monkeypatch.setattr("parity.migration.load_config", lambda _path: _config(tmp_path))
+    monkeypatch.setattr(
+        "parity.migration.load_migration_manifest",
+        lambda _path: MigrationManifest(units=[MigrationUnit(id="orders-api", cases=["orders"])]),
+    )
+    monkeypatch.setattr(
+        "parity.engine.run_suite",
+        lambda *_args, **_kwargs: _suite(status),
+    )
+
+    result = runner.invoke(cli.app, ["migration", "check"])
+
+    assert result.exit_code == exit_code
+
+
 def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     version = runner.invoke(cli.app, ["version"])
     assert version.exit_code == 0
-    assert version.stdout.strip() == "0.8.1"
+    assert version.stdout.strip() == "0.9.1"
 
     config_path = tmp_path / "nested" / "parity.toml"
     created = runner.invoke(cli.app, ["init", str(config_path)])

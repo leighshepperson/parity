@@ -15,6 +15,9 @@ public examples and the risk of false passes.
 - Add pinned, runnable case studies from public projects and retain confirmed failures as regression
   fixtures.
 - Document cross-environment campaigns, redaction, artifact handling and common CI configurations.
+- Keep the migration coverage gate resistant to partial execution, missing case evidence and
+  vacuous all-excluded inventories, with versioned, data-safe reports bound to the reviewed
+  manifest and effective Parity configuration.
 
 ## Broaden semantic coverage
 
@@ -44,7 +47,8 @@ public examples and the risk of false passes.
 
 ## Before 1.0
 
-- Version and document the configuration, report and counterexample-manifest formats.
+- Version and document the configuration, migration-manifest, suite-report, migration-report and
+  counterexample-manifest formats.
 - Provide a clear compatibility and deprecation policy.
 - Preserve replay across supported minor versions or fail with an actionable migration message.
 - Publish a supported platform matrix and reproducible release process.
@@ -65,6 +69,8 @@ public use case shows that they belong in Parity rather than another tool.
 - Uploading source, frames or artifacts to a hosted service by default.
 - Becoming a dataframe engine, application runtime or dashboard framework.
 - Adding adapters faster than they can be tested and maintained.
+- Claiming that a migration manifest automatically discovers an exhaustive public API or proves
+  that a mapped case exercises the unit it names.
 
 ## Choosing priorities
 

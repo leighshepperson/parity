@@ -37,7 +37,7 @@ def _runtime(
 
 
 def test_public_version_uses_single_source() -> None:
-    assert __version__ == source_version == "0.8.1"
+    assert __version__ == source_version == "0.9.1"
 
 
 def test_distribution_names_are_normalized_and_bounded() -> None:

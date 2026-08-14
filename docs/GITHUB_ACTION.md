@@ -19,7 +19,7 @@ jobs:
       - name: Install project dependencies
         run: python -m pip install -e .
       - id: parity
-        uses: leighshepperson/parity@v0.8.1
+        uses: leighshepperson/parity@v0.8.0
         with:
           config: migrations/parity.toml
           cases: orders,customers
@@ -34,6 +34,27 @@ jobs:
 
 Case and tag filters are combined by the CLI. `parity-version` may pin a PyPI release instead of
 the action's source revision, but normally both should move together.
+
+## Migration-manifest gate
+
+The published `v0.8.0` composite Action runs ordinary Parity cases and does not accept a migration
+manifest. When using a later release or source checkout that provides `parity migration check`, run
+the declared-inventory gate as a separate CLI step after installing the project and that Parity
+revision:
+
+```yaml
+- name: Gate declared migration surface
+  run: >-
+    parity migration check
+    --manifest migrations/migration.toml
+    --config migrations/parity.toml
+    --json .parity/migration-status.json
+```
+
+Do not pass case, tag, search-budget or performance overrides to the completion gate. Use the
+ordinary Action or `parity check` for focused iteration. The migration JSON report omits compared
+values, but mapped cases may create sensitive replay artifacts under `.parity/`; retain the Action's
+opt-in upload policy for that directory.
 
 ## Inputs
 

@@ -32,6 +32,8 @@ engine-neutral so the same approach can cover other dataframe, numerical and dep
 - Bounded discovery of several distinct mismatch signatures in one campaign, with repeated
   confirmation before evidence is accepted.
 - Median runtime and peak-memory comparisons with optional regression gates.
+- A migration manifest that maps declared library units to cases and blocks completion when a unit
+  is failing, errored or uncovered.
 - Terminal, JSON, Markdown, JUnit and GitHub step-summary reporting.
 - A Python API, pytest fixture, CLI and composite GitHub Action.
 - Local execution. Parity has no hosted service, telemetry or required network connection.
@@ -147,6 +149,45 @@ because they did not record an environment contract.
 Exit code `0` means every selected case passed, `1` means a semantic or enforced performance
 failure, and `2` means configuration or execution error.
 
+## Gate a complete declared migration
+
+Individual passing cases do not show that an agent migrated every intended API. Record the reviewed
+surface in a separate manifest:
+
+```toml
+version = 1
+
+[[units]]
+id = "orders-transform"
+cases = ["orders-control", "orders-null-keys"]
+
+[[units]]
+id = "plot-orders"
+excluded_reason = "Presentation output is outside this migration."
+```
+
+The migration command is included in Parity 0.9.1. The `v0.9.0` tag did not publish because it
+pointed at package version 0.8.1; do not use that tag for the migration gate.
+
+Run the unfiltered coverage gate:
+
+```bash
+parity migration check \
+  --manifest migrations/migration.toml \
+  --config migrations/parity.toml \
+  --json .parity/migration-status.json
+```
+
+The gate runs the union of mapped cases once. It passes only when at least one declared unit passed
+and every other unit passed or was explicitly excluded. Failed or uncovered units return exit `1`;
+invalid configuration or uncertain execution returns exit `2`. An all-excluded manifest fails, so
+an empty scope cannot produce a vacuous success.
+
+This establishes coverage only for the units declared in the manifest. It cannot discover an
+omitted public API or prove that a mapped case genuinely exercises its claimed unit. Review the
+inventory, wrappers and exclusions. See the [agent migration protocol](docs/AGENT_MIGRATION.md) for
+the complete inventory, implementation, replay and dependency-matrix workflow.
+
 ## Generated inputs
 
 A fixture anchors Parity in a real shape and schema. An explicit schema makes the explored domain
@@ -239,7 +280,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: leighshepperson/parity@v0.8.1
+  - uses: leighshepperson/parity@v0.8.0
     with:
       config: parity.toml
       cases: orders,customers
@@ -272,6 +313,18 @@ suite = verify(
 `check` and `verify` return typed Pydantic result models. They do not terminate the process; the
 caller decides how to enforce the result.
 
+The migration gate has the same non-terminating Python form:
+
+```python
+from parity import check_migration
+
+migration = check_migration("migrations/migration.toml", "migrations/parity.toml")
+assert migration.passed
+```
+
+Use `migration.status`, `migration.units` and `migration.suite` for structured automation. The CLI
+adds the `0`/`1`/`2` process-exit contract and optional data-safe JSON report.
+
 ## Design boundaries
 
 Parity answers: *did these two executable contracts differ anywhere we looked?* It does not decide
@@ -290,6 +343,7 @@ the [threat model](docs/THREAT_MODEL.md).
 - [Release notes](CHANGELOG.md)
 - [External validation log](case_studies/ADOPTION_LOG.md)
 - [Getting started and migration workflow](docs/USER_GUIDE.md)
+- [Agent migration protocol and completion gate](docs/AGENT_MIGRATION.md)
 - [Configuration reference](docs/CONFIG_REFERENCE.md)
 - [Architecture and artifact contracts](docs/ARCHITECTURE.md)
 - [Fault corpus](docs/FAULT_CORPUS.md)

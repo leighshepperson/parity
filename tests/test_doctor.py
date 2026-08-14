@@ -46,7 +46,7 @@ def test_config_doctor_inspects_workers_without_importing_targets(tmp_path: Path
     case = report.cases[0]
     assert case.reference.status == "ready"
     assert case.reference.python_version
-    assert case.reference.parity_version == "0.8.1"
+    assert case.reference.parity_version == "0.9.1"
     assert case.reference.distributions[0].name == "pytest"
     assert case.reference.distributions[0].status == "installed"
 
