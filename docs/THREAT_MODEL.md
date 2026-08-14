@@ -38,7 +38,7 @@ trust boundary.
 | Candidate mutates its input | Before/after input fingerprint and mutation mismatch. | External state and files are not transactionally monitored. |
 | Crafted config imports unexpected code | Restricted target syntax; user explicitly owns config. | Import itself executes module code. Review changes to config and wrappers. |
 | Path traversal overwrites unrelated files | Case names are constrained, safe artifact names and config-relative path resolution. | User-selected artifact/config paths remain trusted operator input. |
-| Counterexample leaks private values | Local default, `.gitignore`, report redaction, configurable Action upload/retention. | Artifacts contain values. Apply source data classification and access controls. |
+| Counterexample leaks private values | Local default, self-ignoring private root, report redaction, configurable Action upload/retention. | Artifacts contain values. Apply source data classification and access controls. |
 | Logs leak values or secrets | Parity reports omit frame values and does not enumerate environment variables. | User callables can print arbitrary content; use clean test credentials and protected logs. |
 | Forged/stale evidence is accepted | Hash-bound artifacts written to new timestamped directories plus replay metadata. | Local users can alter files; signed attestations would be needed across trust domains. |
 | Dependency/package compromise | Audit, dependency review, CodeQL, protected trusted publishing and build attestation. | Consumers must pin/verify and control their dependency mirror. |

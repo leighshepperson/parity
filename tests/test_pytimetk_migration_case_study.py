@@ -188,11 +188,12 @@ def test_managed_workspace_declares_one_checkout_and_two_reviewed_lanes() -> Non
     workspace = MigrationWorkspace.model_validate(raw)
 
     assert workspace.reference == "pytimetk==2.5.1"
-    assert workspace.candidate == Path("candidate-src/pytimetk")
+    assert workspace.candidate == Path("../pytimetk-migration-candidate")
     assert workspace.python == "3.12"
     assert workspace.config == Path("parity.workspace-config.toml")
     assert workspace.manifest == Path("migration.toml")
     assert workspace.report_dir == Path(".parity/workspace/reports")
+    assert not (STUDY / workspace.candidate).resolve().is_relative_to(STUDY.resolve())
     assert [(lane.name, lane.requirements) for lane in workspace.lanes] == [
         ("release", Path("environments/release/workspace.in")),
         ("current", Path("environments/current/workspace.in")),

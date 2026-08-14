@@ -125,7 +125,7 @@ cannot certify the inventory:
 parity migration check \
   --manifest migrations/migration.toml \
   --config migrations/parity.toml \
-  --json .parity/migration-status.json
+  --json migrations/.parity/migration-status.json
 ```
 
 Derived unit statuses are `passed`, `failed`, `error`, `excluded` and `uncovered`. A mapped case
@@ -160,23 +160,26 @@ and exclusions before relying on the gate.
 
 ## Migration workspace
 
-Install the optional environment support and declare a candidate checkout against one
-exact released reference:
+After creating `migrations/parity.toml` (for example with the fixture-backed `parity init` flow in
+the user guide), install the optional environment support and declare the current checkout against
+one exact released reference:
 
 ```bash
 python -m pip install "parity-check[workspace]"
-parity migration init --reference 'your-library==1.2.3' --candidate .
+parity migration init --reference 'your-library==1.2.3'
 parity migration run
 ```
 
-`migration init` writes a strict `parity.workspace.toml`; it expects the referenced `parity.toml`
-and `migration.toml` to exist by setup time. The document fields are:
+By default `migration init` writes a strict `migrations/parity.workspace.toml`, uses the current
+checkout as the candidate, reads `migrations/parity.toml`, and creates a starter
+`migrations/migration.toml` when that ledger is absent. The starter maps every configured case to
+one `core-regression` unit and must be reviewed as an inventory. The document fields are:
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
 | `version` | integer | `1` | Workspace format; only version 1 is accepted. |
 | `reference` | exact requirement | required | Released `package==version` or `package[extras]==version`. |
-| `candidate` | path | `.` | Local checkout with statically declared distribution metadata. |
+| `candidate` | path | current directory | Local checkout with statically declared distribution metadata. |
 | `python` | `major.minor` | invoking Python | Worker Python, at least 3.11. |
 | `config` | path | `parity.toml` | Parity case configuration. |
 | `manifest` | path | `migration.toml` | Migration inventory. |
@@ -184,19 +187,32 @@ and `migration.toml` to exist by setup time. The document fields are:
 | `lanes` | array of tables | one `default` lane | Unique dependency lanes. |
 
 Each `[[lanes]]` has a required `[A-Za-z0-9_.-]+` `name` and an optional `requirements` path.
-Equivalent CLI values are repeatable `--lane NAME` or `--lane NAME=REQUIREMENTS`. Paths are
-resolved beside the workspace file. `report_dir` must remain inside that project.
+Equivalent CLI values are repeatable `--lane NAME` or `--lane NAME=REQUIREMENTS`. Paths supplied to
+`migration init` are interpreted from the invocation directory and serialized relative to the
+workspace file. Paths inside the saved TOML are resolved beside that file. `report_dir` must remain
+inside the workspace directory.
 
 `parity migration setup` resolves one hash-pinned requirements lock per lane and prepares an
 isolated reference/candidate worker pair. `parity migration run` performs that setup and then runs
-the complete manifest in every lane, overriding only the two worker interpreter paths in the
-loaded config. It writes `<report_dir>/<lane>.json`. Locks keep dependency selection
+the complete manifest in every lane. Managed execution uses the workspace directory as both worker
+working directories, supplies the two prepared interpreter paths, requires the exact workspace
+reference distribution on the reference side and records the subject distribution on both sides.
+An explicit conflicting distribution contract is rejected. It writes
+`<report_dir>/<lane>.json`. The active lane report is removed before execution, so an interrupted
+run cannot leave an earlier green report looking current. Locks keep dependency selection
 stable on later runs; `--refresh-locks` deliberately asks the resolver to upgrade them. The command
 returns `2` if any lane errors, otherwise `1` if any lane fails, otherwise `0`.
 
+`parity migration advance --reference package==version` atomically changes only the active exact
+reference. The distribution name must be unchanged. Candidate, Python, paths and lanes are
+preserved; current lane reports are invalidated. Parity intentionally stores no A→…→M history.
+Keep durable cases mapped in a permanent manifest unit and replace transition-specific units for
+each adjacent pair.
+
 tox, tox-uv and uv implement this lifecycle behind the Parity commands. Generated locks,
 environments and tox configuration are private state under `.parity/workspace`; users do not need
-to author tox configuration. Parity never clones a repository, selects or changes its revision,
+to author tox configuration. The `.parity` root is self-ignoring even when a consumer repository
+has no root `.gitignore`. Parity never clones a repository, selects or changes its revision,
 applies patches or edits candidate source. The candidate packaging metadata and resolved
 dependencies are executable supply-chain inputs and must be trusted. Use explicit `python` paths in
 `parity.toml` when environments are provisioned elsewhere.
@@ -207,6 +223,12 @@ rejects dynamic `setup.py`-only names because a stale or differently named edita
 otherwise make the candidate import the reference implementation. Provision both worker
 interpreters explicitly for projects with dynamic distribution metadata.
 
+The workspace directory must not be the candidate checkout and neither its working directory nor
+inherited `PYTHONPATH` may expose the candidate root to the reference worker. Otherwise a flat-layout
+package could shadow the installed release while distribution metadata still reported the expected
+version. Keep workspaces and wrapper modules in `migrations/`; the editable candidate installation
+provides candidate imports without adding its source root to worker search paths.
+
 ## Retained evidence verification
 
 `parity evidence verify REPORT [--artifact-root PATH] [--json PATH]` accepts a suite JSON report
@@ -214,10 +236,11 @@ interpreters explicitly for projects with dynamic distribution metadata.
 a replayable artifact and carry an `ms1:...` mismatch signature. Duplicate report entries are
 verified once in report order.
 
-Without `--artifact-root`, the artifact directory named by the report is resolved below the current
-directory. A supplied root relocates that same named directory; report paths must remain contained,
-regular manifest-bound artifacts. Verification checks stored hashes and result metadata, requires
-verified runtime provenance, and replays the exact saved input.
+Without `--artifact-root`, a report located anywhere beneath the artifact directory named in its
+entries resolves that ancestor automatically; otherwise Parity resolves the named directory below
+the current directory. A supplied root relocates that same named directory. Report paths must remain
+contained, regular manifest-bound artifacts. Verification checks stored hashes and result metadata,
+requires verified runtime provenance, and replays the exact saved input.
 
 Exit codes are:
 
@@ -227,8 +250,12 @@ Exit codes are:
 - `2`: report/artifact integrity, provenance or execution could not be established (`error`).
 
 Errors take precedence over stale results. `--json` writes data-safe evidence report schema 1 with
-the source report hash, aggregate counts and artifact statuses; it does not copy counterexample
-values. This is behavioural and local-integrity verification, not trust establishment. `ms1:` is a
+the source report hash, aggregate counts, artifact statuses and a bounded `reason_code` for every
+non-verified entry. Reason codes distinguish an unavailable/invalid artifact, signature or case
+mismatch, unverified provenance, replay failure/error, a finding that disappeared, and a finding
+whose mismatch shape changed; they never include caught exception text or absolute paths. The
+report does not copy counterexample values. This is behavioural and local-integrity verification,
+not trust establishment. `ms1:` is a
 data-free mismatch-shape digest, not a digital signature, and replay executes arbitrary configured
 Python. Review the report, artifact and checkout before running it.
 
@@ -503,9 +530,11 @@ Mismatch signatures classify observable difference shapes, not root causes or se
 generated witness is observed twice after shrinking; changing signatures or side-specific output
 nondeterminism stops the campaign as an execution error rather than creating questionable evidence.
 Separately, deterministic inputs that initially pass are observed `stability_repeats` times. Each
-side is compared with its own first observation, so matching but equally unstable implementations
-cannot produce a false pass. Repeat exceptions, crashes, timeouts or output drift stop the campaign
-as an unsigned execution error before generated search or benchmarking.
+side is compared with its own first observation under strict, zero-tolerance, reflexive canonical
+identity. User cross-side ordering/tolerance/null policies cannot label a stable output as unstable,
+while matching but equally unstable implementations still cannot produce a false pass. Repeat
+exceptions, crashes, timeouts or output drift stop the campaign as an unsigned execution error
+before generated search or benchmarking.
 `examples_run` and `deterministic_examples` count each input once; stability observations are
 additional callable executions, not additional generated examples.
 

@@ -23,6 +23,9 @@ from parity.models import (
 def check(config: str | Path = "parity.toml", *, cases: set[str] | None = None) -> SuiteResult:
     """Run cases from a validated parity.toml file."""
 
+    if cases is not None and not cases:
+        raise ValueError("cases must contain at least one case name when provided")
+
     from parity.engine import run_suite
 
     return run_suite(load_config(config), selected_cases=cases)

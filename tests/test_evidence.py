@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from parity import cli
 from parity.evidence import (
+    EvidenceArtifactReason,
     EvidenceArtifactResult,
     EvidenceArtifactStatus,
     EvidenceError,
@@ -148,15 +149,26 @@ def test_verifies_suite_and_migration_report_artifacts(
 
 
 @pytest.mark.parametrize(
-    ("replay", "expected_status", "artifact_status"),
+    ("replay", "expected_status", "artifact_status", "reason_code"),
     [
-        (_replay(Status.PASSED), Status.FAILED, EvidenceArtifactStatus.STALE),
+        (
+            _replay(Status.PASSED),
+            Status.FAILED,
+            EvidenceArtifactStatus.STALE,
+            EvidenceArtifactReason.FINDING_NOT_REPRODUCED,
+        ),
         (
             _replay(Status.FAILED, "ms1:" + "b" * 64),
             Status.FAILED,
             EvidenceArtifactStatus.STALE,
+            EvidenceArtifactReason.FINDING_CHANGED,
         ),
-        (_replay(Status.ERROR, None), Status.ERROR, EvidenceArtifactStatus.ERROR),
+        (
+            _replay(Status.ERROR, None),
+            Status.ERROR,
+            EvidenceArtifactStatus.ERROR,
+            EvidenceArtifactReason.REPLAY_ERROR,
+        ),
     ],
 )
 def test_distinguishes_stale_and_error_replays(
@@ -165,6 +177,7 @@ def test_distinguishes_stale_and_error_replays(
     replay: SuiteResult,
     expected_status: Status,
     artifact_status: EvidenceArtifactStatus,
+    reason_code: EvidenceArtifactReason,
 ) -> None:
     artifact = _write_artifact(tmp_path / "artifacts" / "orders" / "finding")
     report = tmp_path / "report.json"
@@ -175,6 +188,7 @@ def test_distinguishes_stale_and_error_replays(
 
     assert result.status is expected_status
     assert result.artifacts[0].status is artifact_status
+    assert result.artifacts[0].reason_code is reason_code
 
 
 def test_tampered_report_signature_is_an_error_without_replay(
@@ -199,6 +213,7 @@ def test_tampered_report_signature_is_an_error_without_replay(
 
     assert result.status is Status.ERROR
     assert not called
+    assert result.artifacts[0].reason_code is EvidenceArtifactReason.SIGNATURE_MISMATCH
 
 
 @pytest.mark.parametrize(
@@ -244,6 +259,7 @@ def test_rejects_artifact_traversal_and_symlink_escape(tmp_path: Path) -> None:
     report.write_text(json.dumps(_report("artifacts/orders/finding")), encoding="utf-8")
     result = verify_evidence(report, artifact_root=artifact_root)
     assert result.status is Status.ERROR
+    assert result.artifacts[0].reason_code is EvidenceArtifactReason.ARTIFACT_UNAVAILABLE
 
 
 def test_requires_verified_recorded_runtime(
@@ -261,6 +277,45 @@ def test_requires_verified_recorded_runtime(
 
     assert result.status is Status.ERROR
     assert result.artifacts[0].status is EvidenceArtifactStatus.ERROR
+    assert result.artifacts[0].reason_code is EvidenceArtifactReason.PROVENANCE_UNVERIFIED
+
+
+def test_invalid_artifact_reports_a_bounded_reason_without_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = _write_artifact(tmp_path / "artifacts" / "orders" / "finding")
+    (artifact / "result.json").write_text("private corrupt detail", encoding="utf-8")
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps(_report(str(artifact.relative_to(tmp_path)))), encoding="utf-8")
+    called = False
+
+    def unexpected_replay(_artifact: Path) -> SuiteResult:
+        nonlocal called
+        called = True
+        return _replay(Status.FAILED)
+
+    monkeypatch.setattr("parity.engine.replay_artifact", unexpected_replay)
+
+    result = verify_evidence(report, artifact_root=tmp_path / "artifacts")
+
+    assert not called
+    assert result.artifacts[0].reason_code is EvidenceArtifactReason.ARTIFACT_INVALID
+    assert "private corrupt detail" not in json.dumps(evidence_report_payload(result))
+
+
+def test_case_identity_mismatch_reports_a_bounded_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = _write_artifact(tmp_path / "artifacts" / "orders" / "finding")
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps(_report(str(artifact.relative_to(tmp_path)))), encoding="utf-8")
+    replay = _replay(Status.FAILED)
+    replay.cases[0] = replay.cases[0].model_copy(update={"name": "different-case"})
+    monkeypatch.setattr("parity.engine.replay_artifact", lambda _artifact: replay)
+
+    result = verify_evidence(report, artifact_root=tmp_path / "artifacts")
+
+    assert result.artifacts[0].reason_code is EvidenceArtifactReason.CASE_MISMATCH
 
 
 @pytest.mark.parametrize(
@@ -282,6 +337,49 @@ def test_artifact_result_rejects_contradictory_signatures(
             status=status,
             expected_signature=SIGNATURE,
             actual_signature=actual,
+        )
+
+
+@pytest.mark.parametrize(
+    ("status", "actual", "reason"),
+    [
+        (
+            EvidenceArtifactStatus.VERIFIED,
+            SIGNATURE,
+            EvidenceArtifactReason.REPLAY_FAILED,
+        ),
+        (EvidenceArtifactStatus.STALE, None, None),
+        (
+            EvidenceArtifactStatus.STALE,
+            None,
+            EvidenceArtifactReason.REPLAY_FAILED,
+        ),
+        (
+            EvidenceArtifactStatus.STALE,
+            None,
+            EvidenceArtifactReason.FINDING_CHANGED,
+        ),
+        (EvidenceArtifactStatus.ERROR, None, None),
+        (
+            EvidenceArtifactStatus.ERROR,
+            None,
+            EvidenceArtifactReason.FINDING_NOT_REPRODUCED,
+        ),
+    ],
+)
+def test_artifact_result_rejects_missing_or_contradictory_reason_codes(
+    status: EvidenceArtifactStatus,
+    actual: str | None,
+    reason: EvidenceArtifactReason | None,
+) -> None:
+    with pytest.raises(ValidationError):
+        EvidenceArtifactResult(
+            case="orders",
+            artifact="artifacts/orders/finding",
+            status=status,
+            expected_signature=SIGNATURE,
+            actual_signature=actual,
+            reason_code=reason,
         )
 
 
@@ -323,6 +421,8 @@ def test_one_replay_exception_does_not_abort_the_batch(
         EvidenceArtifactStatus.ERROR,
         EvidenceArtifactStatus.VERIFIED,
     ]
+    assert result.artifacts[0].reason_code is EvidenceArtifactReason.REPLAY_FAILED
+    assert "private replay detail" not in json.dumps(evidence_report_payload(result))
 
 
 def test_report_deduplicates_in_order_and_rejects_conflicting_artifact_binding(
@@ -391,6 +491,27 @@ def test_evidence_json_writer_preserves_destination_and_cleans_temporary_on_fail
     assert list(tmp_path.glob(".verification.json.*")) == []
 
 
+def test_evidence_json_writer_creates_missing_parent_directories(tmp_path: Path) -> None:
+    result = EvidenceResult(
+        status=Status.PASSED,
+        report_sha256="a" * 64,
+        artifacts=[
+            EvidenceArtifactResult(
+                case="orders",
+                artifact="artifacts/orders/finding",
+                status=EvidenceArtifactStatus.VERIFIED,
+                expected_signature=SIGNATURE,
+                actual_signature=SIGNATURE,
+            )
+        ],
+    )
+
+    destination = write_evidence_json(result, tmp_path / "nested" / "reports" / "evidence.json")
+
+    assert json.loads(destination.read_text(encoding="utf-8"))["status"] == "passed"
+    assert list(destination.parent.glob(".evidence.json.*")) == []
+
+
 def test_explicit_artifact_root_supports_nested_configured_directories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -404,6 +525,38 @@ def test_explicit_artifact_root_supports_nested_configured_directories(
 
     assert result.status is Status.PASSED
     assert artifact.is_dir()
+
+
+def test_report_beneath_nested_artifact_root_is_self_locating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_root = tmp_path / "migrations" / ".parity"
+    artifact = _write_artifact(artifact_root / "orders" / "finding")
+    report = artifact_root / "workspace" / "reports" / "default.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps(_report(".parity/orders/finding")), encoding="utf-8")
+    # A same-named cwd root must not take precedence over the report's own root.
+    (tmp_path / ".parity").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("parity.engine.replay_artifact", lambda _artifact: _replay(Status.FAILED))
+
+    result = verify_evidence(report)
+
+    assert result.status is Status.PASSED
+    assert result.artifacts[0].status is EvidenceArtifactStatus.VERIFIED
+    assert artifact.is_dir()
+
+
+def test_self_locating_report_does_not_follow_an_artifact_root_symlink(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-inferred-root"
+    outside.mkdir()
+    artifact_root = tmp_path / ".parity"
+    artifact_root.symlink_to(outside, target_is_directory=True)
+    report = artifact_root / "report.json"
+    report.write_text(json.dumps(_report(".parity/orders/finding")), encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="symbolic link"):
+        verify_evidence(report)
 
 
 @pytest.mark.parametrize(
@@ -442,8 +595,20 @@ def test_evidence_cli_exit_contract_and_safe_json(
 
     assert completed.exit_code == exit_code, completed.output
     assert label in completed.output
+    if exit_code == 1:
+        assert "finding_not_reproduced" in completed.output
+    elif exit_code == 2:
+        assert "replay_error" in completed.output
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["status"] == {0: "passed", 1: "failed", 2: "error"}[exit_code]
+    assert (
+        payload["artifacts"][0]["reason_code"]
+        == {
+            0: None,
+            1: "finding_not_reproduced",
+            2: "replay_error",
+        }[exit_code]
+    )
     assert str(tmp_path) not in output.read_text(encoding="utf-8")
     assert str(tmp_path) not in completed.output
 

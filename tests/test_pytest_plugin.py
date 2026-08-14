@@ -76,6 +76,16 @@ def test_check_forwards_configuration_and_selection(monkeypatch: pytest.MonkeyPa
     assert received == {"config": Path("default.toml"), "cases": {"orders"}}
 
 
+def test_check_rejects_explicit_empty_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected_check(*_args: object, **_kwargs: object) -> SuiteResult:
+        raise AssertionError("the public API must not run")
+
+    monkeypatch.setattr("parity.pytest_plugin.parity_api.check", unexpected_check)
+
+    with pytest.raises(pytest.fail.Exception, match="at least one case name"):
+        ParityAssertions("default.toml").check(cases=set())
+
+
 def test_verify_forwards_public_api_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
     received: dict[str, Any] = {}
 
@@ -127,3 +137,21 @@ def test_parity_case_requires_exactly_one_selection(pytester: pytest.Pytester) -
     result = pytester.runpytest()
     assert result.ret != 0
     result.stdout.fnmatch_lines(["*parity_case requires exactly one --parity-case option*"])
+
+
+def test_empty_marker_selection_is_a_usage_error(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.parity(cases=[])
+        def test_empty_selection(parity):
+            parity.check()
+        """
+    )
+
+    result = pytester.runpytest()
+
+    assert result.ret != 0
+    output = result.stdout.str() + result.stderr.str()
+    assert "@pytest.mark.parity cases must contain at least one case name" in output

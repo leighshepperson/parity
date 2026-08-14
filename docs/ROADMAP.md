@@ -10,7 +10,8 @@ The current release makes a complete migration easier to operate without broaden
 source manager or general build system:
 
 - an optional `parity-check[workspace]` flow creates isolated, locked reference/candidate workers
-  for one or more dependency lanes behind `parity migration init/setup/run`;
+  for one or more dependency lanes behind `parity migration init/setup/run`, while
+  `migration advance` moves one active adjacent pair without accumulating a history graph;
 - `cases_file` and bounded `case_defaults` remove repetitive large-config boilerplate while keeping
   case identity, targets and input contracts visible;
 - side-specific `reference_kwargs` and `candidate_kwargs` let one wrapper expose controlled backend
@@ -20,8 +21,9 @@ source manager or general build system:
   migration reports.
 
 The workspace consumes a released reference and an existing local candidate checkout. It does not
-clone, patch or modify source. Parity's `ms1:` value is a mismatch-shape digest, not a
-cryptographic signature or attestation.
+clone, patch or modify source. Durable core cases remain mapped in the current manifest; hop-specific
+cases and reports are replaced as the baseline advances. Parity's `ms1:` value is a mismatch-shape
+digest, not a cryptographic signature or attestation.
 
 ## Make the current release dependable
 

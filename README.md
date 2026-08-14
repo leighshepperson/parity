@@ -61,16 +61,36 @@ gate:
 
 ```bash
 python -m pip install "parity-check[workspace]"
-parity migration init --reference 'your-library==1.2.3' --candidate .
+parity init migrations/parity.toml \
+  --reference your_library.api:transform \
+  --candidate your_library.api:transform \
+  --fixture tests/fixtures/input.parquet
+parity migration init --reference 'your-library==1.2.3'
 parity migration run
 ```
 
-The reference is an exact released requirement and the candidate is a local checkout.
+The reference is an exact released requirement and the candidate is the current checkout.
+`migration init` creates the active workspace and, when needed, a starter ledger that maps every
+configured case to `core-regression`; review that generated inventory before relying on it.
 `migration run` resolves hash-pinned dependency locks, prepares a reference/candidate environment
-for each declared lane and writes a data-safe JSON report for each lane. Parity uses tox, tox-uv
-and uv as private environment-lifecycle details; it does not clone repositories, apply patches or
-modify candidate source. Set explicit `reference.python` and `candidate.python` paths when another
-system provisions the environments. See the [user guide](docs/USER_GUIDE.md#managed-migration-workspaces).
+for each declared lane, verifies the exact released package on the reference side, records the
+candidate package version and writes a data-safe JSON report for each lane. Parity uses tox,
+tox-uv and uv as private environment-lifecycle details; it does not clone repositories, apply
+patches or modify candidate source. Set explicit `reference.python` and `candidate.python` paths
+when another system provisions the environments. See the
+[user guide](docs/USER_GUIDE.md#managed-migration-workspaces).
+
+Migrations are deliberately one active adjacent pair, not an append-only history. After promoting
+the candidate, advance the reference and keep the permanent core cases while replacing only
+transition-specific cases:
+
+```bash
+parity migration advance --reference 'your-library==1.3.0'
+parity migration run
+```
+
+Advancing invalidates the previous active reports. Historical transitions are not part of the
+completion gate.
 
 To scaffold an existing pair directly, supply the two targets and a fixture together. This mode
 writes only `parity.toml`; it does not create demo code or install environments:
@@ -195,7 +215,7 @@ Run the unfiltered coverage gate:
 parity migration check \
   --manifest migrations/migration.toml \
   --config migrations/parity.toml \
-  --json .parity/migration-status.json
+  --json migrations/.parity/migration-status.json
 ```
 
 The gate runs the union of mapped cases once. It passes only when at least one declared unit passed
@@ -212,8 +232,8 @@ Retained failure evidence can be checked as a batch from either a suite JSON rep
 suite in a migration JSON report:
 
 ```bash
-parity evidence verify .parity/baseline-failures.json \
-  --json .parity/evidence-status.json
+parity evidence verify migrations/.parity/migration-status.json \
+  --json migrations/.parity/evidence-status.json
 ```
 
 Exit `0` means every referenced finding reproduced the same mismatch shape, `1` means at least one
@@ -344,6 +364,9 @@ suite = verify(
     artifact_dir=".parity/live-orders",
 )
 ```
+
+Omit `cases` to run the configured suite. An explicitly empty Python or pytest selection is rejected
+instead of producing a vacuous pass.
 
 `check` and `verify` return typed Pydantic result models. They do not terminate the process; the
 caller decides how to enforce the result.

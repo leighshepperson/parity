@@ -245,6 +245,17 @@ class ArtifactStore:
         if config_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", config_sha256):
             raise ValueError("config_sha256 must be a lowercase SHA-256 digest")
 
+        self.root.mkdir(parents=True, exist_ok=True)
+        ignore = self.root / ".gitignore"
+        try:
+            with ignore.open("x", encoding="utf-8") as stream:
+                # A private artifact root can contain compared values. Make it
+                # self-ignoring even when the consumer repository has no root
+                # .gitignore, without modifying an existing user policy.
+                stream.write("*\n")
+        except FileExistsError:
+            pass
+
         case = case_name
         name = case.name if isinstance(case, CaseConfig) else case
         safe_case = _safe_name(name)

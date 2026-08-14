@@ -105,6 +105,16 @@ def test_inspection_artifact_is_complete_hashed_and_not_claimed_as_replayable(
     assert str(tmp_path) not in replay_text
 
 
+def test_artifact_root_is_self_ignoring_without_replacing_user_policy(tmp_path: Path) -> None:
+    root = tmp_path / ".parity"
+    ArtifactStore(root).write_failure("orders", pa.table({"id": [1]}), _result())
+    assert (root / ".gitignore").read_text(encoding="utf-8") == "*\n"
+
+    (root / ".gitignore").write_text("# user policy\n", encoding="utf-8")
+    ArtifactStore(root).write_failure("customers", pa.table({"id": [2]}), _result())
+    assert (root / ".gitignore").read_text(encoding="utf-8") == "# user policy\n"
+
+
 def test_artifact_records_complete_runtime_and_config_bindings(
     tmp_path: Path,
 ) -> None:

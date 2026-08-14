@@ -191,6 +191,8 @@ def test_migration_check_preserves_failure_and_error_exit_codes(
     result = runner.invoke(cli.app, ["migration", "check"])
 
     assert result.exit_code == exit_code
+    assert "case evidence" in result.stdout
+    assert f"Parity {status.value.upper()}" in result.stdout
 
 
 def test_version_and_init_are_runnable(tmp_path: Path) -> None:
@@ -410,6 +412,22 @@ def test_inspect_and_doctor_commands(tmp_path: Path) -> None:
     assert all(item["installed"] for item in json.loads(doctor.stdout)["dependencies"])
 
 
+def test_inspect_creates_output_parents_and_handles_write_errors(tmp_path: Path) -> None:
+    fixture = tmp_path / "input.parquet"
+    pq.write_table(pa.table({"id": [1]}), fixture)
+    nested = tmp_path / "nested" / "schema.json"
+
+    written = runner.invoke(cli.app, ["inspect", str(fixture), "--output", str(nested)])
+    assert written.exit_code == 0, written.output
+    assert nested.is_file()
+    assert "wrote" in written.stdout
+
+    failed = runner.invoke(cli.app, ["inspect", str(fixture), "--output", str(tmp_path)])
+    assert failed.exit_code == 2
+    assert "schema output could not be written" in failed.stderr
+    assert "Traceback" not in failed.output
+
+
 def test_doctor_config_reports_workers_side_by_side_and_filters_case(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -457,6 +475,7 @@ def test_doctor_config_reports_workers_side_by_side_and_filters_case(
     assert "Candidate" in terminal.stdout
     assert "Python" in terminal.stdout
     assert "Parity" in terminal.stdout
+    assert "worker runtimes ready; targets were not imported" in terminal.stdout
 
 
 def test_doctor_config_uses_exit_two_for_missing_distribution(tmp_path: Path, monkeypatch) -> None:
@@ -485,9 +504,10 @@ def test_doctor_config_uses_exit_two_for_missing_distribution(tmp_path: Path, mo
 
 
 def test_doctor_case_requires_config() -> None:
-    result = runner.invoke(cli.app, ["doctor", "--case", "orders"])
+    result = runner.invoke(cli.app, ["doctor", "--case", "package[extra]"])
     assert result.exit_code == 2
     assert "--case requires --config" in result.stderr
+    assert "package[extra]" not in result.stderr
 
 
 def test_doctor_config_load_error_does_not_echo_paths_or_values(
@@ -561,6 +581,25 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
     assert json.loads(json_path.read_text(encoding="utf-8"))["status"] == "failed"
     assert "<testsuite" in junit_path.read_text(encoding="utf-8")
     assert markdown_path.read_text(encoding="utf-8").startswith("# Parity verification")
+    assert result.stdout.count("wrote") == 3
+
+
+def test_check_markdown_alone_creates_parents_and_write_failures_exit_two(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda _path: _config(tmp_path))
+    monkeypatch.setattr("parity.engine.run_suite", lambda *_args, **_kwargs: _suite(Status.PASSED))
+    markdown = tmp_path / "deep" / "reports" / "summary.md"
+
+    written = runner.invoke(cli.app, ["check", "--markdown", str(markdown)])
+    assert written.exit_code == 0, written.output
+    assert markdown.read_text(encoding="utf-8").startswith("# Parity verification")
+    assert "wrote" in written.stdout
+
+    failed = runner.invoke(cli.app, ["check", "--json", str(tmp_path)])
+    assert failed.exit_code == 2
+    assert "verification report could not be written" in failed.stderr
+    assert "Traceback" not in failed.output
 
 
 def test_check_rejects_unknown_case_and_appends_github_summary(tmp_path: Path, monkeypatch) -> None:
@@ -571,9 +610,10 @@ def test_check_rejects_unknown_case_and_appends_github_summary(tmp_path: Path, m
     assert unknown.exit_code == 2
     assert "unknown case" in unknown.stderr
 
-    unknown_tag = runner.invoke(cli.app, ["check", "--tag", "does-not-exist"])
+    unknown_tag = runner.invoke(cli.app, ["check", "--tag", "package[extra]"])
     assert unknown_tag.exit_code == 2
     assert "unknown tag" in unknown_tag.stderr
+    assert "package[extra]" in unknown_tag.stderr
 
     summary = tmp_path / "step-summary.md"
     summary.write_text("existing\n", encoding="utf-8")

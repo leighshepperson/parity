@@ -44,9 +44,9 @@ checkout explicitly:
 
 ```bash
 git clone --branch v2.5.1 --depth 1 \
-  https://github.com/business-science/pytimetk.git candidate-src/pytimetk
-git -C candidate-src/pytimetk apply ../../patches/candidate.patch
-git -C candidate-src/pytimetk apply ../../patches/local-version.patch
+  https://github.com/business-science/pytimetk.git ../pytimetk-migration-candidate
+git -C ../pytimetk-migration-candidate apply ../pytimetk_migration/patches/candidate.patch
+git -C ../pytimetk-migration-candidate apply ../pytimetk_migration/patches/local-version.patch
 ```
 
 The semantic patch remains separately upstreamable. The small local-version patch identifies only
@@ -58,100 +58,32 @@ Regenerate the synthetic fixtures, verify the declarations and run both lanes:
 ```bash
 python make_fixtures.py
 pytest -q ../../tests/test_pytimetk_migration_case_study.py
-parity migration run
+parity migration run --workspace parity.workspace.toml
 ```
 
 `parity.workspace.toml` is the complete human-facing environment declaration. It points at the
 worker-path-free `parity.workspace-config.toml`, the shared `parity.cases.toml`, the migration
-ledger, the candidate checkout and the two reviewed lane inputs. Parity resolves hash-pinned locks,
-prepares and reuses the paired tox environments through `tox-uv`, overrides worker interpreters in
-memory, then writes private reports to `.parity/workspace/reports/{release,current}.json`. Pass
-`--refresh-locks` only when intentionally refreshing the dependency resolution.
+ledger, the sibling candidate checkout and the two reviewed lane inputs. Keeping the checkout
+outside the harness prevents it from shadowing the released reference import. Parity resolves
+hash-pinned locks, prepares and reuses the paired tox environments through `tox-uv`, overrides
+worker interpreters in memory, then writes private reports to
+`.parity/workspace/reports/{release,current}.json`. Pass `--refresh-locks` only when intentionally
+refreshing the dependency resolution.
 
 The expected managed result is two passing lane reports: five units pass, six are explicitly
 excluded, none fail, error or remain uncovered, and all 15 nested campaigns pass in each lane.
 
-## Historical/manual four-environment reproduction
+## Evidence and acceptance
 
-The checked-in reports predate the managed workspace. The following lower-level process remains a
-useful exact reproduction path and supports the separate direct version-drift check. It creates
-four source checkouts and exposes all worker paths; new pilots should prefer the managed flow above.
+The repaired acceptance state is five covered units passed, six explicit exclusions, no failed,
+errored or uncovered unit, and all 15 campaigns passed in both dependency lanes. The separate
+`parity.version-drift.toml` corpus contains ten representative release-to-current dependency checks;
+all ten pass.
 
-Run these commands from this directory. `uv pip compile` captures the complete transitive graph;
-the checked-in `requirements.in` files preserve the historical direct constraints.
-
-```bash
-for lane in release current; do
-  uv pip compile "environments/$lane/requirements.in" \
-    --output-file "environments/$lane/requirements.txt"
-
-  for endpoint in reference candidate; do
-    uv venv --python 3.12 "environments/$lane/$endpoint/.venv"
-    uv pip sync \
-      --python "environments/$lane/$endpoint/.venv/bin/python" \
-      "environments/$lane/requirements.txt"
-
-    git clone --branch v2.5.1 --depth 1 \
-      https://github.com/business-science/pytimetk.git \
-      "environments/$lane/$endpoint/src/pytimetk"
-  done
-
-  git -C "environments/$lane/candidate/src/pytimetk" \
-    apply "../../../../../patches/candidate.patch"
-  git -C "environments/$lane/candidate/src/pytimetk" \
-    apply "../../../../../patches/local-version.patch"
-
-  for endpoint in reference candidate; do
-    uv pip install --reinstall --no-deps \
-      --python "environments/$lane/$endpoint/.venv/bin/python" \
-      -e "environments/$lane/$endpoint/src/pytimetk"
-  done
-done
-```
-
-The explicit environments now point at clean checkouts of the same `v2.5.1` commit. Run the
-complete, unfiltered ledger in each lane and then the direct dependency-version comparisons:
-
-```bash
-environments/release/reference/.venv/bin/parity doctor --config parity.release.toml
-environments/release/reference/.venv/bin/parity migration check \
-  --manifest migration.toml \
-  --config parity.release.toml \
-  --json reports/final/release/migration.json
-
-environments/current/reference/.venv/bin/parity doctor --config parity.current.toml
-environments/current/reference/.venv/bin/parity migration check \
-  --manifest migration.toml \
-  --config parity.current.toml \
-  --json reports/final/current/migration.json
-
-environments/current/reference/.venv/bin/parity check \
-  --config parity.version-drift.toml \
-  --json reports/version-drift/report.json
-```
-
-`parity.version-drift.toml` adds ten direct comparisons: one representative case per API for stock
-pandas release-to-current and repaired Polars release-to-current. This catches dependency drift
-that two independent backend comparisons could otherwise miss.
-
-The repaired acceptance state is:
-
-- both migration commands exit `0`;
-- five units pass, six units are explicitly excluded, and none fail, error or remain uncovered;
-- all 15 nested campaigns pass in both lanes; and
-- all ten direct version-drift cases pass.
-
-The checked-in 2026-08-14 evidence meets that state. Stock 2.5.1 failed all five covered units in
-both lanes without an execution error; the source repair then passed all 15 cases in both lanes,
-and the ten direct dependency-version checks passed. Every one of the 15 private stock artifacts
-referenced by the baseline reports was replayed before the patched candidates were restored. The
-four generated controls each exercised 100 inputs in the repaired runs; the eleven reviewed
-fixture cases each exercised exactly one input and performed no inferred-domain search.
-
-Before applying `patches/candidate.patch`, stock PyTimeTK is expected to keep the gate red. Capture
-that live run under `reports/baseline/`; do not manufacture a baseline report from the findings
-table. Private `.parity-*` counterexamples are intentionally ignored. Promote only small,
-synthetic witnesses into `fixtures/` and `upstream_tests/`.
+Stock PyTimeTK 2.5.1 failed all five covered units without an execution error. The retained report
+files document those mismatch shapes, while small synthetic witnesses live in `fixtures/` and
+`upstream_tests/`. Raw `.parity` counterexamples remain private and ignored. Do not manufacture a
+baseline report from `FINDINGS.md`; capture it from an actual stock run when revalidating the study.
 
 See [FINDINGS.md](FINDINGS.md) for the evidence register and [VALIDATION.md](VALIDATION.md) for the
 completion checklist.

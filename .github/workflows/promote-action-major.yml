@@ -2,11 +2,6 @@ name: Promote Action major tag
 run-name: Promote stable Action channel
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/promote-action-major.yml
-      - scripts/promote_action_major.py
   workflow_dispatch:
     inputs:
       release_tag:
@@ -37,13 +32,9 @@ jobs:
       - name: Validate and promote Action major tag
         env:
           DRY_RUN: ${{ inputs.dry_run }}
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          if [[ -z "$RELEASE_TAG" ]]; then
-            RELEASE_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
-          fi
           arguments=(--release-tag "$RELEASE_TAG")
           if [[ "$DRY_RUN" == "true" ]]; then
             arguments+=(--dry-run)

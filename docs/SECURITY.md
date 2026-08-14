@@ -29,7 +29,8 @@ Treat the entire artifact directory at the same classification as its source fix
 1. Use synthetic fixtures where they represent the contract adequately.
 2. If production-shaped fixtures are necessary, remove direct identifiers and rare values before
    committing or uploading them.
-3. Keep `.parity/` ignored by Git; the repository `.gitignore` does this by default.
+3. Keep `.parity/` ignored by Git. Parity creates a self-ignoring private-state root, but retain an
+   explicit repository rule when other tools may replace or move that directory.
 4. Restrict CI artifact readers and set the shortest useful retention period.
 5. Do not paste counterexamples into public issues. Recreate a synthetic witness.
 6. Keep callable wrappers pure and offline. Inject no credentials unless unavoidable.
@@ -83,7 +84,10 @@ with tox-uv to create isolated workers. Resolution and installation may access c
 indexes and their normal caches. The exact reference requirement, lane requirement files, candidate
 packaging metadata and every resolved dependency are supply-chain inputs. Use a trusted index,
 review lock changes and keep `.parity/workspace` private because generated configuration can contain
-local paths.
+local paths. Managed setup rejects a workspace/import layout that exposes the editable candidate
+checkout to the reference worker: otherwise a flat-layout package could shadow the installed
+reference while package metadata still appeared correct. Keep the workspace and wrappers in a
+separate `migrations/` directory and do not add the candidate root to worker `PYTHONPATH`.
 
 When uv or tox fails, Parity captures their raw stdout and stderr under
 `.parity/workspace/logs/` while keeping it out of the data-safe terminal error. Those private logs

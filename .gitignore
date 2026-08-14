@@ -14,3 +14,5 @@ build/
 dist/
 *.egg-info/
 *.py[cod]
+# External candidate checkout used by the managed PyTimeTK migration study.
+/case_studies/pytimetk-migration-candidate/

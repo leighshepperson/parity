@@ -65,27 +65,29 @@ Run the initial gate:
 parity migration check \
   --manifest migrations/migration.toml \
   --config migrations/parity.toml \
-  --json .parity/migration-status.json
+  --json migrations/.parity/migration-status.json
 ```
 
 An uncovered unit exits `1`. An unknown case name or invalid manifest exits `2` before project
 callables execute. The gate runs the union of mapped cases once, even when several units share a
 case, and attempts every mapped case rather than honouring `fail_fast`.
 
-For a managed environment matrix, declare the workspace only after the candidate checkout,
-`parity.toml` and `migration.toml` exist:
+For a managed environment matrix, put wrappers and configuration in `migrations/`, outside the
+candidate import root. Declare the workspace after the candidate checkout and `parity.toml` exist:
 
 ```bash
 python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference 'your-library==1.2.3' \
-  --candidate . \
   --lane minimum=requirements/minimum.txt \
   --lane current=requirements/current.txt
 ```
 
-This writes `parity.workspace.toml`. It does not clone or select source, apply the migration patch,
-or modify the checkout. Source preparation remains a separate, reviewable agent action.
+This writes `migrations/parity.workspace.toml` and creates a `core-regression` starter ledger from
+the configured cases when `migrations/migration.toml` is absent. Review that generated inventory;
+generation does not prove completeness. The command does not clone or select source, apply the
+migration patch, or modify the checkout. Source preparation remains a separate, reviewable agent
+action.
 
 ## 3. Build evidence one unit at a time
 
@@ -109,15 +111,15 @@ parity check \
   --config migrations/parity.toml \
   --case lags-null-date \
   --no-performance \
-  --json .parity/lags-null-date.json
-parity replay .parity/lags-null-date/<finding-directory>
+  --json migrations/.parity/lags-null-date.json
+parity replay migrations/.parity/lags-null-date/<finding-directory>
 ```
 
 When a suite or migration JSON report references several retained findings, batch the same check:
 
 ```bash
-parity evidence verify .parity/migration-status.json \
-  --json .parity/evidence-status.json
+parity evidence verify migrations/.parity/migration-status.json \
+  --json migrations/.parity/evidence-status.json
 ```
 
 Exit `0` means every artifact reproduced its expected mismatch shape, `1` means at least one is
@@ -151,6 +153,20 @@ writes one migration report per lane. tox, tox-uv and uv are hidden lifecycle/re
 Re-running retains the selected lock; use `--refresh-locks` only as an intentional dependency
 change. Explicit `reference.python` and `candidate.python` configs remain valid when the project or
 CI platform provisions environments itself.
+
+For a sequence of adjacent migrations, keep one active workspace. Preserve a permanent
+`core-regression` manifest unit and replace only hop-specific units. After candidate B is released,
+advance A→B to B→C without creating a history graph:
+
+```bash
+parity migration advance --reference 'your-library==1.3.0'
+parity migration run
+```
+
+Advancing preserves lanes and paths, changes only the exact reference and invalidates active lane
+reports. Do not infer success from a report left by the previous pair. Historical artifacts are
+local evidence, not part of the active completion result, and can be discarded under the project's
+retention policy.
 
 ## 5. Enforce completion
 
@@ -199,6 +215,8 @@ contain fixture-derived or generated input data and require restricted storage.
 - Do not treat matching exceptions as proof of a successful business result.
 - Do not publish raw counterexamples or production-shaped fixtures.
 - Do not let environment tooling clone, patch or otherwise obscure the reviewed candidate source.
+- Do not add the candidate checkout to a managed reference worker's working directory or
+  `PYTHONPATH`; the reference must import the installed released distribution.
 - Do not accept `ms1:` mismatch classifiers as cryptographic signatures or attestations.
 - Do not declare completion while any unit is failed, errored or uncovered.
 - State the inventory limitation when reporting completion: all **declared** in-scope units passed.

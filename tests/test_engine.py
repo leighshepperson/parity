@@ -164,6 +164,41 @@ def _run(
     )
 
 
+def _run_stable_contract_failure(
+    tmp_path: Path,
+    output: pa.Table,
+    comparison: ComparisonPolicy,
+) -> CaseResult:
+    def stable(_value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=output,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    return engine._campaign(
+        name="stable-contract-failure",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=comparison,
+        generation=GenerationConfig(
+            max_examples=1,
+            adversarial_examples=False,
+            search=False,
+            stability_repeats=2,
+        ),
+        performance_config=PerformanceConfig(enabled=False),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=stable,
+        candidate_runner=stable,
+        artifact_case="stable-contract-failure",
+    )
+
+
 def test_live_engine_consumes_generated_strategy_when_adversarial_disabled(tmp_path: Path) -> None:
     result = _run(
         tmp_path,
@@ -514,6 +549,73 @@ def test_repeated_witnesses_with_one_signature_are_deduplicated(tmp_path: Path) 
     assert result.status is Status.FAILED
     assert case.findings_discovered == 1
     assert len(case.failures) == 1
+
+
+@pytest.mark.parametrize(
+    ("comparison", "output", "expected_message"),
+    [
+        (
+            ComparisonPolicy(nan_equal=False),
+            pa.table({"value": [float("nan")]}),
+            "numeric values differ beyond tolerance",
+        ),
+        (
+            ComparisonPolicy(null_equal=False),
+            pa.table({"value": pa.array([None], type=pa.int64())}),
+            "null values are not equivalent",
+        ),
+    ],
+    ids=["nan-not-equal", "null-not-equal"],
+)
+def test_nonreflexive_cross_side_policy_remains_a_stable_contract_failure(
+    tmp_path: Path,
+    comparison: ComparisonPolicy,
+    output: pa.Table,
+    expected_message: str,
+) -> None:
+    case = _run_stable_contract_failure(tmp_path, output, comparison)
+
+    assert case.status is Status.FAILED
+    assert case.findings_discovered == 1
+    assert case.failures[0].status is Status.FAILED
+    assert expected_message in {mismatch.message for mismatch in case.failures[0].mismatches}
+    assert all(
+        "nondeterministic" not in mismatch.message for mismatch in case.failures[0].mismatches
+    )
+
+
+@pytest.mark.parametrize(
+    ("output", "expected_message"),
+    [
+        (
+            pa.table({"value": [1]}),
+            "configured row key columns are unavailable",
+        ),
+        (
+            pa.table({"id": [1, 1], "value": [10, 20]}),
+            "row keys are not unique",
+        ),
+    ],
+    ids=["unavailable-key", "duplicate-key"],
+)
+def test_keyed_contract_failure_is_not_mislabeled_nondeterministic(
+    tmp_path: Path,
+    output: pa.Table,
+    expected_message: str,
+) -> None:
+    case = _run_stable_contract_failure(
+        tmp_path,
+        output,
+        ComparisonPolicy(row_order="keyed", row_keys=["id"]),
+    )
+
+    assert case.status is Status.FAILED
+    assert case.findings_discovered == 1
+    assert case.failures[0].status is Status.FAILED
+    assert expected_message in {mismatch.message for mismatch in case.failures[0].mismatches}
+    assert all(
+        "nondeterministic" not in mismatch.message for mismatch in case.failures[0].mismatches
+    )
 
 
 def test_deterministic_side_nondeterminism_is_an_error(tmp_path: Path) -> None:
