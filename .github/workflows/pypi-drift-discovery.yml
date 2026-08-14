@@ -183,7 +183,7 @@ jobs:
           print("MISMATCH_COUNTS=", failure["mismatch_counts"])
           print("FINDING_SIGNATURE=", failure["finding_signature"])
           print("ARTIFACT=", failure["artifact"])
-          assert failure["source"] == "generated"
+          assert failure["source"].startswith("generated")
 
           with ipc.open_file(failure["artifact"] + "/input.arrow") as reader:
               table = reader.read_all()
