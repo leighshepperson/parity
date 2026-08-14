@@ -1,0 +1,227 @@
+name: PyPI drift discovery
+
+on:
+  push:
+    branches:
+      - agent/pandas-drift-discovery
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build discovery-only harness
+        shell: bash
+        run: |
+          cat > pandas_drift_harness.py <<'PY'
+          import pandas as pd
+
+          CATEGORIES = ["a", "b", "c"]
+
+          def categorical_groupby(data: pd.DataFrame) -> pd.DataFrame:
+              labels = data["code"].map({0: "a", 1: "b", 2: "c"})
+              frame = pd.DataFrame(
+                  {
+                      "key": pd.Categorical(labels, categories=CATEGORIES),
+                      "value": data["value"].astype("float64"),
+                  }
+              )
+              # Intentionally rely on pandas' observed= default. 2.2.x used False;
+              # 3.0.x uses True. The fixture observes every category, so only generated
+              # inputs that omit a category can reveal the semantic change.
+              return frame.groupby("key").agg(total=("value", "sum")).reset_index()
+          PY
+
+          mkdir -p drift-fixtures
+          cat > drift-fixtures/all-categories.json <<'JSON'
+          [
+            {"code": 0, "value": 10.0},
+            {"code": 1, "value": 20.0},
+            {"code": 2, "value": 30.0},
+            {"code": 0, "value": -4.0},
+            {"code": 1, "value": 5.5},
+            {"code": 2, "value": 0.0}
+          ]
+          JSON
+
+          cat > parity-drift.toml <<'TOML'
+          version = 1
+          artifact_dir = ".parity-drift"
+          fail_fast = false
+
+          [[cases]]
+          name = "pandas-groupby-observed-default"
+          fixture = "drift-fixtures/all-categories.json"
+
+          [cases.reference]
+          target = "pandas_drift_harness:categorical_groupby"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["pandas", "numpy", "pyarrow"]
+
+          [cases.candidate]
+          target = "pandas_drift_harness:categorical_groupby"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["pandas", "numpy", "pyarrow"]
+
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          rtol = 0.0
+          atol = 0.0
+
+          [cases.schema]
+          min_rows = 1
+          max_rows = 12
+
+          [[cases.schema.columns]]
+          name = "code"
+          dtype = "int64"
+          nullable = false
+          minimum = 0
+          maximum = 2
+          examples = [0, 1, 2]
+
+          [[cases.schema.columns]]
+          name = "value"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000.0
+          maximum = 1000.0
+          examples = [-1000.0, -1.0, -0.0, 0.0, 1.0, 1000.0]
+
+          [cases.generation]
+          max_examples = 200
+          max_findings = 1
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          derandomize = true
+
+          [cases.performance]
+          enabled = false
+          TOML
+
+      - name: Install only released packages from PyPI
+        shell: bash
+        run: |
+          python -m venv .venv-reference
+          python -m venv .venv-candidate
+          .venv-reference/bin/pip install --upgrade pip
+          .venv-candidate/bin/pip install --upgrade pip
+          .venv-reference/bin/pip install 'parity-check==0.10.0' 'pandas==2.2.3'
+          .venv-candidate/bin/pip install 'parity-check==0.10.0' 'pandas==3.0.5'
+          echo "REFERENCE_PARITY=$(.venv-reference/bin/python -c 'import parity; print(parity.__version__)')"
+          echo "CANDIDATE_PARITY=$(.venv-candidate/bin/python -c 'import parity; print(parity.__version__)')"
+          echo "REFERENCE_PANDAS=$(.venv-reference/bin/python -c 'import pandas; print(pandas.__version__)')"
+          echo "CANDIDATE_PANDAS=$(.venv-candidate/bin/python -c 'import pandas; print(pandas.__version__)')"
+
+      - name: Prove the hand-written fixture itself does not fail
+        shell: bash
+        run: |
+          .venv-candidate/bin/python - <<'PY'
+          import json, subprocess, tempfile
+          from pathlib import Path
+
+          cfg = Path("parity-drift.toml").read_text()
+          cfg = cfg.replace("search = true", "search = false")
+          Path("parity-fixture-only.toml").write_text(cfg)
+          result = subprocess.run([
+              ".venv-candidate/bin/parity", "check",
+              "--config", "parity-fixture-only.toml", "--no-performance",
+              "--json", "fixture-only-report.json",
+          ])
+          report = json.load(open("fixture-only-report.json"))
+          print("FIXTURE_ONLY_EXIT=", result.returncode)
+          print("FIXTURE_ONLY_STATUS=", report["status"])
+          assert result.returncode == 0
+          assert report["status"] == "passed"
+          PY
+
+      - name: Let Parity search for the drift
+        id: discovery
+        shell: bash
+        run: |
+          set +e
+          .venv-candidate/bin/parity doctor --config parity-drift.toml
+          doctor_status=$?
+          .venv-candidate/bin/parity check --config parity-drift.toml --no-performance --json drift-report.json --markdown drift-report.md
+          parity_status=$?
+          set -e
+
+          echo "doctor_status=$doctor_status" >> "$GITHUB_OUTPUT"
+          echo "parity_status=$parity_status" >> "$GITHUB_OUTPUT"
+          echo "DOCTOR_STATUS=$doctor_status"
+          echo "PARITY_STATUS=$parity_status"
+
+          .venv-candidate/bin/python - <<'PY'
+          import json
+          import pyarrow.ipc as ipc
+
+          report = json.load(open("drift-report.json"))
+          case = report["cases"][0]
+          print("REPORT_STATUS=", report["status"])
+          print("CASE_STATUS=", case["status"])
+          print("EXAMPLES_RUN=", case["examples_run"])
+          print("GENERATED_EXAMPLES=", case["generated_examples"])
+          print("FINDINGS_DISCOVERED=", case["findings_discovered"])
+          assert report["status"] == "failed"
+          assert case["findings_discovered"] == 1
+          assert case["failures"]
+          failure = case["failures"][0]
+          print("FAILURE_SOURCE=", failure["source"])
+          print("MISMATCH_COUNTS=", failure["mismatch_counts"])
+          print("FINDING_SIGNATURE=", failure["finding_signature"])
+          print("ARTIFACT=", failure["artifact"])
+          assert failure["source"] == "generated"
+
+          arrow_path = failure["artifact"] + "/input.arrow"
+          with ipc.open_file(arrow_path) as reader:
+              table = reader.read_all()
+          print("SHRUNK_ROWS=", table.num_rows)
+          print("SHRUNK_CODES=", table.column("code").to_pylist())
+          print("SHRUNK_VALUES=", table.column("value").to_pylist())
+          PY
+
+      - name: Replay the discovered counterexample
+        shell: bash
+        run: |
+          artifact=$(.venv-candidate/bin/python -c 'import json; print(json.load(open("drift-report.json"))["cases"][0]["failures"][0]["artifact"])')
+          set +e
+          .venv-candidate/bin/parity replay "$artifact"
+          replay_status=$?
+          set -e
+          echo "REPLAY_STATUS=$replay_status"
+          test "$replay_status" -eq 1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-pandas-drift-discovery
+          path: |
+            fixture-only-report.json
+            drift-report.json
+            drift-report.md
+            .parity-drift
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - name: Require successful discovery, not execution error
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.discovery.outputs.doctor_status }}" -eq 0
+          test "${{ steps.discovery.outputs.parity_status }}" -eq 1
