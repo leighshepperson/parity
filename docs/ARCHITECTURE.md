@@ -50,7 +50,7 @@ case genuinely covers its declared unit.
 Migration execution deliberately ignores configured `fail_fast` so every mapped case is attempted.
 A missing, skipped, zero-example or errored case is uncertain evidence and makes the unit an error.
 At least one unit must pass, preventing an empty or all-excluded inventory from succeeding. The
-ordinary `parity check`, configuration and suite-result contracts are unchanged.
+ordinary `parity check` uses the case configuration and suite-result contracts directly.
 
 ### Adapters and Arrow boundary
 
@@ -140,7 +140,7 @@ existing directory:
 
 ```text
 <artifact-root>/<safe-case>/<UTC timestamp>-<input hash>/
-  input.arrow  # legacy single input
+  input.arrow  # single-frame case
   input.parquet  # present when representable
   # or input-000.arrow, input-001.arrow, ... for a bundle
   manifest.json
@@ -158,22 +158,20 @@ directory are deliberately non-replayable rather than replaced with a potentiall
 same-named module. Reports are separate projections that omit frame and value data. Artifact writes
 use a temporary directory and final rename so interrupted runs do not look complete.
 
-Replay contract version 2 binds a single input to both worker runtime fingerprints and a data-safe
-effective-configuration hash. Version 3 adds an atomic named input bundle. Bundle artifacts use
-manifest version 2 so every consumed input file is required and hash-bound. Replay probes both
-workers before target import and blocks both callables on drift. Version 1 artifacts remain
-accepted and are reported as unverified. JSON report schema version 3 adds data-free mismatch
+Manifest contract 1 hash-binds every artifact file. Replay contract 1 represents one to three named
+inputs through a single `inputs` list; a single-frame case uses the reserved logical name `input`.
+Every automatic replay binds the worker runtime fingerprints and data-safe
+effective-configuration hash. Replay probes both workers before target import and blocks both
+callables on drift or incomplete provenance. Evidence without those bindings remains inspectable
+but is not executable through automatic replay. JSON report schema 3 carries data-free mismatch
 signatures and distinct-finding counts.
 
-Comparison-policy additions such as keyed row alignment do not change the replay transport: the
-sanitized case already stores the complete policy and its effective-configuration hash. Policy
-deserialization remains compatible: an older case without `row_keys` receives the empty default,
-while a keyed case reuses the existing single-input or bundle replay version. Exact replay of
-version 2 and 3 artifacts still requires the recorded Parity and worker runtimes; version 1 replay
-remains explicitly unverified.
+The sanitized replay case stores the complete comparison policy, including keyed row alignment,
+and its effective-configuration hash. Replay therefore reconstructs the recorded contract instead
+of applying defaults from a different case.
 
 Migration JSON is a separate report schema, currently version 1. It binds derived unit results to a
-canonical migration-manifest hash and nests the existing data-safe suite report for the exact
+canonical migration-manifest hash and nests the data-safe suite report for the exact
 mapped-case union; that report retains its effective configuration hash. Unit IDs, case names and
 exclusion reasons pass through redaction. Compared values remain artifact-only. A migration report
 therefore demonstrates the result for one declared inventory and configuration, not that the
@@ -199,6 +197,8 @@ Five independently versioned contracts matter:
 4. Migration-report schema version.
 5. Counterexample manifest/replay artifact version.
 
-Before `1.0`, breaking changes may occur with release notes and migration guidance. Runtime
-fingerprints detect drift but are not environment lockfiles or container attestations; projects
-should still pin dependencies for release gates.
+Before `1.0`, the latest minor release is the supported line and minor releases may change these
+contracts. Readers reject unsupported contract versions rather than guessing how to interpret
+them. Patch releases preserve the current minor's contracts. Runtime fingerprints detect drift but
+are not environment lockfiles or container attestations; projects should still pin dependencies
+for release gates.

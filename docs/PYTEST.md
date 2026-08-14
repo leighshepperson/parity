@@ -40,8 +40,8 @@ from parity import ComparisonPolicy, FrameSchema
 
 def test_live_pair(parity, schema: FrameSchema):
     parity.verify(
-        legacy,
-        rewrite,
+        reference_transform,
+        candidate_transform,
         schema=schema,
         reference_adapter="pandas",
         candidate_adapter="polars",

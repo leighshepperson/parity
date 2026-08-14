@@ -20,7 +20,7 @@ public behaviour should cite the public source in `docs/PRIOR_ART.md` or its fau
 - Add tests that fail without the change.
 - Update public contracts and documentation together.
 - Run all checks in the [development guide](DEVELOPMENT.md).
-- Explain compatibility impact even when it is `none`.
+- Explain any user-visible contract impact.
 - Do not weaken a default comparison merely to remove a failing test.
 
 Small fixes may be submitted directly. Adapter, comparator, artifact-version and execution-security

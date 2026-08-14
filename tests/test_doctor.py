@@ -7,6 +7,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+from parity import __version__
 from parity.doctor import REQUIRED_DEPENDENCIES, diagnose, diagnose_config
 from parity.models import CallableSpec, CaseConfig, ParityConfig
 
@@ -22,6 +23,7 @@ def _configured_case(
     *,
     name: str = "orders",
     distribution: str = "pytest",
+    required_distributions: dict[str, str] | None = None,
     python: Path | None = None,
 ) -> CaseConfig:
     spec = CallableSpec(
@@ -31,6 +33,7 @@ def _configured_case(
         workdir=tmp_path,
         environment={"PRIVATE_TOKEN": "must-not-appear"},
         record_distributions=[distribution],
+        required_distributions=required_distributions or {},
     )
     fixture = tmp_path / "unused.json"
     return CaseConfig(
@@ -47,7 +50,7 @@ def test_config_doctor_inspects_workers_without_importing_targets(tmp_path: Path
     case = report.cases[0]
     assert case.reference.status == "ready"
     assert case.reference.python_version
-    assert case.reference.parity_version == "0.9.2"
+    assert case.reference.parity_version == __version__
     assert case.reference.distributions[0].name == "pytest"
     assert case.reference.distributions[0].status == "installed"
 
@@ -69,6 +72,45 @@ def test_config_doctor_fails_when_explicit_distribution_is_missing(tmp_path: Pat
     dependency = report.cases[0].reference.distributions[0]
     assert dependency.status == "missing"
     assert dependency.version is None
+
+
+def test_config_doctor_enforces_required_distribution_specifier(tmp_path: Path) -> None:
+    report = diagnose_config(
+        ParityConfig(
+            cases=[
+                _configured_case(
+                    tmp_path,
+                    required_distributions={"pytest": "<0"},
+                )
+            ]
+        )
+    )
+
+    assert report.healthy is False
+    worker = report.cases[0].reference
+    assert worker.parity_satisfied is True
+    dependency = worker.distributions[0]
+    assert dependency.status == "installed"
+    assert dependency.requirement == "<0"
+    assert dependency.satisfied is False
+    rendered = json.dumps(report.to_dict())
+    assert '"requirement": "<0"' in rendered
+    assert "module.that.does.not.exist" not in rendered
+    assert str(tmp_path) not in rendered
+    assert "PRIVATE_TOKEN" not in rendered
+
+
+def test_config_doctor_requires_worker_parity_to_match_orchestrator(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("parity.doctor.__version__", "999.0.0")
+
+    report = diagnose_config(ParityConfig(cases=[_configured_case(tmp_path)]))
+
+    assert report.healthy is False
+    assert report.cases[0].reference.status == "ready"
+    assert report.cases[0].reference.parity_satisfied is False
+    assert report.cases[0].candidate.parity_satisfied is False
 
 
 def test_config_doctor_reports_worker_failure_without_python_path(tmp_path: Path) -> None:

@@ -35,13 +35,19 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.ipc as ipc
 
+from parity._version import __version__
 from parity.adapters import from_arrow as adapter_from_arrow
 from parity.adapters import to_arrow as adapter_to_arrow
 from parity.models import CallableSpec, JsonValue, PandasInput, RunMetrics
-from parity.provenance import RuntimeProvenance, collect_runtime_provenance, diff_runtime
+from parity.provenance import (
+    RuntimeProvenance,
+    collect_runtime_provenance,
+    diff_runtime,
+    runtime_contract_failures,
+)
 from parity.targets import is_import_target
 
-_WORKER_PROTOCOL_VERSION = 3
+_WORKER_PROTOCOL_VERSION = 4
 
 InputKind: TypeAlias = Literal["single", "positional", "keyword"]
 ArrowInputBundle: TypeAlias = pa.Table | Sequence[pa.Table] | Mapping[str, pa.Table]
@@ -118,7 +124,6 @@ class Observation:
     value: JsonValue = None
     has_value: bool = False
     exception: ExceptionInfo | None = None
-    mutated_input: bool = False
     mutated_inputs: tuple[str, ...] = ()
     return_type: str | None = None
     runtime: RuntimeProvenance | None = None
@@ -136,7 +141,6 @@ class Observation:
             "has_table": self.table is not None,
             "has_value": self.has_value,
             "exception": self.exception.to_dict() if self.exception else None,
-            "mutated_input": self.mutated_input,
             "mutated_inputs": list(self.mutated_inputs),
             "return_type": self.return_type,
             "runtime": self.runtime.model_dump(mode="json") if self.runtime else None,
@@ -563,6 +567,32 @@ def _runtime_drift_observation(
     )
 
 
+def _runtime_contract_observation(
+    spec: CallableSpec,
+    actual: RuntimeProvenance,
+    *,
+    metrics: RunMetrics,
+    expected_parity_version: str | None = None,
+) -> Observation | None:
+    failures = runtime_contract_failures(
+        actual,
+        expected_parity_version=expected_parity_version or __version__,
+        required_distributions=spec.required_distributions,
+    )
+    if not failures:
+        return None
+    return Observation(
+        outcome=ExecutionOutcome.CRASHED,
+        exception=ExceptionInfo(
+            module="parity.execution",
+            type="RuntimeContractError",
+            message="worker runtime requirements not satisfied: " + ", ".join(failures),
+        ),
+        metrics=metrics,
+        runtime=actual,
+    )
+
+
 def execute_current(
     spec: CallableSpec,
     input_table: ArrowInputBundle,
@@ -570,6 +600,7 @@ def execute_current(
     static_args: Sequence[JsonValue] = (),
     static_kwargs: Mapping[str, JsonValue] | None = None,
     expected_runtime: RuntimeProvenance | None = None,
+    expected_parity_version: str | None = None,
 ) -> Observation:
     """Execute a callable in this interpreter and capture its observation.
 
@@ -590,7 +621,17 @@ def execute_current(
     with _MemorySampler() as memory:
         try:
             with _process_context(spec):
-                runtime = collect_runtime_provenance(spec.record_distributions)
+                runtime = collect_runtime_provenance(spec.provenance_distributions)
+                if contract_failure := _runtime_contract_observation(
+                    spec,
+                    runtime,
+                    metrics=RunMetrics(
+                        duration_seconds=time.perf_counter() - started,
+                        peak_rss_bytes=memory.peak or None,
+                    ),
+                    expected_parity_version=expected_parity_version,
+                ):
+                    return contract_failure
                 if drift := _runtime_drift_observation(
                     expected_runtime,
                     runtime,
@@ -616,7 +657,6 @@ def execute_current(
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(error),
-                        mutated_input=bool(mutated_inputs),
                         mutated_inputs=mutated_inputs,
                         metrics=RunMetrics(
                             duration_seconds=time.perf_counter() - started,
@@ -639,7 +679,6 @@ def execute_current(
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(conversion_error),
-                        mutated_input=bool(mutated_inputs),
                         mutated_inputs=mutated_inputs,
                         return_type=return_type,
                         metrics=RunMetrics(
@@ -652,7 +691,6 @@ def execute_current(
                     return Observation(
                         outcome=ExecutionOutcome.RETURNED,
                         table=table,
-                        mutated_input=bool(mutated_inputs),
                         mutated_inputs=mutated_inputs,
                         return_type=return_type,
                         metrics=RunMetrics(
@@ -669,7 +707,6 @@ def execute_current(
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(return_error),
-                        mutated_input=bool(mutated_inputs),
                         mutated_inputs=mutated_inputs,
                         return_type=return_type,
                         metrics=RunMetrics(
@@ -682,7 +719,6 @@ def execute_current(
                     outcome=ExecutionOutcome.RETURNED,
                     value=value,
                     has_value=True,
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
@@ -752,7 +788,6 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(error),
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     metrics=RunMetrics(
                         duration_seconds=time.perf_counter() - started,
@@ -771,7 +806,6 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(conversion_error),
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
@@ -784,7 +818,6 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RETURNED,
                     table=table,
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
@@ -801,7 +834,6 @@ def execute_callable_current(
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(return_error),
-                    mutated_input=bool(mutated_inputs),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
                     metrics=RunMetrics(
@@ -814,7 +846,6 @@ def execute_callable_current(
                 outcome=ExecutionOutcome.RETURNED,
                 value=value,
                 has_value=True,
-                mutated_input=bool(mutated_inputs),
                 mutated_inputs=mutated_inputs,
                 return_type=return_type,
                 metrics=RunMetrics(
@@ -990,7 +1021,8 @@ def execute_isolated(
                 "target": spec.target,
                 "adapter": spec.adapter,
                 "pandas_input": spec.pandas_input,
-                "record_distributions": spec.record_distributions,
+                "record_distributions": list(spec.provenance_distributions),
+                "required_distributions": spec.required_distributions,
                 # Popen already applies the workdir. Sending a relative path to
                 # the worker would apply it a second time (e.g. tests/tests).
                 "workdir": None,
@@ -1003,6 +1035,7 @@ def execute_isolated(
             "expected_runtime": (
                 expected_runtime.model_dump(mode="json") if expected_runtime else None
             ),
+            "expected_parity_version": __version__,
         }
         request_path.write_text(json.dumps(request), encoding="utf-8")
         command = [executable, "-m", "parity.worker", str(request_path), str(response_path)]
@@ -1094,35 +1127,43 @@ def _observation_from_worker(
     expected_input_labels: tuple[str, ...],
     allow_outputless_success: bool,
 ) -> Observation:
+    expected_fields = {
+        "exception",
+        "has_table",
+        "has_value",
+        "metrics",
+        "mutated_inputs",
+        "outcome",
+        "protocol_version",
+        "return_type",
+        "runtime",
+    }
+    if set(response) != expected_fields:
+        raise ValueError("invalid worker response fields")
     if response.get("protocol_version") != _WORKER_PROTOCOL_VERSION:
         raise ValueError("unsupported worker protocol")
     outcome = ExecutionOutcome(str(response["outcome"]))
     metrics = RunMetrics.model_validate(response["metrics"])
     exception_raw = response.get("exception")
     runtime = RuntimeProvenance.model_validate(response["runtime"])
-    mutated_raw = response.get("mutated_input")
     mutated_inputs_raw = response.get("mutated_inputs")
     has_table_raw = response.get("has_table")
     has_value_raw = response.get("has_value")
-    if not isinstance(mutated_raw, bool):
-        raise ValueError("invalid mutated_input flag")
     if not isinstance(mutated_inputs_raw, list) or not all(
         isinstance(label, str) for label in mutated_inputs_raw
     ):
         raise ValueError("invalid mutated_inputs labels")
     mutated_inputs = tuple(mutated_inputs_raw)
-    mutated_input_set = set(mutated_inputs)
-    if len(mutated_input_set) != len(mutated_inputs):
+    mutated_label_set = set(mutated_inputs)
+    if len(mutated_label_set) != len(mutated_inputs):
         raise ValueError("duplicate mutated_inputs labels")
-    if not mutated_input_set.issubset(expected_input_labels):
+    if not mutated_label_set.issubset(expected_input_labels):
         raise ValueError("unknown mutated_inputs label")
     expected_mutation_order = tuple(
-        label for label in expected_input_labels if label in mutated_input_set
+        label for label in expected_input_labels if label in mutated_label_set
     )
     if mutated_inputs != expected_mutation_order:
         raise ValueError("mutated_inputs labels are out of order")
-    if mutated_raw != bool(mutated_inputs):
-        raise ValueError("inconsistent input mutation metadata")
     if not isinstance(has_table_raw, bool) or not isinstance(has_value_raw, bool):
         raise ValueError("invalid worker output flags")
     if has_table_raw and has_value_raw:
@@ -1156,7 +1197,6 @@ def _observation_from_worker(
         outcome=outcome,
         metrics=metrics,
         exception=ExceptionInfo.from_dict(exception_raw) if exception_raw else None,
-        mutated_input=mutated_raw,
         mutated_inputs=mutated_inputs,
         return_type=return_type_raw,
         has_value=has_value_raw,
@@ -1204,6 +1244,7 @@ class IsolatedExecutionSession:
         self._counter = 0
         self._closed = False
         self._broken = False
+        self._runtime_validated = False
         self._lock = threading.RLock()
 
     @property
@@ -1285,6 +1326,10 @@ class IsolatedExecutionSession:
         with self._lock:
             if self._closed or self._broken:
                 return self._unavailable(started)
+            if _operation == "execute" and not self._runtime_validated:
+                preflight = self.preflight_runtime(timeout_seconds=timeout)
+                if not preflight.succeeded:
+                    return preflight
             try:
                 process = self._start()
             except OSError as error:
@@ -1311,7 +1356,8 @@ class IsolatedExecutionSession:
                         "target": self.spec.target,
                         "adapter": self.spec.adapter,
                         "pandas_input": self.spec.pandas_input,
-                        "record_distributions": self.spec.record_distributions,
+                        "record_distributions": list(self.spec.provenance_distributions),
+                        "required_distributions": self.spec.required_distributions,
                         # The parent applies environment overrides at process
                         # creation and applies cwd once. Never persist secret
                         # values or ask the child to chdir a second time.
@@ -1327,6 +1373,7 @@ class IsolatedExecutionSession:
                         if self.expected_runtime and _operation == "execute"
                         else None
                     ),
+                    "expected_parity_version": __version__,
                 }
                 request_path.write_text(json.dumps(request), encoding="utf-8")
 
@@ -1426,6 +1473,29 @@ class IsolatedExecutionSession:
             timeout_seconds=timeout_seconds,
             _operation="provenance",
         )
+
+    def preflight_runtime(self, *, timeout_seconds: float | None = None) -> Observation:
+        """Validate worker identity and requirements before any target import."""
+
+        with self._lock:
+            if self._closed or self._broken:
+                return self._unavailable(time.perf_counter())
+            if self._runtime_validated:
+                return self.inspect_runtime(timeout_seconds=timeout_seconds)
+            observation = self.inspect_runtime(timeout_seconds=timeout_seconds)
+            if not observation.succeeded or observation.runtime is None:
+                self._fail_closed()
+                return observation
+            failure = _runtime_contract_observation(
+                self.spec,
+                observation.runtime,
+                metrics=observation.metrics,
+            )
+            if failure is not None:
+                self._fail_closed()
+                return failure
+            self._runtime_validated = True
+            return observation
 
     def close(self) -> None:
         """Terminate this worker and descendants and remove all protocol files."""

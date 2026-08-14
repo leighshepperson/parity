@@ -402,7 +402,7 @@ def test_live_importable_failure_preserves_contract_for_replay(tmp_path: Path) -
     assert artifact is not None
     replay_payload = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     replay_contract = replay_payload["case"]
-    assert replay_payload["version"] == 2
+    assert replay_payload["version"] == 1
     assert replay_payload["expected_runtime"]["reference"]["python_version"]
     assert len(replay_payload["config_sha256"]) == 64
     assert replay_contract["reference"]["adapter"] == "pandas"
@@ -432,8 +432,10 @@ def test_live_bound_instance_method_is_not_claimed_as_replayable(tmp_path: Path)
     artifact = result.cases[0].failures[0].artifact
 
     assert artifact is not None
-    replay_contract = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))["case"]
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    replay_contract = replay["case"]
     assert replay_contract["candidate"] is None
+    assert "command" not in replay
     with pytest.raises(engine.ReplayError, match="live-callable"):
         replay_artifact(artifact)
 
@@ -1012,6 +1014,119 @@ def candidate(_frame):
     assert replay_failure.artifact == failure.artifact
 
 
+def test_configured_campaign_passes_shared_and_endpoint_specific_kwargs(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "endpoint_transform.py").write_text(
+        """
+from pathlib import Path
+
+def transform(frame, *, scale, engine, log_path):
+    assert scale == 2
+    with Path(log_path).open("a", encoding="utf-8") as stream:
+        stream.write(engine + "\\n")
+    return frame
+""",
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "fixture.arrow"
+    table = pa.table({"x": [1]})
+    with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    reference_log = tmp_path / "reference.log"
+    candidate_log = tmp_path / "candidate.log"
+    case = CaseConfig(
+        name="endpoint-kwargs",
+        reference=CallableSpec(
+            target="endpoint_transform:transform",
+            adapter="arrow",
+            workdir=tmp_path,
+        ),
+        candidate=CallableSpec(
+            target="endpoint_transform:transform",
+            adapter="arrow",
+            workdir=tmp_path,
+        ),
+        fixture=fixture,
+        static_kwargs={"scale": 2},
+        reference_kwargs={"engine": "pandas", "log_path": str(reference_log)},
+        candidate_kwargs={"engine": "polars", "log_path": str(candidate_log)},
+        generation=GenerationConfig(
+            max_examples=1,
+            adversarial_examples=False,
+            search=False,
+            stability_repeats=2,
+        ),
+        performance=PerformanceConfig(
+            enabled=True,
+            warmups=0,
+            repeats=1,
+            max_slowdown=None,
+            max_memory_ratio=None,
+            min_reference_ms=0,
+        ),
+    )
+
+    result = engine.run_suite(ParityConfig(artifact_dir=tmp_path / ".parity", cases=[case]))
+
+    assert result.status is Status.PASSED
+    assert reference_log.read_text(encoding="utf-8").splitlines() == ["pandas"] * 3
+    assert candidate_log.read_text(encoding="utf-8").splitlines() == ["polars"] * 3
+
+
+def test_endpoint_specific_kwargs_survive_confirmation_artifact_and_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "endpoint_failure.py").write_text(
+        """
+def transform(frame, *, engine):
+    if engine == "polars":
+        return frame.append_column("candidate_only", frame.column(0))
+    return frame
+""",
+        encoding="utf-8",
+    )
+    fixture = tmp_path / "fixture.arrow"
+    table = pa.table({"x": [1]})
+    with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table)
+    monkeypatch.chdir(tmp_path)
+    case = CaseConfig(
+        name="endpoint-replay",
+        reference=CallableSpec(
+            target="endpoint_failure:transform", adapter="arrow", workdir=tmp_path
+        ),
+        candidate=CallableSpec(
+            target="endpoint_failure:transform", adapter="arrow", workdir=tmp_path
+        ),
+        fixture=fixture,
+        reference_kwargs={"engine": "pandas"},
+        candidate_kwargs={"engine": "polars"},
+        generation=GenerationConfig(
+            max_examples=1,
+            adversarial_examples=False,
+            search=False,
+            stability_repeats=1,
+        ),
+        performance=PerformanceConfig(enabled=False),
+    )
+
+    result = engine.run_suite(ParityConfig(artifact_dir=tmp_path / ".parity", cases=[case]))
+
+    failure = result.cases[0].failures[0]
+    assert result.status is Status.FAILED
+    assert failure.finding_signature is not None
+    assert failure.artifact is not None
+    replay_contract = json.loads((failure.artifact / "replay.json").read_text(encoding="utf-8"))
+    assert replay_contract["case"]["reference_kwargs"] == {"engine": "pandas"}
+    assert replay_contract["case"]["candidate_kwargs"] == {"engine": "polars"}
+
+    replayed = replay_artifact(failure.artifact)
+
+    assert replayed.status is Status.FAILED
+    assert replayed.cases[0].failures[0].finding_signature == failure.finding_signature
+
+
 def test_importable_live_failure_is_confirmed_in_a_fresh_process(tmp_path: Path) -> None:
     global _live_stateful_calls
     _live_stateful_calls = 0
@@ -1565,6 +1680,103 @@ def test_configured_campaign_records_each_worker_distribution_version(tmp_path: 
     assert candidate_versions["demo-target"] == "2.0"
 
 
+def test_configured_campaign_rejects_matching_runtime_failures_before_import(
+    tmp_path: Path,
+) -> None:
+    imported = tmp_path / "configured-target-imported.txt"
+    (tmp_path / "configured_contract_target.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(imported)!r}).write_text('imported', encoding='utf-8')\n"
+        "def identity(frame):\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="configured_contract_target:identity",
+        adapter="arrow",
+        workdir=tmp_path,
+        required_distributions={"definitely-missing-parity-contract": ">=1"},
+    )
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="runtime-contract",
+                reference=spec,
+                candidate=spec.model_copy(deep=True),
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+                    min_rows=1,
+                    max_rows=1,
+                ),
+                generation=GenerationConfig(adversarial_examples=False, max_examples=1),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+
+    result = engine.run_suite(config)
+
+    assert result.status is Status.ERROR
+    case = result.cases[0]
+    assert case.status is Status.ERROR
+    assert case.examples_run == 0
+    assert case.failures[0].source == "runtime:preflight"
+    assert len(case.failures[0].mismatches) == 2
+    assert all(
+        "distributions.definitely-missing-parity-contract.missing" in mismatch.message
+        for mismatch in case.failures[0].mismatches
+    )
+    assert str(tmp_path) not in json.dumps(case.model_dump(mode="json"))
+    assert "configured_contract_target" not in json.dumps(case.model_dump(mode="json"))
+    assert imported.exists() is False
+
+
+def test_configured_campaign_requires_worker_parity_match_before_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported = tmp_path / "parity-mismatch-target-imported.txt"
+    (tmp_path / "parity_mismatch_target.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(imported)!r}).write_text('imported', encoding='utf-8')\n"
+        "def identity(frame):\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    spec = CallableSpec(
+        target="parity_mismatch_target:identity",
+        adapter="arrow",
+        workdir=tmp_path,
+    )
+    config = ParityConfig(
+        artifact_dir=tmp_path / ".parity",
+        cases=[
+            CaseConfig(
+                name="parity-version-contract",
+                reference=spec,
+                candidate=spec.model_copy(deep=True),
+                input_schema=FrameSchema(
+                    columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+                    min_rows=1,
+                    max_rows=1,
+                ),
+                generation=GenerationConfig(adversarial_examples=False, max_examples=1),
+                performance=PerformanceConfig(enabled=False),
+            )
+        ],
+    )
+    monkeypatch.setattr("parity.execution.__version__", "999.0.0")
+
+    result = engine.run_suite(config)
+
+    assert result.status is Status.ERROR
+    assert result.cases[0].examples_run == 0
+    assert all(
+        "parity_version" in mismatch.message for mismatch in result.cases[0].failures[0].mismatches
+    )
+    assert imported.exists() is False
+
+
 def test_artifact_replay_resolves_import_root_from_invocation_cwd(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1590,14 +1802,18 @@ def test_artifact_replay_resolves_import_root_from_invocation_cwd(
         case,
         pa.table({"x": [1, 2]}),
         ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(
+            reference=collect_runtime_provenance(),
+            candidate=collect_runtime_provenance(),
+        ),
+        config_sha256="a" * 64,
     )
 
     result = replay_artifact(artifact)
 
     assert result.status is Status.PASSED
     assert result.cases[0].provenance is not None
-    assert result.cases[0].provenance.verification == "unverified"
-    assert "not exact" in render_terminal(result)
+    assert result.cases[0].provenance.verification == "verified"
     assert not (artifact / "replay-output").exists()
 
 
@@ -1647,7 +1863,7 @@ def test_configured_named_bundle_failure_replays_atomically(
     assert result.status is Status.FAILED
     assert artifact is not None
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 3
+    assert replay["version"] == 1
     assert [item["name"] for item in replay["inputs"]] == ["left", "right"]
 
     replayed = replay_artifact(artifact)
@@ -1720,6 +1936,11 @@ def test_positional_bundle_replay_restores_hash_bound_input_order(
             "alpha": pa.table({"x": [2]}),
         },
         ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(
+            reference=collect_runtime_provenance(),
+            candidate=collect_runtime_provenance(),
+        ),
+        config_sha256="a" * 64,
     )
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     assert list(replay["case"]["input_bundle"]["inputs"]) == ["alpha", "zebra"]
@@ -1742,7 +1963,7 @@ def test_positional_bundle_replay_restores_hash_bound_input_order(
     assert observed["names"] == ("zebra", "alpha")
 
 
-def test_v2_replay_runtime_drift_blocks_both_callables_before_import(
+def test_replay_runtime_drift_blocks_both_callables_before_import(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     marker = tmp_path / "invoked.txt"
@@ -1797,7 +2018,7 @@ def test_v2_replay_runtime_drift_blocks_both_callables_before_import(
     assert not marker.exists()
 
 
-def test_v2_replay_keeps_verified_provenance_when_callable_crashes(
+def test_replay_keeps_verified_provenance_when_callable_crashes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "crash_transform.py").write_text(
@@ -2088,7 +2309,63 @@ def test_replay_manifest_must_bind_every_consumed_file(tmp_path: Path) -> None:
         replay_artifact(artifact)
 
 
-def test_replay_rejects_single_input_contract_with_bundle_manifest(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("version", True, "unsupported replay contract"),
+        ("version", 1.0, "unsupported replay contract"),
+        ("version", 2, "unsupported replay contract"),
+        ("expected_runtime", None, "runtime provenance is missing or invalid"),
+        ("config_sha256", None, "configuration fingerprint is missing or invalid"),
+    ],
+)
+def test_replay_contract_is_current_and_fail_closed(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    runtime = collect_runtime_provenance()
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        "bound-contract",
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="d" * 64,
+    )
+    replay_path = artifact / "replay.json"
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    replay[field] = value
+    replay_path.write_text(json.dumps(replay, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    replay_content = replay_path.read_bytes()
+    manifest_path = artifact / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["replay.json"] = {
+        "sha256": hashlib.sha256(replay_content).hexdigest(),
+        "bytes": len(replay_content),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(engine.ReplayError, match=message):
+        replay_artifact(artifact)
+
+
+def test_inspection_only_artifact_cannot_execute_automatically(tmp_path: Path) -> None:
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        "inspection-only",
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+    )
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    assert "command" not in replay
+
+    with pytest.raises(engine.ReplayError, match="runtime provenance is missing or invalid"):
+        replay_artifact(artifact)
+
+
+@pytest.mark.parametrize("unsupported_version", [True, 1.0, 2])
+def test_replay_rejects_unsupported_manifest_version(
+    tmp_path: Path, unsupported_version: object
+) -> None:
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "manifest-version",
         pa.table({"x": [1]}),
@@ -2096,10 +2373,10 @@ def test_replay_rejects_single_input_contract_with_bundle_manifest(tmp_path: Pat
     )
     manifest_path = artifact / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["version"] = 2
+    manifest["version"] = unsupported_version
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(engine.ReplayError, match="single-input replay requires"):
+    with pytest.raises(engine.ReplayError, match="unsupported artifact manifest"):
         replay_artifact(artifact)
 
 
@@ -2122,14 +2399,27 @@ def test_replay_manifest_rejects_symlinked_external_file(tmp_path: Path) -> None
         engine._verify_manifest(artifact)
 
 
-@pytest.mark.parametrize("argument", ["/private/customer.csv", "API_TOKEN=secret"])
-def test_replay_rejects_sanitized_static_arguments(tmp_path: Path, argument: str) -> None:
+@pytest.mark.parametrize(
+    ("field", "argument"),
+    [
+        ("static_args", "/private/customer.csv"),
+        ("static_args", "API_TOKEN=secret"),
+        ("reference_kwargs", "API_TOKEN=reference-secret"),
+        ("candidate_kwargs", "/private/candidate.csv"),
+    ],
+)
+def test_replay_rejects_sanitized_static_arguments(
+    tmp_path: Path, field: str, argument: str
+) -> None:
+    arguments: dict[str, object] = (
+        {field: [argument]} if field == "static_args" else {field: {"option": argument}}
+    )
     monkey_case = CaseConfig(
         name="sanitized-argument",
         reference=CallableSpec(target="test_engine:identity", adapter="pandas"),
         candidate=CallableSpec(target="test_engine:identity", adapter="pandas"),
         fixture=tmp_path / "unused.parquet",
-        static_args=[argument],
+        **arguments,
         generation=GenerationConfig(adversarial_examples=False, max_examples=1),
         performance=PerformanceConfig(enabled=False),
     )
@@ -2137,7 +2427,14 @@ def test_replay_rejects_sanitized_static_arguments(tmp_path: Path, argument: str
         monkey_case,
         pa.table({"x": [1]}),
         ExampleResult(source="test", status=Status.FAILED),
+        runtime_provenance=CaseProvenance(
+            reference=collect_runtime_provenance(),
+            candidate=collect_runtime_provenance(),
+        ),
+        config_sha256="f" * 64,
     )
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    assert "command" not in replay
 
     with pytest.raises(engine.ReplayError, match="redacted static arguments"):
         replay_artifact(artifact)

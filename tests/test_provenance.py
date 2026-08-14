@@ -17,9 +17,12 @@ from parity.provenance import (
     _collect_runtime_provenance_cached,
     collect_runtime_provenance,
     diff_runtime,
+    distribution_satisfies_requirement,
     effective_config_sha256,
     normalize_distribution_name,
     normalize_distribution_names,
+    normalize_distribution_requirements,
+    runtime_contract_failures,
 )
 
 
@@ -37,7 +40,7 @@ def _runtime(
 
 
 def test_public_version_uses_single_source() -> None:
-    assert __version__ == source_version == "0.9.2"
+    assert __version__ == source_version == "0.10.0"
 
 
 def test_distribution_names_are_normalized_and_bounded() -> None:
@@ -54,6 +57,29 @@ def test_distribution_names_are_normalized_and_bounded() -> None:
         normalize_distribution_names("pandas")
     with pytest.raises(ValueError, match=str(MAX_RECORDED_DISTRIBUTIONS)):
         normalize_distribution_names(f"package-{index}" for index in range(65))
+
+
+def test_distribution_requirements_are_pep440_and_fail_closed() -> None:
+    assert normalize_distribution_requirements({"NumPy": ">=2, <3"}) == {"numpy": "<3,>=2"}
+    assert distribution_satisfies_requirement("2.5.1+local.1", ">=2.5,<3")
+    assert not distribution_satisfies_requirement("not-a-version", ">=2.5,<3")
+    runtime = _runtime(
+        distributions=(
+            DistributionProvenance(name="numpy", status="installed", version="2.5.1"),
+            DistributionProvenance(name="pandas", status="missing"),
+        )
+    )
+
+    assert runtime_contract_failures(
+        runtime,
+        expected_parity_version="0.9.2",
+        required_distributions={"numpy": ">=3", "pandas": ">=2", "polars": ">=1"},
+    ) == (
+        "parity_version",
+        "distributions.numpy.version",
+        "distributions.pandas.missing",
+        "distributions.polars.unavailable",
+    )
 
 
 def test_provenance_models_reject_inconsistent_or_unsafe_metadata() -> None:
@@ -385,3 +411,22 @@ def test_effective_config_hash_does_not_treat_static_inputs_mapping_as_bundle_or
     assert effective_config_sha256(contract((("z", 1), ("a", 2)))) == effective_config_sha256(
         contract((("a", 2), ("z", 1)))
     )
+
+
+def test_effective_config_hash_includes_endpoint_specific_kwargs() -> None:
+    def contract(reference_engine: str, candidate_engine: str) -> dict[str, object]:
+        return {
+            "version": 1,
+            "cases": [
+                {
+                    "name": "engines",
+                    "fixture": "input.arrow",
+                    "reference_kwargs": {"engine": reference_engine},
+                    "candidate_kwargs": {"engine": candidate_engine},
+                }
+            ],
+        }
+
+    pandas_polars = effective_config_sha256(contract("pandas", "polars"))
+    assert pandas_polars == effective_config_sha256(contract("pandas", "polars"))
+    assert pandas_polars != effective_config_sha256(contract("polars", "pandas"))

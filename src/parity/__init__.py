@@ -2,6 +2,7 @@
 
 from parity._version import __version__
 from parity.api import check, verify
+from parity.evidence import EvidenceResult, verify_evidence
 from parity.migration import (
     MigrationManifest,
     MigrationResult,
@@ -42,6 +43,7 @@ __all__ = [
     "ComparisonPolicy",
     "DistributionProvenance",
     "EqualRowCount",
+    "EvidenceResult",
     "ForeignKey",
     "FrameConstraint",
     "FrameSchema",
@@ -64,4 +66,5 @@ __all__ = [
     "check",
     "check_migration",
     "verify",
+    "verify_evidence",
 ]

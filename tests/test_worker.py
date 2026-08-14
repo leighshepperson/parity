@@ -6,6 +6,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from parity._version import __version__
 from parity.execution import _read_arrow, _write_arrow
 from parity.worker import main, run_request
 
@@ -28,7 +29,7 @@ def test_worker_file_protocol(tmp_path: Path, monkeypatch) -> None:
     request_path.write_text(
         json.dumps(
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "spec": {"target": "worker_transform:transform", "adapter": "pandas"},
                 "inputs": {
                     "kind": "single",
@@ -39,6 +40,7 @@ def test_worker_file_protocol(tmp_path: Path, monkeypatch) -> None:
                 "static_args": [3],
                 "static_kwargs": {},
                 "expected_runtime": None,
+                "expected_parity_version": __version__,
             }
         ),
         encoding="utf-8",
@@ -46,10 +48,11 @@ def test_worker_file_protocol(tmp_path: Path, monkeypatch) -> None:
     run_request(request_path, response_path)
     response = json.loads(response_path.read_text(encoding="utf-8"))
     assert response["outcome"] == "returned"
-    assert response["protocol_version"] == 3
+    assert response["protocol_version"] == 4
     assert response["runtime"]["python_implementation"]
     assert response["has_table"] is True
     assert response["mutated_inputs"] == []
+    assert "mutated_input" not in response
     assert "table" not in response
     assert _read_arrow(output_path).column("x").to_pylist() == [4, 5]
 
@@ -73,7 +76,7 @@ def test_worker_keyword_bundle_protocol(tmp_path: Path, monkeypatch) -> None:
     request_path.write_text(
         json.dumps(
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "spec": {
                     "target": "worker_bundle_transform:transform",
                     "adapter": "pandas",
@@ -90,6 +93,7 @@ def test_worker_keyword_bundle_protocol(tmp_path: Path, monkeypatch) -> None:
                 "static_args": [],
                 "static_kwargs": {"amount": 3},
                 "expected_runtime": None,
+                "expected_parity_version": __version__,
             }
         ),
         encoding="utf-8",
@@ -99,7 +103,6 @@ def test_worker_keyword_bundle_protocol(tmp_path: Path, monkeypatch) -> None:
 
     response = json.loads(response_path.read_text(encoding="utf-8"))
     assert response["outcome"] == "returned"
-    assert response["mutated_input"] is True
     assert response["mutated_inputs"] == ["right"]
     assert _read_arrow(output_path).column("x").to_pylist() == [5]
 
@@ -109,7 +112,7 @@ def test_worker_rejects_malformed_bundle_envelope(tmp_path: Path) -> None:
     request_path.write_text(
         json.dumps(
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "spec": {"target": "anything:callable"},
                 "inputs": {"kind": "positional", "items": []},
             }

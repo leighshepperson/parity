@@ -12,7 +12,7 @@ import re
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -26,6 +26,9 @@ from parity.canonical import (
     json_safe,
 )
 from parity.models import ComparisonPolicy, Mismatch, MismatchKind
+
+if TYPE_CHECKING:
+    from parity.execution import Observation
 
 
 @dataclass(frozen=True, slots=True)
@@ -1255,89 +1258,51 @@ def _frame_mismatches(
     return mismatches[:max_mismatches]
 
 
-def _observation_value(observation: Any) -> Any:
-    """Extract a result from execution.Observation without importing it."""
+def _observation_value(observation: Observation) -> Any:
+    """Extract the comparable value from an execution observation."""
 
-    outcome = str(getattr(observation, "outcome", ""))
-    if outcome.endswith("returned"):
-        table = getattr(observation, "table", None)
-        if table is not None:
-            return table
-        if getattr(observation, "has_value", False):
-            return getattr(observation, "value", None)
+    if observation.succeeded:
+        if observation.table is not None:
+            return observation.table
+        if observation.has_value:
+            return observation.value
         return None
-    exception = getattr(observation, "exception", None)
-    if exception is not None:
+    if observation.exception is not None:
         return ExceptionInfo(
-            type_name=str(getattr(exception, "type", getattr(exception, "type_name", "Exception"))),
-            message=str(getattr(exception, "message", "")),
-            module=str(getattr(exception, "module", "builtins")),
+            type_name=observation.exception.type,
+            message=observation.exception.message,
+            module=observation.exception.module,
         )
-    label = outcome.rsplit(".", 1)[-1] or "execution_error"
+    label = observation.outcome.value
     return ExceptionInfo(type_name=label, message=label, module="parity.execution")
 
 
 def compare_observations(
-    reference: Any,
-    candidate: Any,
+    reference: Observation,
+    candidate: Observation,
     policy: ComparisonPolicy | None = None,
     *,
     max_mismatches: int = 100,
 ) -> list[Mismatch]:
-    """Compare two duck-typed execution observations, including mutation."""
+    """Compare two execution observations, including per-input mutation."""
 
     selected = policy or ComparisonPolicy()
     mismatches: list[Mismatch] = []
     if selected.check_input_mutation:
-        reference_mutated = bool(getattr(reference, "mutated_input", False))
-        candidate_mutated = bool(getattr(candidate, "mutated_input", False))
-        reference_labels = getattr(reference, "mutated_inputs", None)
-        candidate_labels = getattr(candidate, "mutated_inputs", None)
-        if isinstance(reference_labels, tuple) and isinstance(candidate_labels, tuple):
-            reference_set = {str(label) for label in reference_labels}
-            candidate_set = {str(label) for label in candidate_labels}
-            inconsistent_sides = [
-                label
-                for label, aggregate, labels in (
-                    ("reference", reference_mutated, reference_set),
-                    ("candidate", candidate_mutated, candidate_set),
-                )
-                if aggregate != bool(labels)
-            ]
-            if inconsistent_sides:
-                mismatches.append(
-                    _mismatch(
-                        MismatchKind.MUTATION,
-                        "input mutation metadata is inconsistent",
-                        "$inputs",
-                        reference_mutated,
-                        candidate_mutated,
-                        sides=inconsistent_sides,
-                    )
-                )
-            for label in sorted(reference_set ^ candidate_set):
-                if len(mismatches) >= max_mismatches:
-                    break
-                escaped = label.replace("~", "~0").replace("/", "~1")
-                mismatches.append(
-                    _mismatch(
-                        MismatchKind.MUTATION,
-                        "input mutation behaviour differs",
-                        f"$inputs/{escaped}",
-                        label in reference_set,
-                        label in candidate_set,
-                        input=label,
-                    )
-                )
-        elif len(mismatches) < max_mismatches and reference_mutated != candidate_mutated:
-            # Retain the legacy aggregate check for old/duck-typed observations.
+        reference_labels = set(reference.mutated_inputs)
+        candidate_labels = set(candidate.mutated_inputs)
+        for label in sorted(reference_labels ^ candidate_labels):
+            if len(mismatches) >= max_mismatches:
+                break
+            escaped = label.replace("~", "~0").replace("/", "~1")
             mismatches.append(
                 _mismatch(
                     MismatchKind.MUTATION,
                     "input mutation behaviour differs",
-                    "$input",
-                    reference_mutated,
-                    candidate_mutated,
+                    f"$inputs/{escaped}",
+                    label in reference_labels,
+                    label in candidate_labels,
+                    input=label,
                 )
             )
     if len(mismatches) < max_mismatches:

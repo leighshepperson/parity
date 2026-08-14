@@ -15,7 +15,7 @@ A migration is complete only when:
 - exclusions have a specific, reviewed reason;
 - the original project test suite passes against the candidate;
 - required Python and dependency-version lanes pass; and
-- retained counterexamples replay in the environment that produced them.
+- every retained, report-referenced counterexample reproduces in the environment that produced it.
 
 The gate establishes this only for units present in `migration.toml`. It cannot prove that the
 inventory is exhaustive or that a mapped case genuinely exercises the unit it names. Review the
@@ -25,8 +25,10 @@ manifest and wrappers as code, not as generated paperwork.
 
 Keep the reference implementation available until the migration is accepted. Record its release or
 commit and prepare separate, pinned reference and candidate environments where their dependencies
-differ. Add the migrated distribution to each case's `record_distributions` so reports identify the
-runtime actually exercised.
+differ. Put accepted PEP 440 ranges in each callable's `required_distributions`; use
+`record_distributions` for additional provenance that should be observed but not enforced. Parity
+also requires each configured worker to carry the exact controller version before it imports the
+target.
 
 Define observable boundaries rather than internal helpers. A unit can be a public function, method,
 stateful lifecycle, dispatch form or serialization contract. Wrap stateful operations such as
@@ -70,6 +72,21 @@ An uncovered unit exits `1`. An unknown case name or invalid manifest exits `2` 
 callables execute. The gate runs the union of mapped cases once, even when several units share a
 case, and attempts every mapped case rather than honouring `fail_fast`.
 
+For a managed environment matrix, declare the workspace only after the candidate checkout,
+`parity.toml` and `migration.toml` exist:
+
+```bash
+python -m pip install "parity-check[workspace]"
+parity migration init \
+  --reference 'your-library==1.2.3' \
+  --candidate . \
+  --lane minimum=requirements/minimum.txt \
+  --lane current=requirements/current.txt
+```
+
+This writes `parity.workspace.toml`. It does not clone or select source, apply the migration patch,
+or modify the checkout. Source preparation remains a separate, reviewable agent action.
+
 ## 3. Build evidence one unit at a time
 
 For each unit:
@@ -96,6 +113,18 @@ parity check \
 parity replay .parity/lags-null-date/<finding-directory>
 ```
 
+When a suite or migration JSON report references several retained findings, batch the same check:
+
+```bash
+parity evidence verify .parity/migration-status.json \
+  --json .parity/evidence-status.json
+```
+
+Exit `0` means every artifact reproduced its expected mismatch shape, `1` means at least one is
+stale, and `2` means verification errored. Treat `ms1:...` as a data-free classifier, not a digital
+signature or proof of source identity. This command re-executes project code; do not run an
+unreviewed checkout or artifact outside a sandbox.
+
 Classify each mismatch as a candidate defect, reference defect, intentional contract change,
 invalid generated domain or unresolved decision. Never make a run green by widening tolerances,
 ignoring order or dtypes, removing hostile inputs, reducing the domain, or converting an in-scope
@@ -109,21 +138,40 @@ environments. For an implementation migration, keep fixtures and comparison poli
 the reference and candidate.
 
 Record dependency versions rather than relying on an ambient environment. A passing current stack
-does not establish compatibility with a declared older stack.
+does not establish compatibility with any other declared stack.
+
+With `parity.workspace.toml`, use one command for the complete matrix:
+
+```bash
+parity migration run
+```
+
+Parity resolves a hash-pinned requirements lock, prepares isolated reference/candidate workers and
+writes one migration report per lane. tox, tox-uv and uv are hidden lifecycle/resolver details.
+Re-running retains the selected lock; use `--refresh-locks` only as an intentional dependency
+change. Explicit `reference.python` and `candidate.python` configs remain valid when the project or
+CI platform provisions environments itself.
 
 ## 5. Enforce completion
 
 Run the project suite, then the unfiltered migration gate with the performance policy committed in
-`parity.toml`:
+`parity.toml`. For a managed workspace:
 
 ```bash
 pytest
-parity doctor --config migrations/parity.toml
-parity migration check \
-  --manifest migrations/migration.toml \
-  --config migrations/parity.toml \
-  --json .parity/migration-status.json
+parity migration run
 ```
+
+Verify evidence only for reports containing retained failures; a passing report intentionally has
+no counterexample artifacts:
+
+```bash
+parity evidence verify path/to/retained-failure-report.json
+```
+
+For externally managed interpreters, use `parity doctor --config`
+followed by `parity migration check --json ...` and run `parity evidence verify` on any report with
+retained findings.
 
 Do not substitute a collection of successful `parity check --case ...` commands for the final
 gate. The migration command intentionally has no case, tag, generation-budget or performance
@@ -150,5 +198,7 @@ contain fixture-derived or generated input data and require restricted storage.
 - Do not weaken an equivalence policy solely because it reports a difference.
 - Do not treat matching exceptions as proof of a successful business result.
 - Do not publish raw counterexamples or production-shaped fixtures.
+- Do not let environment tooling clone, patch or otherwise obscure the reviewed candidate source.
+- Do not accept `ms1:` mismatch classifiers as cryptographic signatures or attestations.
 - Do not declare completion while any unit is failed, errored or uncovered.
 - State the inventory limitation when reporting completion: all **declared** in-scope units passed.

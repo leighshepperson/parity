@@ -11,8 +11,8 @@ import pyarrow.ipc as ipc
 
 from parity.config import load_config
 from parity.migration import load_migration_manifest, migration_manifest_sha256
+from parity.migration_workspace import MigrationWorkspace
 from parity.models import ParityConfig
-from parity.provenance import effective_config_sha256
 
 ROOT = Path(__file__).parents[1]
 STUDY = ROOT / "case_studies" / "pytimetk_migration"
@@ -158,6 +158,75 @@ def test_release_and_current_configs_have_the_same_strict_campaigns() -> None:
                 assert not case.generation.shrink
 
 
+def test_managed_config_expands_the_same_worker_path_free_campaigns() -> None:
+    managed = load_config(STUDY / "parity.workspace-config.toml")
+    current = load_config(STUDY / "parity.current.toml").model_copy(deep=True)
+
+    assert [case.name for case in managed.cases] == CASE_NAMES
+    assert len(managed.cases) == 15
+    assert not managed.fail_fast
+    assert managed.artifact_dir == (STUDY / ".parity/workspace/artifacts").resolve()
+
+    for case in current.cases:
+        case.reference.python = None
+        case.candidate.python = None
+        case.reference.required_distributions = {"pytimetk": "==2.5.1"}
+        case.candidate.required_distributions = {"pytimetk": "==2.5.1+parity.1"}
+
+    assert managed.cases == current.cases
+    for case in managed.cases:
+        assert case.reference.python is None
+        assert case.candidate.python is None
+        assert case.reference.record_distributions == ["pytimetk"]
+        assert case.candidate.record_distributions == ["pytimetk"]
+        assert case.reference.required_distributions == {"pytimetk": "==2.5.1"}
+        assert case.candidate.required_distributions == {"pytimetk": "==2.5.1+parity.1"}
+
+
+def test_managed_workspace_declares_one_checkout_and_two_reviewed_lanes() -> None:
+    raw = tomllib.loads((STUDY / "parity.workspace.toml").read_text(encoding="utf-8"))
+    workspace = MigrationWorkspace.model_validate(raw)
+
+    assert workspace.reference == "pytimetk==2.5.1"
+    assert workspace.candidate == Path("candidate-src/pytimetk")
+    assert workspace.python == "3.12"
+    assert workspace.config == Path("parity.workspace-config.toml")
+    assert workspace.manifest == Path("migration.toml")
+    assert workspace.report_dir == Path(".parity/workspace/reports")
+    assert [(lane.name, lane.requirements) for lane in workspace.lanes] == [
+        ("release", Path("environments/release/workspace.in")),
+        ("current", Path("environments/current/workspace.in")),
+    ]
+
+    reviewed_pins = {
+        "release": {
+            "numpy==2.0.2",
+            "pandas==2.2.3",
+            "pandas-flavor==0.7.0",
+            "polars==1.21.0",
+            "pyarrow==16.1.0",
+            "tqdm==4.67.1",
+        },
+        "current": {
+            "numpy==2.5.2",
+            "pandas==3.0.5",
+            "pandas-flavor==0.8.1",
+            "polars==1.43.2",
+            "pyarrow==25.0.1",
+            "tqdm==4.70.0",
+        },
+    }
+    for lane in workspace.lanes:
+        assert lane.requirements is not None
+        lines = {
+            line.strip()
+            for line in (STUDY / lane.requirements).read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        assert lines == reviewed_pins[lane.name]
+        assert not any(line.startswith(("parity-check", "pytimetk")) for line in lines)
+
+
 def test_lane_configs_differ_only_in_runtime_paths_and_artifact_directory() -> None:
     release = _config("parity.release.toml").model_dump(mode="json")
     current = _config("parity.current.toml").model_dump(mode="json")
@@ -272,6 +341,10 @@ def test_environment_inputs_pin_the_reviewed_dependency_lanes() -> None:
 
 def test_captured_migration_reports_bind_stock_failures_and_repaired_passes() -> None:
     manifest_hash = migration_manifest_sha256(load_migration_manifest(STUDY / "migration.toml"))
+    historical_config_hashes = {
+        "release": "821aef184819c570861ba3c6afbfbde18e7302083b97225430076834f99cd720",
+        "current": "77b1966a6bc09ef38e10046cef6c1b3f335fe749941ef28af51228657daea634",
+    }
     failed_summary = {
         "total": 11,
         "passed": 0,
@@ -290,8 +363,6 @@ def test_captured_migration_reports_bind_stock_failures_and_repaired_passes() ->
     }
 
     for lane in ("release", "current"):
-        config = load_config(STUDY / f"parity.{lane}.toml")
-        config_hash = effective_config_sha256(config, base_directory=STUDY)
         baseline = _report("baseline", lane, "migration.json")
         repaired = _report("final", lane, "migration.json")
 
@@ -307,7 +378,9 @@ def test_captured_migration_reports_bind_stock_failures_and_repaired_passes() ->
             assert parity["parity_version"] == "0.9.2"
             provenance = parity["provenance"]
             assert isinstance(provenance, dict)
-            assert provenance["config_sha256"] == config_hash
+            # v0.10 adds effective contract fields, so recomputing with the current model
+            # intentionally produces a different digest from these immutable v0.9.2 reports.
+            assert provenance["config_sha256"] == historical_config_hashes[lane]
 
         baseline_parity = baseline["parity"]
         repaired_parity = repaired["parity"]
@@ -361,12 +434,14 @@ def test_captured_migration_reports_bind_stock_failures_and_repaired_passes() ->
 
 def test_captured_version_drift_report_passes_both_backend_axes() -> None:
     report = _report("version-drift", "report.json")
-    config = load_config(STUDY / "parity.version-drift.toml")
     assert report["status"] == "passed"
     assert report["parity_version"] == "0.9.2"
     provenance = report["provenance"]
     assert isinstance(provenance, dict)
-    assert provenance["config_sha256"] == effective_config_sha256(config, base_directory=STUDY)
+    assert (
+        provenance["config_sha256"]
+        == "af09e2076537fc47903ed822637cd34326608f0f3ef42a4ebaa33758ad3b5292"
+    )
 
     cases = report["cases"]
     assert isinstance(cases, list)

@@ -19,8 +19,8 @@ engine-neutral so the same approach can cover other dataframe, numerical and dep
 - Cross-engine comparison of shape, columns, rows, dtypes, nulls, NaNs, signed zero, numeric
   tolerances, datetimes, returned exceptions and input mutation.
 - Isolated execution with per-case timeouts and separate Python environments when configured.
-- Per-worker Python, platform and dependency provenance, including explicitly named target
-  distributions, so dependency drift is distinguishable from semantic drift.
+- Per-worker Python, platform and dependency provenance, plus fail-closed Parity and target-package
+  requirements, so dependency drift is distinguishable from semantic drift.
 - Reproducible Arrow counterexamples, plus Parquet when representable, with a manifest and replay
   command.
 - Joint generation, shrinking, mutation tracking and replay for two- or three-frame joins and
@@ -34,6 +34,9 @@ engine-neutral so the same approach can cover other dataframe, numerical and dep
 - Median runtime and peak-memory comparisons with optional regression gates.
 - A migration manifest that maps declared library units to cases and blocks completion when a unit
   is failing, errored or uncovered.
+- Optional locked reference/candidate workspaces across one or more dependency lanes, prepared and
+  gated with one command.
+- Batch verification of retained mismatch evidence referenced by suite or migration reports.
 - Terminal, JSON, Markdown, JUnit and GitHub step-summary reporting.
 - A Python API, pytest fixture, CLI and composite GitHub Action.
 - Local execution. Parity has no hosted service, telemetry or required network connection.
@@ -51,6 +54,23 @@ parity check
 `parity init` writes a runnable `parity.toml` and `parity_example.py`. Replace the generated
 functions with import targets for your existing and rewritten transformations, then make the
 equivalence policy match the real contract.
+
+For a full library migration, keep the reviewed cases in `parity.toml` and the declared API
+inventory in `migration.toml`, then let Parity prepare the isolated workers and run the complete
+gate:
+
+```bash
+python -m pip install "parity-check[workspace]"
+parity migration init --reference 'your-library==1.2.3' --candidate .
+parity migration run
+```
+
+The reference is an exact released requirement and the candidate is a local checkout.
+`migration run` resolves hash-pinned dependency locks, prepares a reference/candidate environment
+for each declared lane and writes a data-safe JSON report for each lane. Parity uses tox, tox-uv
+and uv as private environment-lifecycle details; it does not clone repositories, apply patches or
+modify candidate source. Set explicit `reference.python` and `candidate.python` paths when another
+system provisions the environments. See the [user guide](docs/USER_GUIDE.md#managed-migration-workspaces).
 
 To scaffold an existing pair directly, supply the two targets and a fixture together. This mode
 writes only `parity.toml`; it does not create demo code or install environments:
@@ -109,10 +129,10 @@ max_memory_ratio = 1.5
 fail_on_regression = false
 ```
 
-Pandas callables receive Arrow-backed extension dtypes by default. If legacy code specifically
-expects pandas' conventional NumPy/object dtypes, set `pandas_input = "native"` in that callable's
-table. Native materialization can widen nullable integers and collapse null with IEEE NaN, so the
-choice is saved in replay artifacts as part of the input contract.
+Pandas callables receive Arrow-backed extension dtypes by default. If a callable requires pandas'
+conventional NumPy/object dtypes, set `pandas_input = "native"` in its table. Native materialization
+can widen nullable integers and collapse null with IEEE NaN, so the choice is saved in replay
+artifacts as part of the input contract.
 
 Run one case, a tag, or the whole suite:
 
@@ -142,10 +162,10 @@ Reproduce it without regenerating inputs:
 parity replay .parity/orders/20260813T184205Z-a18d7e91
 ```
 
-New artifacts bind replay to the Python and dependency versions observed inside both workers.
-Parity probes both environments before importing either callable and returns an error if that
-runtime contract drifted. Older artifacts remain replayable, but are visibly marked unverified
-because they did not record an environment contract.
+Replayable artifacts bind the effective configuration and the Python and dependency versions
+observed inside both workers. Parity probes both environments before importing either callable and
+returns an error if that runtime contract drifted. Evidence without this binding remains
+inspectable but cannot be replayed automatically.
 
 Exit code `0` means every selected case passed, `1` means a semantic or enforced performance
 failure, and `2` means configuration or execution error.
@@ -167,8 +187,7 @@ id = "plot-orders"
 excluded_reason = "Presentation output is outside this migration."
 ```
 
-The migration command is included in Parity 0.9.1. The `v0.9.0` tag did not publish because it
-pointed at package version 0.8.1; do not use that tag for the migration gate.
+The migration command checks the complete declared inventory rather than a filtered iteration.
 
 Run the unfiltered coverage gate:
 
@@ -188,6 +207,19 @@ This establishes coverage only for the units declared in the manifest. It cannot
 omitted public API or prove that a mapped case genuinely exercises its claimed unit. Review the
 inventory, wrappers and exclusions. See the [agent migration protocol](docs/AGENT_MIGRATION.md) for
 the complete inventory, implementation, replay and dependency-matrix workflow.
+
+Retained failure evidence can be checked as a batch from either a suite JSON report or the nested
+suite in a migration JSON report:
+
+```bash
+parity evidence verify .parity/baseline-failures.json \
+  --json .parity/evidence-status.json
+```
+
+Exit `0` means every referenced finding reproduced the same mismatch shape, `1` means at least one
+valid finding is stale, and `2` means the evidence could not be verified safely. Verification
+re-executes trusted project code. The `ms1:...` value is a data-free mismatch classifier, not a
+digital signature or source attestation.
 
 ## Generated inputs
 
@@ -281,7 +313,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: leighshepperson/parity@v0.8.0
+  - uses: leighshepperson/parity@v0
     with:
       config: parity.toml
       cases: orders,customers
@@ -291,7 +323,9 @@ steps:
 The action always adds a redacted Markdown report to the job summary. The example explicitly opts
 into uploading `.parity` even on failure. Reports omit compared values, but replay artifacts contain
 generated or fixture-derived input values; leave upload disabled unless your repository's access and
-retention policy permits that data. See the [Action guide](docs/GITHUB_ACTION.md).
+retention policy permits that data. The `v0` tag tracks the latest final 0.x release and minor
+releases may break public contracts before 1.0. Pin a reviewed full commit SHA when an immutable
+Action and package revision is required. See the [Action guide](docs/GITHUB_ACTION.md).
 
 ## Python API
 
@@ -364,7 +398,8 @@ the [threat model](docs/THREAT_MODEL.md).
 
 ## Development status
 
-Parity `0.8` is an alpha: useful on real migrations, but its configuration and artifact contracts
-may evolve before `1.0`. Issues and small, synthetic reproduction cases are welcome.
+Parity is pre-1.0 and supports its latest minor release. Minor releases may change configuration,
+artifacts and APIs; patch releases preserve their minor release's contracts. Issues and small,
+synthetic reproduction cases are welcome.
 
 Licensed under the [Apache License 2.0](LICENSE).

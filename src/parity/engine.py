@@ -50,6 +50,7 @@ from parity.models import (
     GenerationConfig,
     InputBundle,
     InputSpec,
+    JsonValue,
     Mismatch,
     MismatchKind,
     PandasInput,
@@ -825,9 +826,7 @@ def _campaign(
     ]
     status = _status_for(failures, None)
     verification = "captured"
-    if exact_only and expected_provenance is None:
-        verification = "unverified"
-    elif expected_provenance is not None:
+    if expected_provenance is not None:
         verification = (
             "verified"
             if reference_runtime == expected_provenance.reference
@@ -902,6 +901,9 @@ def _configured_case(
             return value
         return tuple(value[name] for name in input_bundle.inputs)
 
+    reference_kwargs = {**case.static_kwargs, **case.reference_kwargs}
+    candidate_kwargs = {**case.static_kwargs, **case.candidate_kwargs}
+
     def run_clean_pair(value: CampaignInput) -> tuple[Observation, Observation]:
         """Execute one confirmation in newly started reference/candidate workers."""
 
@@ -922,13 +924,13 @@ def _configured_case(
                 clean_reference.execute,
                 bound_input(value),
                 static_args=case.static_args,
-                static_kwargs=case.static_kwargs,
+                static_kwargs=reference_kwargs,
             )
             candidate_future = clean_pool.submit(
                 clean_candidate.execute,
                 bound_input(value),
                 static_args=case.static_args,
-                static_kwargs=case.static_kwargs,
+                static_kwargs=candidate_kwargs,
             )
             return reference_future.result(), candidate_future.result()
 
@@ -948,70 +950,85 @@ def _configured_case(
         ) as candidate_session,
         ThreadPoolExecutor(max_workers=2, thread_name_prefix="parity-pair") as pool,
     ):
-        if expected_provenance is not None:
-            reference_future = pool.submit(reference_session.inspect_runtime)
-            candidate_future = pool.submit(candidate_session.inspect_runtime)
-            reference_probe = reference_future.result()
-            candidate_probe = candidate_future.result()
-            provenance_mismatches: list[Mismatch] = []
-            for label, expected, probe in (
-                ("reference", expected_provenance.reference, reference_probe),
-                ("candidate", expected_provenance.candidate, candidate_probe),
-            ):
-                if expected is None or probe.runtime is None or not probe.succeeded:
-                    provenance_mismatches.append(
-                        Mismatch(
-                            kind=MismatchKind.EXCEPTION,
-                            message=f"{label} runtime provenance could not be verified",
-                            path=f"${label}.runtime",
-                        )
-                    )
-                    continue
-                if differences := diff_runtime(expected, probe.runtime):
-                    provenance_mismatches.append(
-                        Mismatch(
-                            kind=MismatchKind.EXCEPTION,
-                            message=(
-                                f"{label} runtime provenance drifted ("
-                                + ", ".join(differences)
-                                + ")"
-                            ),
-                            path=f"${label}.runtime",
-                        )
-                    )
-            if provenance_mismatches:
-                failure = ExampleResult(
-                    source="replay:provenance",
-                    status=Status.ERROR,
-                    mismatches=provenance_mismatches,
-                    reference_metrics=reference_probe.metrics,
-                    candidate_metrics=candidate_probe.metrics,
+        reference_future = pool.submit(reference_session.preflight_runtime)
+        candidate_future = pool.submit(candidate_session.preflight_runtime)
+        reference_probe = reference_future.result()
+        candidate_probe = candidate_future.result()
+        provenance_mismatches: list[Mismatch] = []
+        for label, expected, probe in (
+            (
+                "reference",
+                expected_provenance.reference if expected_provenance else None,
+                reference_probe,
+            ),
+            (
+                "candidate",
+                expected_provenance.candidate if expected_provenance else None,
+                candidate_probe,
+            ),
+        ):
+            if probe.runtime is None or not probe.succeeded:
+                detail = (
+                    probe.exception.message
+                    if probe.exception is not None
+                    and probe.exception.type == "RuntimeContractError"
+                    else "runtime provenance could not be verified"
                 )
-                return CaseResult(
-                    name=case.name,
-                    status=Status.ERROR,
-                    failures=[failure],
-                    diagnoses=diagnose(provenance_mismatches),
-                    provenance=CaseProvenance(
-                        reference=reference_probe.runtime,
-                        candidate=candidate_probe.runtime,
-                        verification="drifted",
-                    ),
-                    elapsed_seconds=time.perf_counter() - configured_started,
+                provenance_mismatches.append(
+                    Mismatch(
+                        kind=MismatchKind.EXCEPTION,
+                        message=f"{label} {detail}",
+                        path=f"${label}.runtime",
+                    )
                 )
+                continue
+            if expected is not None and (differences := diff_runtime(expected, probe.runtime)):
+                provenance_mismatches.append(
+                    Mismatch(
+                        kind=MismatchKind.EXCEPTION,
+                        message=(
+                            f"{label} runtime provenance drifted (" + ", ".join(differences) + ")"
+                        ),
+                        path=f"${label}.runtime",
+                    )
+                )
+        if provenance_mismatches:
+            failure = ExampleResult(
+                source=("replay:provenance" if expected_provenance else "runtime:preflight"),
+                status=Status.ERROR,
+                mismatches=provenance_mismatches,
+                reference_metrics=reference_probe.metrics,
+                candidate_metrics=candidate_probe.metrics,
+            )
+            return CaseResult(
+                name=case.name,
+                status=Status.ERROR,
+                failures=[failure],
+                diagnoses=diagnose(provenance_mismatches),
+                provenance=CaseProvenance(
+                    reference=reference_probe.runtime,
+                    candidate=candidate_probe.runtime,
+                    verification="drifted",
+                ),
+                elapsed_seconds=time.perf_counter() - configured_started,
+            )
 
-        def run(session: IsolatedExecutionSession, value: CampaignInput) -> Observation:
+        def run(
+            session: IsolatedExecutionSession,
+            value: CampaignInput,
+            endpoint_kwargs: Mapping[str, JsonValue],
+        ) -> Observation:
             return session.execute(
                 bound_input(value),
                 static_args=case.static_args,
-                static_kwargs=case.static_kwargs,
+                static_kwargs=endpoint_kwargs,
             )
 
         def run_pair(value: CampaignInput) -> tuple[Observation, Observation]:
             # Independent sessions make concurrent waits safe without sharing
             # callable globals or adapter arguments between the two sides.
-            reference = pool.submit(run, reference_session, value)
-            candidate = pool.submit(run, candidate_session, value)
+            reference = pool.submit(run, reference_session, value, reference_kwargs)
+            candidate = pool.submit(run, candidate_session, value, candidate_kwargs)
             return reference.result(), candidate.result()
 
         return _campaign(
@@ -1024,28 +1041,24 @@ def _configured_case(
             generation=case.generation,
             performance_config=case.performance,
             artifact_store=artifact_store,
-            reference_runner=lambda value: run(reference_session, value),
-            candidate_runner=lambda value: run(candidate_session, value),
+            reference_runner=lambda value: run(reference_session, value, reference_kwargs),
+            candidate_runner=lambda value: run(candidate_session, value, candidate_kwargs),
             pair_runner=run_pair,
             confirmation_pair_runner=run_clean_pair,
             artifact_case=case,
             reference_spec=case.reference,
             candidate_spec=case.candidate,
             benchmark=lambda value: benchmark_observations(
-                lambda: run(reference_session, value),
-                lambda: run(candidate_session, value),
+                lambda: run(reference_session, value, reference_kwargs),
+                lambda: run(candidate_session, value, candidate_kwargs),
                 case.performance,
             ),
             exact_only=exact_only,
             expected_provenance=expected_provenance,
-            observed_provenance=(
-                CaseProvenance(
-                    reference=reference_probe.runtime,
-                    candidate=candidate_probe.runtime,
-                    verification="verified",
-                )
-                if expected_provenance is not None
-                else None
+            observed_provenance=CaseProvenance(
+                reference=reference_probe.runtime,
+                candidate=candidate_probe.runtime,
+                verification="verified" if expected_provenance is not None else "captured",
             ),
             config_sha256=config_sha256,
         )
@@ -1413,11 +1426,11 @@ def _verify_manifest(root: Path) -> dict[str, Any]:
         manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise ReplayError("artifact manifest is missing or invalid") from error
-    if manifest.get("version") not in {1, 2} or not isinstance(manifest.get("files"), dict):
+    if type(manifest.get("version")) is not int or manifest.get("version") != 1:
+        raise ReplayError("unsupported artifact manifest")
+    if not isinstance(manifest.get("files"), dict):
         raise ReplayError("unsupported artifact manifest")
     required = {"replay.json", "result.json"}
-    if manifest.get("version") == 1:
-        required.add("input.arrow")
     missing = required - set(manifest["files"])
     if missing:
         raise ReplayError(
@@ -1459,17 +1472,15 @@ def _verify_manifest(root: Path) -> dict[str, Any]:
     return manifest
 
 
-def _replay_bundle_inputs(
-    replay: dict[str, Any], manifest: dict[str, Any], root: Path
-) -> dict[str, Path]:
+def _replay_inputs(replay: dict[str, Any], manifest: dict[str, Any], root: Path) -> dict[str, Path]:
     raw_inputs = replay.get("inputs")
-    if not isinstance(raw_inputs, list) or not 2 <= len(raw_inputs) <= 3:
-        raise ReplayError("replay input bundle must contain two or three named inputs")
+    if not isinstance(raw_inputs, list) or not 1 <= len(raw_inputs) <= 3:
+        raise ReplayError("replay must contain one to three named inputs")
     inputs: dict[str, Path] = {}
     seen_files: set[str] = set()
     for raw in raw_inputs:
         if not isinstance(raw, dict) or set(raw) != {"name", "file"}:
-            raise ReplayError("replay input bundle contains an invalid entry")
+            raise ReplayError("replay inputs contain an invalid entry")
         name, filename = raw["name"], raw["file"]
         if (
             not isinstance(name, str)
@@ -1481,9 +1492,9 @@ def _replay_bundle_inputs(
             or filename in seen_files
             or not filename.endswith(".arrow")
         ):
-            raise ReplayError("replay input bundle contains an unsafe entry")
+            raise ReplayError("replay inputs contain an unsafe entry")
         if filename not in manifest["files"]:
-            raise ReplayError(f"artifact manifest does not bind bundled input: {filename}")
+            raise ReplayError(f"artifact manifest does not bind replay input: {filename}")
         inputs[name] = root / filename
         seen_files.add(filename)
     return inputs
@@ -1568,62 +1579,61 @@ def replay_artifact(path: str | Path) -> SuiteResult:
     except (OSError, ValueError) as error:
         raise ReplayError("replay.json is missing or invalid") from error
     replay_version = replay.get("version")
-    if replay_version not in {1, 2, 3} or not isinstance(replay.get("case"), dict):
+    if (
+        type(replay_version) is not int
+        or replay_version != 1
+        or not isinstance(replay.get("case"), dict)
+    ):
         raise ReplayError("unsupported replay contract")
     if replay.get("path_base") != "invocation_cwd":
         raise ReplayError("unsupported replay path base")
-    bundled_inputs: dict[str, Path] | None = None
-    if replay_version == 3:
-        if manifest.get("version") != 2:
-            raise ReplayError("bundled replay requires a version 2 manifest")
-        bundled_inputs = _replay_bundle_inputs(replay, manifest, root)
-    else:
-        if manifest.get("version") != 1:
-            raise ReplayError("single-input replay requires a version 1 manifest")
-        if replay.get("input") != "input.arrow":
-            raise ReplayError("unsupported replay input")
-    expected_provenance: CaseProvenance | None = None
-    config_sha256: str | None = None
-    if replay_version == 2 or (replay_version == 3 and replay.get("expected_runtime") is not None):
-        try:
-            expected_provenance = CaseProvenance.model_validate(replay.get("expected_runtime"))
-        except ValueError as error:
-            raise ReplayError("replay runtime provenance is missing or invalid") from error
-        if expected_provenance.reference is None or expected_provenance.candidate is None:
-            raise ReplayError("replay runtime provenance is incomplete")
-        raw_config_sha256 = replay.get("config_sha256")
-        if not isinstance(raw_config_sha256, str) or not re.fullmatch(
-            r"[0-9a-f]{64}", raw_config_sha256
-        ):
-            raise ReplayError("replay configuration fingerprint is missing or invalid")
-        config_sha256 = raw_config_sha256
-    case_data = dict(replay["case"])
-    if _contains_redaction(case_data.get("static_args")) or _contains_redaction(
-        case_data.get("static_kwargs")
+    replay_inputs = _replay_inputs(replay, manifest, root)
+    try:
+        expected_provenance = CaseProvenance.model_validate(replay.get("expected_runtime"))
+    except ValueError as error:
+        raise ReplayError("replay runtime provenance is missing or invalid") from error
+    if expected_provenance.reference is None or expected_provenance.candidate is None:
+        raise ReplayError("replay runtime provenance is incomplete")
+    raw_config_sha256 = replay.get("config_sha256")
+    if not isinstance(raw_config_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", raw_config_sha256
     ):
+        raise ReplayError("replay configuration fingerprint is missing or invalid")
+    config_sha256 = raw_config_sha256
+    case_data = dict(replay["case"])
+    invocation_arguments = (
+        case_data.get("static_args"),
+        case_data.get("static_kwargs"),
+        case_data.get("reference_kwargs"),
+        case_data.get("candidate_kwargs"),
+    )
+    if any(_contains_redaction(value) for value in invocation_arguments):
         raise ReplayError("redacted static arguments cannot be replayed automatically")
     _restore_environment(case_data)
     _resolve_replay_paths(case_data, Path.cwd().resolve())
-    if bundled_inputs is None:
-        case_data["fixture"] = root / "input.arrow"
+    raw_bundle = case_data.get("input_bundle")
+    if raw_bundle is None:
+        if set(replay_inputs) != {"input"}:
+            raise ReplayError("single-input case requires exactly one input named 'input'")
+        case_data["fixture"] = replay_inputs["input"]
     else:
-        raw_bundle = case_data.get("input_bundle")
         if not isinstance(raw_bundle, dict):
             raise ReplayError("artifact input bundle does not match its case contract")
         raw_specs = raw_bundle.get("inputs")
         if (
             not isinstance(raw_bundle, dict)
             or not isinstance(raw_specs, dict)
-            or set(raw_specs) != set(bundled_inputs)
+            or set(raw_specs) != set(replay_inputs)
+            or not 2 <= len(replay_inputs) <= 3
         ):
             raise ReplayError("artifact input bundle does not match its case contract")
         # JSON object ordering is not a trusted invocation contract (the artifact
         # writer sorts keys for deterministic files). Replay's separately
         # hash-bound inputs list is authoritative for positional binding order.
-        ordered_specs = {name: raw_specs[name] for name in bundled_inputs}
+        ordered_specs = {name: raw_specs[name] for name in replay_inputs}
         raw_bundle["inputs"] = ordered_specs
         raw_specs = ordered_specs
-        for name, path in bundled_inputs.items():
+        for name, path in replay_inputs.items():
             raw_spec = raw_specs.get(name)
             if not isinstance(raw_spec, dict):
                 raise ReplayError("artifact contains an invalid bundled input contract")

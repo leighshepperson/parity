@@ -10,6 +10,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from parity._version import __version__
+from parity.provenance import distribution_satisfies_requirement
+
 if TYPE_CHECKING:
     from parity.models import CallableSpec, ParityConfig
 
@@ -45,10 +48,23 @@ class RecordedDistributionStatus:
     name: str
     status: Literal["installed", "missing", "unavailable"]
     version: str | None
+    requirement: str | None = None
+    satisfied: bool | None = None
 
     @property
     def healthy(self) -> bool:
-        return self.status == "installed"
+        return self.status == "installed" and self.satisfied is not False
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "status": self.status,
+            "version": self.version,
+        }
+        if self.requirement is not None:
+            payload["requirement"] = self.requirement
+            payload["satisfied"] = self.satisfied
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +75,16 @@ class WorkerRuntimeReport:
     python_implementation: str | None = None
     python_version: str | None = None
     parity_version: str | None = None
+    parity_satisfied: bool | None = None
     distributions: tuple[RecordedDistributionStatus, ...] = ()
 
     @property
     def healthy(self) -> bool:
-        return self.status == "ready" and all(item.healthy for item in self.distributions)
+        return (
+            self.status == "ready"
+            and self.parity_satisfied is True
+            and all(item.healthy for item in self.distributions)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,7 +99,8 @@ class WorkerRuntimeReport:
                 else None
             ),
             "parity": self.parity_version,
-            "distributions": [asdict(item) for item in self.distributions],
+            "parity_satisfied": self.parity_satisfied,
+            "distributions": [item.to_dict() for item in self.distributions],
         }
 
 
@@ -123,6 +145,7 @@ class ConfigDoctorReport:
 REQUIRED_DEPENDENCIES = (
     "hypothesis",
     "numpy",
+    "packaging",
     "pandas",
     "polars",
     "psutil",
@@ -163,8 +186,14 @@ def _inspect_worker(spec: CallableSpec, *, timeout_seconds: float) -> WorkerRunt
         observation = session.inspect_runtime()
     runtime = observation.runtime
     unavailable = tuple(
-        RecordedDistributionStatus(name=name, status="unavailable", version=None)
-        for name in spec.record_distributions
+        RecordedDistributionStatus(
+            name=name,
+            status="unavailable",
+            version=None,
+            requirement=spec.required_distributions.get(name),
+            satisfied=False if name in spec.required_distributions else None,
+        )
+        for name in spec.provenance_distributions
     )
     if observation.outcome is not ExecutionOutcome.RETURNED:
         status: Literal["crashed", "timed_out"] = (
@@ -176,11 +205,18 @@ def _inspect_worker(spec: CallableSpec, *, timeout_seconds: float) -> WorkerRunt
 
     by_name = {distribution.name: distribution for distribution in runtime.distributions}
     distributions: list[RecordedDistributionStatus] = []
-    for name in spec.record_distributions:
+    for name in spec.provenance_distributions:
         distribution = by_name.get(name)
+        requirement = spec.required_distributions.get(name)
         if distribution is None:
             distributions.append(
-                RecordedDistributionStatus(name=name, status="unavailable", version=None)
+                RecordedDistributionStatus(
+                    name=name,
+                    status="unavailable",
+                    version=None,
+                    requirement=requirement,
+                    satisfied=False if requirement is not None else None,
+                )
             )
         else:
             distributions.append(
@@ -188,6 +224,13 @@ def _inspect_worker(spec: CallableSpec, *, timeout_seconds: float) -> WorkerRunt
                     name=name,
                     status=distribution.status,
                     version=distribution.version,
+                    requirement=requirement,
+                    satisfied=(
+                        distribution.status == "installed"
+                        and distribution_satisfies_requirement(distribution.version, requirement)
+                        if requirement is not None
+                        else None
+                    ),
                 )
             )
     return WorkerRuntimeReport(
@@ -195,6 +238,7 @@ def _inspect_worker(spec: CallableSpec, *, timeout_seconds: float) -> WorkerRunt
         python_implementation=runtime.python_implementation,
         python_version=runtime.python_version,
         parity_version=runtime.parity_version,
+        parity_satisfied=runtime.parity_version == __version__,
         distributions=tuple(distributions),
     )
 

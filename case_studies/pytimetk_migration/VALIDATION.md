@@ -3,6 +3,15 @@
 Executed on 2026-08-14 with Parity 0.9.2 and PyTimeTK commit
 `c472ba5406791fbe7b37c902f18f7d5be64b46a5`.
 
+## Managed workspace smoke
+
+On 2026-08-14, the new managed flow was also run end to end with a locally built Parity 0.10.0
+wheel supplied through `UV_FIND_LINKS`. Workspace setup prepared both paired dependency lanes, then
+`parity migration run` passed release and current with five units passed, six excluded and zero
+failed/error/uncovered in each lane. The generated
+`.parity/workspace/reports/{release,current}.json` files are private, ignored smoke outputs, not
+replacements for the immutable checked-in 0.9.2 evidence below.
+
 ## Static contract
 
 - [x] `python make_fixtures.py` regenerates byte-identical committed Arrow fixtures.
