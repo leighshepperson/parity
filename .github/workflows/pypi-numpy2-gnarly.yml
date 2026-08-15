@@ -1,0 +1,510 @@
+name: PyPI NumPy 2 gnarly migration
+
+on:
+  push:
+    branches:
+      - agent/numpy2-gnarly-upgrade
+
+permissions:
+  contents: read
+
+jobs:
+  gnarly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build NumPy migration harness
+        shell: bash
+        run: |
+          cat > numpy2_harness.py <<'PY'
+          import numpy as np
+          import pandas as pd
+
+          def stable_square(data: pd.DataFrame) -> pd.DataFrame:
+              x = data["x"].astype("float64").to_numpy()
+              return pd.DataFrame({"value": np.square(x)})
+
+          def float32_python_scalar_promotion(data: pd.DataFrame) -> pd.DataFrame:
+              a = np.float32(float(data["a"].iloc[0]))
+              b = float(data["b"].iloc[0])
+              result = a + b
+              return pd.DataFrame({"value": [float(result)], "dtype": [str(np.asarray(result).dtype)]})
+
+          def int8_large_python_scalar(data: pd.DataFrame) -> pd.DataFrame:
+              a = np.int8(int(data["a"].iloc[0]))
+              b = int(data["b"].iloc[0])
+              result = a + b
+              return pd.DataFrame({"value": [int(result)], "dtype": [str(np.asarray(result).dtype)]})
+
+          def uint8_large_python_scalar(data: pd.DataFrame) -> pd.DataFrame:
+              a = np.uint8(int(data["a"].iloc[0]))
+              b = int(data["b"].iloc[0])
+              result = a + b
+              return pd.DataFrame({"value": [int(result)], "dtype": [str(np.asarray(result).dtype)]})
+
+          def copy_false_from_list(data: pd.DataFrame) -> pd.DataFrame:
+              values = data["x"].astype("float64").tolist()
+              arr = np.array(values, dtype=np.float64, copy=False)
+              return pd.DataFrame({"value": arr})
+
+          def removed_float_alias(data: pd.DataFrame) -> pd.DataFrame:
+              value = np.float_(float(data["x"].iloc[0]))
+              return pd.DataFrame({"value": [float(value)]})
+
+          def removed_complex_alias(data: pd.DataFrame) -> pd.DataFrame:
+              value = np.complex_(complex(float(data["x"].iloc[0]), float(data["y"].iloc[0])))
+              return pd.DataFrame({"real": [float(value.real)], "imag": [float(value.imag)]})
+
+          def removed_cast_dict(data: pd.DataFrame) -> pd.DataFrame:
+              arr = data["x"].astype("float64").to_numpy()
+              out = np.cast[np.float32](arr)
+              return pd.DataFrame({"value": out.astype("float64")})
+
+          def ndarray_ptp_method(data: pd.DataFrame) -> pd.DataFrame:
+              arr = data["x"].astype("float64").to_numpy()
+              return pd.DataFrame({"value": [float(arr.ptp())]})
+
+          def removed_product_alias(data: pd.DataFrame) -> pd.DataFrame:
+              arr = data["x"].astype("float64").to_numpy()
+              return pd.DataFrame({"value": [float(np.product(arr))]})
+          PY
+
+          mkdir -p numpy2-fixtures
+          printf '%s\n' '[{"x":-2.0},{"x":0.0},{"x":3.0}]' > numpy2-fixtures/x.json
+          printf '%s\n' '[{"x":1.0,"y":2.0}]' > numpy2-fixtures/xy.json
+          printf '%s\n' '[{"a":3.0,"b":0.5}]' > numpy2-fixtures/float-promotion.json
+          printf '%s\n' '[{"a":1,"b":200}]' > numpy2-fixtures/int8.json
+          printf '%s\n' '[{"a":1,"b":300}]' > numpy2-fixtures/uint8.json
+
+          cat > parity-numpy2.toml <<'TOML'
+          version = 1
+          artifact_dir = ".parity-numpy2"
+          fail_fast = false
+
+          [[cases]]
+          name = "control-stable-square"
+          fixture = "numpy2-fixtures/x.json"
+          [cases.reference]
+          target = "numpy2_harness:stable_square"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:stable_square"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          rtol = 1e-12
+          atol = 1e-12
+          [cases.schema]
+          min_rows = 1
+          max_rows = 20
+          [[cases.schema.columns]]
+          name = "x"
+          dtype = "float64"
+          nullable = false
+          minimum = -1000000.0
+          maximum = 1000000.0
+          examples = [-1000000.0, -1.0, 0.0, 1.0, 1000000.0]
+          [cases.generation]
+          max_examples = 100
+          max_findings = 2
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          derandomize = true
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "nep50-float32-python-scalar"
+          fixture = "numpy2-fixtures/float-promotion.json"
+          [cases.reference]
+          target = "numpy2_harness:float32_python_scalar_promotion"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:float32_python_scalar_promotion"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "strict"
+          [cases.schema]
+          min_rows = 1
+          max_rows = 1
+          [[cases.schema.columns]]
+          name = "a"
+          dtype = "float64"
+          nullable = false
+          minimum = -100.0
+          maximum = 100.0
+          examples = [-1.0, 0.0, 1.0]
+          [[cases.schema.columns]]
+          name = "b"
+          dtype = "float64"
+          nullable = false
+          minimum = -1e300
+          maximum = 1e300
+          examples = [-1e300, -1.0, 0.0, 1.0, 1e300]
+          [cases.generation]
+          max_examples = 150
+          max_findings = 3
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          derandomize = true
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "nep50-int8-large-python-int"
+          fixture = "numpy2-fixtures/int8.json"
+          [cases.reference]
+          target = "numpy2_harness:int8_large_python_scalar"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:int8_large_python_scalar"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "strict"
+          [cases.schema]
+          min_rows = 1
+          max_rows = 1
+          [[cases.schema.columns]]
+          name = "a"
+          dtype = "int64"
+          nullable = false
+          minimum = -128
+          maximum = 127
+          examples = [-128, -1, 0, 1, 127]
+          [[cases.schema.columns]]
+          name = "b"
+          dtype = "int64"
+          nullable = false
+          minimum = 128
+          maximum = 10000
+          examples = [128, 200, 256, 10000]
+          [cases.generation]
+          max_examples = 100
+          max_findings = 2
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          derandomize = true
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "nep50-uint8-large-python-int"
+          fixture = "numpy2-fixtures/uint8.json"
+          [cases.reference]
+          target = "numpy2_harness:uint8_large_python_scalar"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:uint8_large_python_scalar"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "strict"
+          [cases.schema]
+          min_rows = 1
+          max_rows = 1
+          [[cases.schema.columns]]
+          name = "a"
+          dtype = "int64"
+          nullable = false
+          minimum = 0
+          maximum = 255
+          examples = [0, 1, 255]
+          [[cases.schema.columns]]
+          name = "b"
+          dtype = "int64"
+          nullable = false
+          minimum = 256
+          maximum = 10000
+          examples = [256, 300, 10000]
+          [cases.generation]
+          max_examples = 100
+          max_findings = 2
+          stability_repeats = 2
+          seed = 20260814
+          search = true
+          shrink = true
+          derandomize = true
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "copy-false-from-list"
+          fixture = "numpy2-fixtures/x.json"
+          [cases.reference]
+          target = "numpy2_harness:copy_false_from_list"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:copy_false_from_list"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.generation]
+          search = false
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "removed-np-float_"
+          fixture = "numpy2-fixtures/x.json"
+          [cases.reference]
+          target = "numpy2_harness:removed_float_alias"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:removed_float_alias"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.generation]
+          search = false
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "removed-np-complex_"
+          fixture = "numpy2-fixtures/xy.json"
+          [cases.reference]
+          target = "numpy2_harness:removed_complex_alias"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:removed_complex_alias"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.generation]
+          search = false
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "removed-np-cast"
+          fixture = "numpy2-fixtures/x.json"
+          [cases.reference]
+          target = "numpy2_harness:removed_cast_dict"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:removed_cast_dict"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.generation]
+          search = false
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "removed-ndarray-ptp"
+          fixture = "numpy2-fixtures/x.json"
+          [cases.reference]
+          target = "numpy2_harness:ndarray_ptp_method"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:ndarray_ptp_method"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.generation]
+          search = false
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+
+          [[cases]]
+          name = "removed-np-product"
+          fixture = "numpy2-fixtures/x.json"
+          [cases.reference]
+          target = "numpy2_harness:removed_product_alias"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-reference/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.candidate]
+          target = "numpy2_harness:removed_product_alias"
+          adapter = "pandas"
+          pandas_input = "native"
+          python = ".venv-candidate/bin/python"
+          record_distributions = ["numpy", "pandas"]
+          [cases.comparison]
+          row_order = "strict"
+          column_order = "strict"
+          dtype = "compatible"
+          [cases.generation]
+          search = false
+          adversarial_examples = false
+          [cases.performance]
+          enabled = false
+          TOML
+
+      - name: Install published Parity and NumPy stacks
+        shell: bash
+        run: |
+          python -m venv .venv-reference
+          python -m venv .venv-candidate
+          .venv-reference/bin/pip install 'parity-check==0.10.0' 'numpy==1.26.4' 'pandas==2.2.3'
+          .venv-candidate/bin/pip install 'parity-check==0.10.0' 'numpy==2.0.2' 'pandas==2.2.3'
+          .venv-reference/bin/python -c "import parity,numpy,pandas; print('REFERENCE', parity.__version__, numpy.__version__, pandas.__version__)"
+          .venv-candidate/bin/python -c "import parity,numpy,pandas; print('CANDIDATE', parity.__version__, numpy.__version__, pandas.__version__)"
+
+      - name: Run gnarly migration campaign
+        id: campaign
+        shell: bash
+        run: |
+          set +e
+          .venv-candidate/bin/parity doctor --config parity-numpy2.toml
+          doctor_status=$?
+          .venv-candidate/bin/parity check --config parity-numpy2.toml --no-performance --json numpy2-report.json --markdown numpy2-report.md
+          parity_status=$?
+          set -e
+          echo "doctor_status=$doctor_status" >> "$GITHUB_OUTPUT"
+          echo "parity_status=$parity_status" >> "$GITHUB_OUTPUT"
+          echo "DOCTOR_STATUS=$doctor_status PARITY_STATUS=$parity_status"
+
+          .venv-candidate/bin/python - <<'PY'
+          import collections, json
+          report=json.load(open('numpy2-report.json'))
+          print('REPORT_STATUS', report['status'])
+          statuses=collections.Counter()
+          signatures=collections.defaultdict(list)
+          mismatch_kinds=collections.Counter()
+          for c in report['cases']:
+              statuses[c['status']] += 1
+              print('CASE', c['name'], 'status=', c['status'], 'examples=', c.get('examples_run'), 'generated=', c.get('generated_examples'), 'findings=', c.get('findings_discovered'))
+              for f in c.get('failures', []):
+                  sig=f.get('finding_signature')
+                  print('  source=', f.get('source'), 'mismatch=', f.get('mismatch_counts'), 'signature=', sig, 'artifact=', f.get('artifact'))
+                  for kind,n in (f.get('mismatch_counts') or {}).items(): mismatch_kinds[kind]+=n
+                  signatures[sig].append(c['name'])
+          print('STATUS_COUNTS', dict(statuses))
+          print('MISMATCH_KINDS', dict(mismatch_kinds))
+          print('SIGNATURE_CLUSTERS')
+          for sig,names in signatures.items(): print(' ', sig, '=>', names)
+          print('COLLISIONS', {str(k):v for k,v in signatures.items() if len(v)>1})
+          PY
+
+      - name: Replay every artifact independently
+        if: always()
+        shell: bash
+        run: |
+          test -f numpy2-report.json || exit 0
+          .venv-candidate/bin/python - <<'PY' > artifacts.tsv
+          import json
+          r=json.load(open('numpy2-report.json'))
+          for c in r['cases']:
+              for f in c.get('failures',[]):
+                  if f.get('artifact'):
+                      print(c['name']+'\t'+f['artifact'])
+          PY
+          while IFS=$'\t' read -r name artifact; do
+            echo "REPLAY_CASE=$name ARTIFACT=$artifact"
+            set +e
+            .venv-candidate/bin/parity replay "$artifact"
+            rc=$?
+            set -e
+            echo "REPLAY_RESULT case=$name rc=$rc"
+          done < artifacts.tsv
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-numpy2-gnarly
+          path: |
+            numpy2-report.json
+            numpy2-report.md
+            .parity-numpy2
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+      - name: Only require harness integrity
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.campaign.outputs.doctor_status }}" -eq 0
+          test -f numpy2-report.json
