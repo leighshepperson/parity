@@ -1,0 +1,164 @@
+name: PyPI Pydantic v1 to v2 migration
+
+on:
+  push:
+    branches: [agent/pydantic-v1-v2-migration]
+
+permissions:
+  contents: read
+
+jobs:
+  migration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build non-tabular migration harness
+        shell: bash
+        run: |
+          cat > pydantic_harness.py <<'PY'
+          import pandas as pd
+          from typing import Dict, Optional
+          from pydantic import BaseModel, Field
+
+          def row(df): return df.iloc[0].to_dict()
+
+          def stable(df):
+              class M(BaseModel):
+                  count: int
+                  name: str
+              r=row(df); m=M(count=int(r['count']), name=str(r['name']))
+              return pd.DataFrame([{'count':m.count,'name':m.name}])
+
+          def optional_required(df):
+              class M(BaseModel):
+                  required: int
+                  maybe: Optional[str]
+              m=M(required=int(row(df)['required']))
+              return pd.DataFrame([{'maybe_none':m.maybe is None}])
+
+          def float_to_int(df):
+              class M(BaseModel): value: int
+              m=M(value=float(row(df)['value']))
+              return pd.DataFrame([{'value':m.value}])
+
+          def number_to_str(df):
+              class M(BaseModel): value: str
+              m=M(value=int(row(df)['value']))
+              return pd.DataFrame([{'value':m.value}])
+
+          def pairs_to_dict(df):
+              class M(BaseModel): payload: Dict[str,int]
+              r=row(df); m=M(payload=[('a',int(r['a'])),('b',int(r['b']))])
+              return pd.DataFrame([m.payload])
+
+          def equality(df):
+              class M(BaseModel): value: int
+              v=int(row(df)['value']); m=M(value=v)
+              return pd.DataFrame([{'equal':bool(m == {'value':v})}])
+
+          def old_regex_keyword(df):
+              class M(BaseModel): code: str = Field(regex=r'^[A-Z]{3}$')
+              m=M(code=str(row(df)['code']))
+              return pd.DataFrame([{'code':m.code}])
+          PY
+
+          mkdir -p pydantic-fixtures
+          printf '%s\n' '[{"count":3,"name":"abc"}]' > pydantic-fixtures/stable.json
+          printf '%s\n' '[{"required":1}]' > pydantic-fixtures/optional.json
+          printf '%s\n' '[{"value":1.5}]' > pydantic-fixtures/float.json
+          printf '%s\n' '[{"value":123}]' > pydantic-fixtures/string.json
+          printf '%s\n' '[{"a":1,"b":2}]' > pydantic-fixtures/pairs.json
+          printf '%s\n' '[{"value":7}]' > pydantic-fixtures/equality.json
+          printf '%s\n' '[{"code":"ABC"}]' > pydantic-fixtures/regex.json
+
+          python - <<'PY'
+          cases = [
+            ('control-stable','pydantic-fixtures/stable.json','stable'),
+            ('optional-without-default','pydantic-fixtures/optional.json','optional_required'),
+            ('fractional-float-to-int','pydantic-fixtures/float.json','float_to_int'),
+            ('number-to-string-coercion','pydantic-fixtures/string.json','number_to_str'),
+            ('iterable-pairs-to-dict','pydantic-fixtures/pairs.json','pairs_to_dict'),
+            ('model-equality-to-dict','pydantic-fixtures/equality.json','equality'),
+            ('field-regex-keyword','pydantic-fixtures/regex.json','old_regex_keyword'),
+          ]
+          with open('parity-pydantic.toml','w') as f:
+              f.write('version = 1\nartifact_dir = ".parity-pydantic"\nfail_fast = false\n\n')
+              for name, fixture, target in cases:
+                  f.write(f'''[[cases]]\nname = "{name}"\nfixture = "{fixture}"\n[cases.reference]\ntarget = "pydantic_harness:{target}"\nadapter = "pandas"\npandas_input = "native"\npython = ".venv-reference/bin/python"\nrecord_distributions = ["pydantic"]\n[cases.candidate]\ntarget = "pydantic_harness:{target}"\nadapter = "pandas"\npandas_input = "native"\npython = ".venv-candidate/bin/python"\nrecord_distributions = ["pydantic"]\n[cases.comparison]\nrow_order = "strict"\ncolumn_order = "strict"\ndtype = "compatible"\n[cases.generation]\nsearch = false\nadversarial_examples = false\n[cases.performance]\nenabled = false\n\n''')
+          PY
+
+      - name: Install published Parity and real Pydantic stacks
+        shell: bash
+        run: |
+          python -m venv .venv-reference
+          python -m venv .venv-candidate
+          .venv-reference/bin/pip install 'parity-check==0.10.0' 'pydantic==1.10.24' 'pandas==2.2.3'
+          .venv-candidate/bin/pip install 'parity-check==0.10.0' 'pydantic==2.12.5' 'pandas==2.2.3'
+          .venv-reference/bin/python -c "import parity,pydantic; print('REFERENCE',parity.__version__,pydantic.__version__)"
+          .venv-candidate/bin/python -c "import parity,pydantic; print('CANDIDATE',parity.__version__,pydantic.__version__)"
+
+      - name: Run migration campaign
+        id: parity
+        shell: bash
+        run: |
+          set +e
+          .venv-candidate/bin/parity doctor --config parity-pydantic.toml
+          doctor=$?
+          .venv-candidate/bin/parity check --config parity-pydantic.toml --no-performance --json pydantic-report.json --markdown pydantic-report.md
+          rc=$?
+          set -e
+          echo "doctor=$doctor" >> "$GITHUB_OUTPUT"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "DOCTOR=$doctor PARITY=$rc"
+          .venv-candidate/bin/python - <<'PY'
+          import json,collections
+          r=json.load(open('pydantic-report.json')); print('REPORT_STATUS',r['status'])
+          clusters=collections.defaultdict(list)
+          for c in r['cases']:
+              print('CASE',c['name'],'status=',c['status'],'findings=',c.get('findings_discovered'))
+              for x in c.get('failures',[]):
+                  print('  mismatch=',x.get('mismatch_counts'),'signature=',x.get('finding_signature'),'artifact=',x.get('artifact'))
+                  clusters[x.get('finding_signature')].append(c['name'])
+          print('CLUSTERS',dict(clusters))
+          PY
+
+      - name: Replay findings
+        if: always()
+        shell: bash
+        run: |
+          test -f pydantic-report.json || exit 0
+          .venv-candidate/bin/python - <<'PY' > artifacts.tsv
+          import json
+          for c in json.load(open('pydantic-report.json'))['cases']:
+              for f in c.get('failures',[]):
+                  if f.get('artifact'): print(c['name']+'\t'+f['artifact'])
+          PY
+          while IFS=$'\t' read -r name artifact; do
+            set +e
+            .venv-candidate/bin/parity replay "$artifact"
+            rc=$?
+            set -e
+            echo "REPLAY_RESULT $name rc=$rc"
+          done < artifacts.tsv
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-pydantic-v1-v2
+          path: |
+            pydantic-report.json
+            pydantic-report.md
+            .parity-pydantic
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+      - name: Require harness integrity
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.parity.outputs.doctor }}" -eq 0
+          test -f pydantic-report.json
