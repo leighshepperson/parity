@@ -186,7 +186,7 @@ ignored_columns = []
 
 [cases.generation]
 max_examples = 250
-max_findings = 1
+max_findings = 10
 stability_repeats = 2
 search = true
 seed = 20260813
@@ -198,7 +198,7 @@ suppress_too_slow = true
 [cases.performance]
 enabled = true
 warmups = 1
-repeats = 5
+repeats = 9
 max_slowdown = 1.25
 max_memory_ratio = 1.5
 min_reference_ms = 1.0

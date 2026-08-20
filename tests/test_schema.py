@@ -92,6 +92,65 @@ def test_table_from_rows_rejects_values_outside_declared_dtype() -> None:
         table_from_rows(schema, [{"id": "not-an-integer"}])
 
 
+@pytest.mark.parametrize(
+    "column",
+    [
+        ColumnSchema(
+            name="code",
+            dtype="string",
+            regex=r"[A-Z]{2}[0-9]{2}",
+            categories=["AB12", "bad"],
+        ),
+        ColumnSchema(
+            name="code",
+            dtype="string",
+            min_length=4,
+            categories=["valid", "no"],
+        ),
+    ],
+)
+def test_schema_rejects_categories_outside_text_constraints(column: ColumnSchema) -> None:
+    with pytest.raises(ValueError, match="categorical values outside"):
+        validate_frame_schema(FrameSchema(columns=[column]))
+
+
+def test_schema_rejects_examples_outside_the_complete_column_domain() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="code",
+                dtype="string",
+                nullable=False,
+                regex=r"[A-Z]{2}[0-9]{2}",
+                min_length=4,
+                max_length=4,
+                categories=["AB12", "CD34"],
+                examples=["outside"],
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="examples outside its declared domain"):
+        validate_frame_schema(schema)
+
+
+def test_schema_accepts_iso_datetime_examples_in_the_configured_zone() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="at",
+                dtype="datetime",
+                timezone="America/New_York",
+                minimum="2024-01-01T00:00:00",
+                maximum="2024-12-31T23:59:59",
+                examples=["2024-11-03T01:30:00-04:00"],
+            )
+        ]
+    )
+
+    validate_frame_schema(schema)
+
+
 def test_sorted_by_uses_composite_lexicographic_order_and_null_placement() -> None:
     schema = FrameSchema(
         columns=[
@@ -407,7 +466,7 @@ def test_equal_row_count_rejects_a_schema_with_no_representable_rows() -> None:
         EqualRowCount(inputs=["left", "right"]),
     )
 
-    with pytest.raises(ValueError, match="incompatible row ranges"):
+    with pytest.raises(ValueError, match="no values representable"):
         validate_bundle_schemas(bundle, schemas)
 
 

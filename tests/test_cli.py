@@ -431,18 +431,22 @@ def test_inspect_creates_output_parents_and_handles_write_errors(tmp_path: Path)
 def test_doctor_config_reports_workers_side_by_side_and_filters_case(
     tmp_path: Path, monkeypatch
 ) -> None:
+    (tmp_path / "cli_doctor_target.py").write_text(
+        "def run(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
     config = ParityConfig(
         cases=[
             CaseConfig(
                 name=name,
                 reference=CallableSpec(
-                    target="missing.reference:run",
+                    target="cli_doctor_target:run",
                     python=Path(sys.executable),
                     workdir=tmp_path,
                     record_distributions=["pytest"],
                 ),
                 candidate=CallableSpec(
-                    target="missing.candidate:run",
+                    target="cli_doctor_target:run",
                     python=Path(sys.executable),
                     workdir=tmp_path,
                     record_distributions=["pytest"],
@@ -464,7 +468,7 @@ def test_doctor_config_reports_workers_side_by_side_and_filters_case(
     assert payload["cases"][0]["reference"]["distributions"][0]["name"] == "pytest"
     assert str(tmp_path) not in result.stdout
     assert sys.executable not in result.stdout
-    assert "missing.reference" not in result.stdout
+    assert "cli_doctor_target" not in result.stdout
 
     terminal = runner.invoke(
         cli.app,
@@ -475,7 +479,7 @@ def test_doctor_config_reports_workers_side_by_side_and_filters_case(
     assert "Candidate" in terminal.stdout
     assert "Python" in terminal.stdout
     assert "Parity" in terminal.stdout
-    assert "worker runtimes ready; targets were not imported" in terminal.stdout
+    assert "target runtimes and imports ready; targets were not invoked" in terminal.stdout
 
 
 def test_doctor_config_uses_exit_two_for_missing_distribution(tmp_path: Path, monkeypatch) -> None:
@@ -562,6 +566,10 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
             "3",
             "--stability-repeats",
             "4",
+            "--jobs",
+            "3",
+            "--native-threads",
+            "2",
             "--no-performance",
             "--json",
             str(json_path),
@@ -578,6 +586,8 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
     assert config.cases[0].generation.max_findings == 3
     assert config.cases[0].generation.stability_repeats == 4
     assert config.cases[0].performance.enabled is False
+    assert config.jobs == 3
+    assert config.native_threads == 2
     assert json.loads(json_path.read_text(encoding="utf-8"))["status"] == "failed"
     assert "<testsuite" in junit_path.read_text(encoding="utf-8")
     assert markdown_path.read_text(encoding="utf-8").startswith("# Parity verification")

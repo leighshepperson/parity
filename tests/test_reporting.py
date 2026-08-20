@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from parity.canonical import ExceptionInfo, Raise, Return
+from parity.comparison import compare
 from parity.models import (
     CaseProvenance,
     CaseResult,
@@ -13,6 +15,8 @@ from parity.models import (
     ExampleResult,
     Mismatch,
     MismatchKind,
+    PerformanceResult,
+    RunMetrics,
     Status,
     SuiteProvenance,
     SuiteResult,
@@ -41,7 +45,7 @@ def _suite(tmp_path: Path) -> SuiteResult:
     failure = ExampleResult(
         source="fixture /private/customer/orders.parquet",
         status=Status.FAILED,
-        finding_signature="ms1:" + "b" * 64,
+        finding_signature="ms3:" + "b" * 64,
         artifact=tmp_path / "orders" / "campaign" / "result.json",
         mismatches=[
             Mismatch(
@@ -87,8 +91,11 @@ def test_json_report_is_machine_readable_and_elides_values(tmp_path: Path) -> No
     assert payload["schema_version"] == 3
     assert payload["status"] == "failed"
     assert payload["cases"][0]["findings_discovered"] == 1
-    assert payload["cases"][0]["failures"][0]["finding_signature"] == "ms1:" + "b" * 64
+    assert payload["cases"][0]["failures"][0]["finding_signature"] == "ms3:" + "b" * 64
     assert payload["cases"][0]["failures"][0]["mismatch_counts"] == {"value": 1}
+    assert payload["cases"][0]["failures"][0]["mismatches"] == [
+        {"kind": "value", "summary": "values differ", "path": "$"}
+    ]
     assert payload["provenance"]["config_sha256"] == "a" * 64
     assert payload["cases"][0]["provenance"]["reference"]["distributions"][0] == {
         "name": "skrub",
@@ -113,15 +120,191 @@ def test_human_reports_show_counts_not_compared_data(tmp_path: Path) -> None:
     terminal = render_terminal(suite)
     assert "Parity FAILED" in terminal
     assert "1 value" in terminal
-    assert "1 distinct mismatch signature(s)" in terminal
+    assert "1 finding(s)" in terminal
     assert "secret@example.test" not in markdown + terminal
+
+
+def test_exception_reports_explain_distinct_safe_semantics(tmp_path: Path) -> None:
+    suite = _suite(tmp_path)
+    validation = ExampleResult(
+        source="generated",
+        status=Status.FAILED,
+        finding_signature="ms3:" + "1" * 64,
+        mismatches=[
+            Mismatch(
+                kind=MismatchKind.EXCEPTION,
+                message="one implementation raised and the other returned",
+                path="$result",
+                details={
+                    "reference_outcome": "return",
+                    "candidate_outcome": "raise",
+                    "candidate_type": "pydantic_core.ValidationError",
+                    "candidate_exception_details": {
+                        "error_codes": ["int_from_float"],
+                        "location_shapes": ["field"],
+                        "private": "secret@example.test",
+                    },
+                },
+            )
+        ],
+    )
+    removed_api = ExampleResult(
+        source="generated",
+        status=Status.FAILED,
+        finding_signature="ms3:" + "2" * 64,
+        mismatches=[
+            Mismatch(
+                kind=MismatchKind.EXCEPTION,
+                message="one implementation raised and the other returned",
+                path="$result",
+                details={
+                    "reference_outcome": "return",
+                    "candidate_outcome": "raise",
+                    "candidate_type": "builtins.AttributeError",
+                    "candidate_exception_details": {"api_tokens": ["np.cast"]},
+                },
+            )
+        ],
+    )
+    suite.cases[0].failures = [validation, removed_api]
+
+    payload = json.loads(render_json(suite))
+    markdown = render_markdown(suite)
+    terminal = render_terminal(suite)
+    combined = render_json(suite) + markdown + terminal
+
+    mismatches = [failure["mismatches"][0] for failure in payload["cases"][0]["failures"]]
+    assert mismatches[0]["candidate"] == {
+        "outcome": "raise",
+        "exception_type": "pydantic_core.ValidationError",
+        "error_codes": ["int_from_float"],
+        "location_shapes": ["field"],
+    }
+    assert mismatches[1]["candidate"] == {
+        "outcome": "raise",
+        "exception_type": "builtins.AttributeError",
+        "api_tokens": ["np.cast"],
+    }
+    assert "candidate raised pydantic_core.ValidationError" in combined
+    assert "codes: int_from_float" in combined
+    assert "candidate raised builtins.AttributeError [API: np.cast]" in combined
+    assert "finding ms3:" + "1" * 64 in terminal
+    assert "finding ms3:" + "2" * 64 in terminal
+    assert "secret@example.test" not in combined
+
+
+def test_exception_reports_redact_identifier_shaped_dynamic_metadata(tmp_path: Path) -> None:
+    private = "patient_hiv_positive_4938221"
+    dynamic_type = type(private, (Exception,), {"__module__": "clinical"})
+    mismatch = compare(
+        Return(None),
+        Raise(ExceptionInfo.from_exception(dynamic_type(f"np.{private}"))),
+    )[0]
+    mismatch.details["candidate_exception_details"] = {
+        "api_tokens": [f"np.{private}"],
+        "error_codes": [private],
+        "member_types": [f"clinical.{private}"],
+        "errno": 4_938_221,
+    }
+    suite = _suite(tmp_path)
+    suite.cases[0].failures = [
+        ExampleResult(
+            source="generated",
+            status=Status.FAILED,
+            finding_signature="ms3:" + "3" * 64,
+            mismatches=[mismatch],
+        )
+    ]
+
+    json_report = render_json(suite)
+    markdown = render_markdown(suite)
+    terminal = render_terminal(suite)
+    payload = json.loads(json_report)
+    candidate = payload["cases"][0]["failures"][0]["mismatches"][0]["candidate"]
+
+    assert candidate == {"outcome": "raise", "exception_type": "custom"}
+    assert "candidate raised custom" in json_report + markdown + terminal
+    assert private not in json_report + markdown + terminal
+
+
+def test_human_reports_show_confidence_intervals_and_gate_reasons(tmp_path: Path) -> None:
+    suite = _suite(tmp_path)
+    performance = PerformanceResult(
+        reference=RunMetrics(duration_seconds=0.1, peak_rss_bytes=100),
+        candidate=RunMetrics(duration_seconds=0.2, peak_rss_bytes=180),
+        speed_ratio=2.0,
+        speed_ratio_ci=(1.8, 2.2),
+        memory_ratio=1.8,
+        memory_ratio_ci=(1.6, 2.0),
+        confidence_level=0.9,
+        regression=True,
+        reasons=[
+            "candidate paired median runtime is 2.000x reference "
+            "(90% CI 1.800-2.200x; limit 1.500x)"
+        ],
+    )
+    suite.cases[0].performance = performance
+
+    markdown = render_markdown(suite)
+    terminal = render_terminal(suite)
+    payload = json.loads(render_json(suite))
+
+    assert "2.00x (90% CI 1.80-2.20x)" in markdown
+    assert "1.80x (90% CI 1.60-2.00x)" in markdown
+    assert "gate reason: candidate paired median runtime is 2.000x" in markdown
+    assert "runtime 2.00x (90% CI 1.80-2.20x)" in terminal
+    assert "memory 1.80x (90% CI 1.60-2.00x)" in terminal
+    assert "performance gate: candidate paired median runtime is 2.000x" in terminal
+    assert payload["cases"][0]["performance"]["reasons"] == performance.reasons
+
+
+def test_error_reports_never_present_a_behavioural_diagnosis(tmp_path: Path) -> None:
+    suite = _suite(tmp_path)
+    error = ExampleResult(
+        source="campaign",
+        status=Status.ERROR,
+        mismatches=[
+            Mismatch(
+                kind=MismatchKind.EXCEPTION,
+                message="one implementation raised and the other returned",
+                path="$candidate.runtime",
+            )
+        ],
+    )
+    suite.status = Status.ERROR
+    suite.cases[0] = suite.cases[0].model_copy(update={"status": Status.ERROR, "failures": [error]})
+
+    json_report = render_json(suite)
+    markdown = render_markdown(suite)
+    terminal = render_terminal(suite)
+    combined = (json_report + markdown + terminal).casefold()
+
+    assert json.loads(json_report)["cases"][0]["diagnoses"] == []
+    assert "behaviour differs" not in combined
+    assert "behavior differs" not in combined
+    assert "runtime preflight could not be completed" in combined
+
+
+def test_reports_warn_when_finding_limit_was_reached(tmp_path: Path) -> None:
+    suite = _suite(tmp_path)
+    suite.cases[0].finding_limit_reached = True
+
+    payload = json.loads(render_json(suite))
+    markdown = render_markdown(suite)
+    terminal = render_terminal(suite)
+
+    assert payload["cases"][0]["finding_limit_reached"] is True
+    assert "the finding limit was reached" in markdown
+    assert "finding limit reached" in terminal
+    assert "--max-findings <higher-number>" in markdown + terminal
 
 
 def test_terminal_can_emit_to_console_like_object(tmp_path: Path) -> None:
     class Console:
         rendered = ""
 
-        def print(self, value: str, *, end: str = "\n") -> None:
+        def print(self, value: str, *, end: str = "\n", markup: bool = True) -> None:
+            assert markup is False
             self.rendered += value + end
 
     console = Console()
@@ -179,11 +362,11 @@ def test_report_writer_preserves_destination_and_cleans_temporary_on_failure(
 def test_json_orders_signed_findings_by_signature_then_unsigned_errors(tmp_path: Path) -> None:
     suite = _suite(tmp_path)
     first = suite.cases[0].failures[0]
-    first.finding_signature = "ms1:" + "f" * 64
+    first.finding_signature = "ms3:" + "f" * 64
     second = first.model_copy(
         update={
             "source": "second",
-            "finding_signature": "ms1:" + "a" * 64,
+            "finding_signature": "ms3:" + "a" * 64,
             "artifact": None,
         }
     )
@@ -206,8 +389,8 @@ def test_json_orders_signed_findings_by_signature_then_unsigned_errors(tmp_path:
 
     assert case_payload["findings_discovered"] == 2
     assert [failure["finding_signature"] for failure in failures] == [
-        "ms1:" + "a" * 64,
-        "ms1:" + "f" * 64,
+        "ms3:" + "a" * 64,
+        "ms3:" + "f" * 64,
         None,
     ]
 
@@ -218,7 +401,7 @@ def test_markdown_lists_every_distinct_artifact_deterministically(tmp_path: Path
     first.artifact = tmp_path / "artifact-root" / "orders" / "z-campaign"
     second = first.model_copy(
         update={
-            "finding_signature": "ms1:" + "a" * 64,
+            "finding_signature": "ms3:" + "a" * 64,
             "artifact": tmp_path / "artifact-root" / "orders" / "a-campaign",
         }
     )
@@ -256,7 +439,7 @@ def test_case_result_always_derives_count_from_current_failures(tmp_path: Path) 
     )
     assert case.findings_discovered == 1
 
-    second = failure.model_copy(update={"finding_signature": "ms1:" + "c" * 64})
+    second = failure.model_copy(update={"finding_signature": "ms3:" + "c" * 64})
     case.failures = [failure, second]
     assert case.findings_discovered == 2
 

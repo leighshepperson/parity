@@ -1,0 +1,4 @@
+.parity-pydantic-versions/
+environments/*/.venv/
+reports/
+__pycache__/

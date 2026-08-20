@@ -13,7 +13,7 @@ That property reduces exposure; it does not make every output non-sensitive.
 | Migration manifest | No dataframe/value payloads; contains unit IDs and exclusion reasons | User-selected repository path | Developers and reviewers |
 | Migration JSON/terminal report | No dataframe/value payloads; contains redacted inventory metadata | Console or requested path | Developers and CI |
 | Evidence-verification JSON | No dataframe/value payloads; contains redacted case/artifact labels and mismatch digests | User-selected path | Developers and CI |
-| Workspace locks and generated tox config | Package versions/hashes and local source/interpreter paths | `.parity/workspace/` | Developers and CI |
+| Workspace locks and generated environment config | Package versions/hashes and local source/interpreter paths | `.parity/workspace/` | Developers and CI |
 | `input.arrow` or bundled `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
 | `manifest.json` | Metadata, paths and hashes | Counterexample directory | Restricted engineering team |
 | `result.json` in artifact | Structured mismatch evidence | Counterexample directory | Restricted engineering team |
@@ -47,9 +47,9 @@ Parity neither needs nor manages secrets. The `CallableSpec.environment` field i
 and will be stored in configuration; do not use it for credentials. In CI, inherit approved secrets
 from the runner only for wrappers that need them, and ensure neither callable returns or logs them.
 
-Parity does not scrape environment variables into reports. Python code executed by Parity has the
-same effective access as its worker process and can read inherited credentials. Isolation is not a
-permission boundary.
+Parity does not scrape environment variables into reports. Python and command targets have the same
+effective access as their process and can read inherited credentials. Isolation is not a permission
+boundary.
 
 Runtime provenance is allowlisted rather than discovered broadly. Reports may contain Python,
 platform and installed-version strings for Parity's core dependencies plus distributions explicitly
@@ -63,12 +63,24 @@ configuration bodies. Redaction removes common absolute-path and secret-assignme
 a general secret scanner. The manifest is project-controlled text and should itself be reviewed
 before it is committed, uploaded or passed to an external AI system.
 
-Evidence-verification reports apply the same data-safe projection. The `ms1:...` value binds a
+Evidence-verification reports apply the same data-safe projection. The `ms3:...` value binds a
 stable mismatch-shape classification, not source identity: despite the word “signature” in the
 model, it is not a digital signature, MAC, package attestation or authorization decision. Artifact
 manifest hashes detect local file changes, but a party able to replace the artifact can replace its
 hash manifest too. Use signed release provenance or an external attestation system when evidence
 crosses trust domains.
+
+Caught target exceptions are reduced to a qualified type, normalized message fingerprint and a
+small allow-list of structured reason metadata. Raw messages and tracebacks are not placed in
+reports. Normalization removes common paths, secrets, witness literals, addresses, timestamps, IDs
+and version strings. Reports additionally restrict type names, validation codes and API subjects to
+finite reviewed sets so identifier-shaped application data remains opaque. Private mismatch
+artifacts retain exact evidence and should still be treated as sensitive test data.
+
+FAILED reports expose only the safe projection needed to distinguish findings: Return/Raise state,
+well-known qualified exception types, and allow-listed Pydantic error codes, location shapes and
+NumPy API tokens when present. Custom identifiers remain `custom`; exact private evidence and the
+data-free `ms3:` replay classifier keep findings independently inspectable and reproducible.
 
 ## Supply chain
 
@@ -79,24 +91,24 @@ repositories, or for a private repository when GitHub Advanced Security is enabl
 dependencies. Consumers with stronger requirements should pin hashes or mirror packages through
 their approved registry.
 
-The optional migration workspace asks uv to resolve hash-pinned requirements locks and asks tox
-with tox-uv to create isolated workers. Resolution and installation may access configured package
-indexes and their normal caches. The exact reference requirement, lane requirement files, candidate
-packaging metadata and every resolved dependency are supply-chain inputs. Use a trusted index,
-review lock changes and keep `.parity/workspace` private because generated configuration can contain
-local paths. Managed setup rejects a workspace/import layout that exposes the editable candidate
-checkout to the reference worker: otherwise a flat-layout package could shadow the installed
-reference while package metadata still appeared correct. Keep the workspace and wrappers in a
-separate `migrations/` directory and do not add the candidate root to worker `PYTHONPATH`.
+The optional migration workspace resolves hash-pinned requirements locks and creates isolated
+target environments. Resolution and installation may access configured package indexes and their
+normal caches. The exact reference requirement, lane requirement files, candidate packaging
+metadata and every resolved dependency are supply-chain inputs. Use a trusted index, review lock
+changes and keep `.parity/workspace` private because generated configuration can contain local
+paths. Managed setup rejects a workspace/import layout that exposes one editable checkout to the
+other target: otherwise a flat-layout package could shadow the installed reference while package
+metadata still appeared correct. Keep the workspace and wrappers in a separate `migrations/`
+directory and do not add either checkout root to target `PYTHONPATH`.
 
-When uv or tox fails, Parity captures their raw stdout and stderr under
+When environment resolution or setup fails, Parity captures raw tool stdout and stderr under
 `.parity/workspace/logs/` while keeping it out of the data-safe terminal error. Those private logs
 can contain index URLs, credentials, paths, or packaging output. Do not upload or publish them.
 
-Parity treats tox, tox-uv and uv as environment-lifecycle details. It does not clone repositories,
-select branches or commits, apply patches, or edit the candidate checkout. That boundary prevents
-environment setup from silently choosing the source being evaluated; it does not make an existing
-checkout or its build backend safe.
+Parity keeps environment creation and resolution behind its migration commands. It does not clone
+repositories, select branches or commits, apply patches, or edit either checkout. That boundary
+prevents setup from silently choosing the source being evaluated; it does not make an existing
+checkout, target command or build backend safe.
 
 The composite Action always installs the Action's selected source revision. Public examples use the
 moving `v0` tag, which tracks the latest final 0.x release after its matching package publishes
@@ -106,22 +118,34 @@ branch directly in CI.
 
 ## Executed code
 
-Reference and candidate callables are arbitrary Python. Separate worker processes provide timeout,
-crash and cross-implementation state isolation but can still access the filesystem, network and
-inherited environment permitted to the invoking user. A configured campaign reuses each side's
-worker, so module state and spawned activity may persist between examples until campaign teardown.
-Workers can consume resources, spawn children or exploit native dependencies.
+Reference and candidate targets are arbitrary Python or protocol-speaking commands. Separate target
+processes provide timeout, crash and cross-implementation state isolation but can still access the
+filesystem, network and inherited environment permitted to the invoking user. A configured
+campaign reuses each side's session, so module/process state and spawned activity may persist
+between examples until campaign teardown. Targets can consume resources, spawn children or exploit
+native dependencies.
 
-`parity migration check` executes the union of cases named by the manifest under the same worker
+The portable Python worker imports no Parity controller modules in the target environment. That
+decouples dependencies; it does not reduce target code's authority. External command adapters have
+the same trust model. Their strict Arrow/JSON protocol prevents accidental contract ambiguity, not
+malicious access. See [the target protocol](TARGET_PROTOCOL.md).
+
+A configured `generation.generator` is also arbitrary project Python, but it runs in the Parity
+driver so it can construct a Hypothesis strategy. It is not protected by the target-process
+boundary or invocation timeout. Run custom generators only from reviewed repositories; put the
+entire Parity command in a container/VM for untrusted generator code. Generator output is bounded
+by `max_examples`, but the factory itself can still allocate, block or access driver credentials.
+
+`parity migration check` executes the union of cases named by the manifest under the same target
 model. Manifest unit IDs and exclusion reasons are descriptive only and are never imported or
-evaluated. Unknown case names are rejected before a worker starts.
+evaluated. Unknown case names are rejected before a target starts.
 
 `parity migration run` additionally resolves and installs packages before executing the same union
 in every dependency lane. `parity evidence verify` checks local artifact integrity and replays every
 report-referenced finding. Both commands must be run only against trusted source and packaging
 metadata, or inside the hardened environment described below.
 
-Configured runs and artifact replay execute the selected Python interpreter path. A project-local
+Configured runs and artifact replay execute the selected Python interpreter or command path. A project-local
 virtual-environment entry point may be a symlink to a host Python binary; Parity preserves that
 entry point because its surrounding environment determines installed packages. Replay requires the
 recorded path to stay lexically within the invocation project, but this is provenance hygiene, not

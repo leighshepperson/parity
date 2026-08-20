@@ -8,7 +8,7 @@ import decimal
 import enum
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,13 @@ import polars as pl
 import pyarrow as pa
 
 from parity.adapters import detect_adapter
+from parity.exception_semantics import (
+    exception_fingerprint,
+    extract_exception_details,
+    is_message_fingerprint,
+    normalize_exception_details,
+    normalize_exception_message,
+)
 from parity.models import JsonValue
 
 
@@ -72,11 +79,57 @@ class ExceptionInfo:
     type_name: str
     message: str
     module: str | None = None
+    message_fingerprint: str | None = None
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        semantics = normalize_exception_message(self.message)
+        object.__setattr__(self, "message", semantics.pattern)
+        object.__setattr__(
+            self,
+            "message_fingerprint",
+            self.message_fingerprint
+            if is_message_fingerprint(self.message_fingerprint)
+            else semantics.fingerprint,
+        )
+        object.__setattr__(self, "details", normalize_exception_details(self.details))
 
     @classmethod
     def from_exception(cls, error: BaseException) -> ExceptionInfo:
         error_type = type(error)
-        return cls(error_type.__qualname__, str(error), error_type.__module__)
+        semantics = normalize_exception_message(str(error))
+        return cls(
+            error_type.__qualname__,
+            semantics.pattern,
+            error_type.__module__,
+            semantics.fingerprint,
+            extract_exception_details(error),
+        )
+
+    @property
+    def fingerprint(self) -> str:
+        """Opaque identity used for semantic comparison and finding signatures."""
+
+        return exception_fingerprint(
+            self.module,
+            self.type_name,
+            self.message_fingerprint or normalize_exception_message(self.message).fingerprint,
+            self.details,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Return:
+    """A semantic invocation outcome containing a canonical return value."""
+
+    value: Any
+
+
+@dataclass(frozen=True, slots=True)
+class Raise:
+    """A semantic invocation outcome containing a canonical exception."""
+
+    exception: ExceptionInfo
 
 
 def dtype_family(dtype: Any) -> str:
@@ -187,7 +240,7 @@ def canonicalize(value: Any) -> Any:
 
     # Canonical values can re-enter recursively through mappings and sequences.
     # Treat them as fixed points instead of expanding their dataclass fields.
-    if isinstance(value, (CanonicalFrame, CanonicalSeries, ExceptionInfo)):
+    if isinstance(value, (CanonicalFrame, CanonicalSeries, ExceptionInfo, Return, Raise)):
         return value
     if isinstance(value, BaseException):
         return ExceptionInfo.from_exception(value)
@@ -296,7 +349,16 @@ def json_safe(value: Any, *, max_items: int = 20) -> JsonValue:
             "values": [json_safe(item) for item in value.values[:max_items]],
         }
     if isinstance(value, ExceptionInfo):
-        return {"type": value.type_name, "message": value.message, "module": value.module}
+        return {
+            "type": value.type_name,
+            "module": value.module,
+            "exception_fingerprint": value.fingerprint,
+            "details": json_safe(dict(value.details)),
+        }
+    if isinstance(value, Return):
+        return {"outcome": "return"}
+    if isinstance(value, Raise):
+        return {"outcome": "raise", "exception": json_safe(value.exception)}
     if isinstance(value, Mapping):
         return {
             str(key): json_safe(item, max_items=max_items)
@@ -313,6 +375,8 @@ __all__ = [
     "CanonicalFrame",
     "CanonicalSeries",
     "ExceptionInfo",
+    "Raise",
+    "Return",
     "canonicalize",
     "dtype_family",
     "is_nan",

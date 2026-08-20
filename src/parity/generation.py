@@ -5,15 +5,19 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import math
+import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Literal, cast
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pyarrow as pa
-from hypothesis import assume
+from hypothesis import HealthCheck, assume, find, settings
 from hypothesis import strategies as st
+from hypothesis.errors import NoSuchExample
 from hypothesis.strategies import SearchStrategy
 
 from parity.adapters import from_arrow, to_arrow
@@ -43,6 +47,14 @@ from parity.schema import (
 
 AdapterName = Literal["arrow", "pandas", "polars"]
 KeyNode = tuple[str, tuple[str, ...]]
+
+_TEXT_WITNESS_SETTINGS = settings(
+    database=None,
+    deadline=None,
+    derandomize=True,
+    max_examples=1_000,
+    suppress_health_check=(HealthCheck.filter_too_much,),
+)
 
 
 def _integer_limits(dtype: str) -> tuple[int, int]:
@@ -133,11 +145,21 @@ class GeneratedBundleCase:
         return {name: from_arrow(table, adapter) for name, table in self.tables.items()}
 
 
-def _parse_bound(value: Any, family: str) -> Any:
+def _parse_bound(value: Any, family: str, timezone: str | None = None) -> Any:
     if value is None:
         return None
-    if family == "datetime" and isinstance(value, str):
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if family == "datetime":
+        parsed = (
+            dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if isinstance(value, str)
+            else value
+        )
+        if timezone and isinstance(parsed, dt.datetime):
+            zone = ZoneInfo(timezone)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=zone)
+            return parsed.astimezone(zone)
+        return parsed
     if family == "date" and isinstance(value, str):
         return dt.date.fromisoformat(value)
     if family == "time" and isinstance(value, str):
@@ -149,14 +171,161 @@ def _parse_bound(value: Any, family: str) -> Any:
     return value
 
 
+def _text_strategy(column: ColumnSchema) -> SearchStrategy[str]:
+    minimum = column.min_length or 0
+    if column.regex is None:
+        maximum = column.max_length if column.max_length is not None else max(100, minimum)
+        return st.text(min_size=minimum, max_size=maximum)
+
+    strategy = st.from_regex(column.regex, fullmatch=True)
+    if column.min_length is not None or column.max_length is not None:
+        strategy = strategy.filter(
+            lambda value: (
+                len(value) >= minimum
+                and (column.max_length is None or len(value) <= column.max_length)
+            )
+        )
+    return strategy
+
+
+@lru_cache(maxsize=256)
+def _text_witness(
+    regex: str | None,
+    min_length: int | None,
+    max_length: int | None,
+) -> str:
+    column = ColumnSchema(
+        name="text",
+        dtype="string",
+        nullable=False,
+        regex=regex,
+        min_length=min_length,
+        max_length=max_length,
+    )
+    try:
+        return find(_text_strategy(column), lambda _value: True, settings=_TEXT_WITNESS_SETTINGS)
+    except NoSuchExample as exc:
+        raise ValueError("text regex and length bounds have no generated value") from exc
+
+
+def _text_matches(value: Any, column: ColumnSchema) -> bool:
+    if not isinstance(value, str):
+        return False
+    if column.min_length is not None and len(value) < column.min_length:
+        return False
+    if column.max_length is not None and len(value) > column.max_length:
+        return False
+    return column.regex is None or re.fullmatch(column.regex, value) is not None
+
+
+@lru_cache(maxsize=256)
+def _timezone_transition_values(
+    timezone: str,
+    minimum: dt.datetime,
+    maximum: dt.datetime,
+) -> tuple[dt.datetime, ...]:
+    """Return local gap/fold/boundary witnesses for an IANA timezone.
+
+    Hypothesis already understands imaginary and folded datetimes.  These
+    deterministic witnesses make sure transition behaviour is exercised even
+    in short campaigns and before property generation begins.
+    """
+
+    zone = ZoneInfo(timezone)
+    start = minimum.replace(tzinfo=zone, fold=0).astimezone(dt.UTC) - dt.timedelta(days=2)
+    end = maximum.replace(tzinfo=zone, fold=1).astimezone(dt.UTC) + dt.timedelta(days=2)
+    if start >= end:
+        return ()
+
+    preferred_start = max(start, dt.datetime(2020, 1, 1, tzinfo=dt.UTC))
+    preferred_end = min(end, dt.datetime(2031, 1, 1, tzinfo=dt.UTC))
+    windows = (
+        [(preferred_start, preferred_end), (start, end)]
+        if preferred_start < preferred_end
+        else [(start, end)]
+    )
+    values: list[dt.datetime] = []
+    transition_markers: set[dt.datetime] = set()
+
+    for window_start, window_end in windows:
+        cursor = window_start
+        offset = cursor.astimezone(zone).utcoffset()
+        while cursor < window_end and len(transition_markers) < 2:
+            next_cursor = min(cursor + dt.timedelta(days=1), window_end)
+            next_offset = next_cursor.astimezone(zone).utcoffset()
+            if next_offset == offset:
+                cursor = next_cursor
+                continue
+
+            low = cursor
+            high = next_cursor
+            while high - low > dt.timedelta(microseconds=1):
+                midpoint = low + (high - low) / 2
+                if midpoint.astimezone(zone).utcoffset() == offset:
+                    low = midpoint
+                else:
+                    high = midpoint
+            transition = high
+            marker = transition.replace(microsecond=0)
+            if marker not in transition_markers:
+                transition_markers.add(marker)
+                before = (transition - dt.timedelta(microseconds=1)).astimezone(zone)
+                after = transition.astimezone(zone)
+                values.extend((before, after))
+
+                before_offset = before.utcoffset()
+                after_offset = after.utcoffset()
+                if before_offset is not None and after_offset is not None:
+                    if after_offset > before_offset:
+                        # A clock jump creates imaginary local wall times.
+                        gap_start = before.replace(tzinfo=None) + dt.timedelta(microseconds=1)
+                        gap_end = after.replace(tzinfo=None)
+                        imaginary = gap_start + (gap_end - gap_start) / 2
+                        values.extend(
+                            (
+                                imaginary.replace(tzinfo=zone, fold=0),
+                                imaginary.replace(tzinfo=zone, fold=1),
+                            )
+                        )
+                    elif after_offset < before_offset:
+                        # A clock rollback creates two real instants with one wall time.
+                        fold_start = after.replace(tzinfo=None)
+                        fold_end = before.replace(tzinfo=None) + dt.timedelta(microseconds=1)
+                        ambiguous = fold_start + (fold_end - fold_start) / 2
+                        values.extend(
+                            (
+                                ambiguous.replace(tzinfo=zone, fold=0),
+                                ambiguous.replace(tzinfo=zone, fold=1),
+                            )
+                        )
+
+            cursor = next_cursor
+            offset = next_offset
+
+        if len(transition_markers) >= 2:
+            break
+
+    selected: list[dt.datetime] = []
+    seen: set[tuple[dt.datetime, dt.timedelta | None, int]] = set()
+    for value in values:
+        wall_time = value.replace(tzinfo=None)
+        witness_marker = (wall_time, value.utcoffset(), value.fold)
+        if minimum <= wall_time <= maximum and witness_marker not in seen:
+            selected.append(value)
+            seen.add(witness_marker)
+    return tuple(selected)
+
+
 def _ordinary_value(column: ColumnSchema, index: int) -> Any:
     family = dtype_family(column.dtype)
     if column.categories:
-        return column.categories[index % len(column.categories)]
+        return _parse_bound(
+            column.categories[index % len(column.categories)], family, column.timezone
+        )
     if column.examples:
-        return _parse_bound(column.examples[index % len(column.examples)], family)
-    minimum = _parse_bound(column.minimum, family)
-    maximum = _parse_bound(column.maximum, family)
+        return _parse_bound(column.examples[index % len(column.examples)], family, column.timezone)
+    minimum = _parse_bound(column.minimum, family, column.timezone)
+    maximum = _parse_bound(column.maximum, family, column.timezone)
     if family == "integer":
         type_low, type_high = _integer_limits(column.dtype)
         integer_low = int(minimum) if minimum is not None else max(type_low, -10)
@@ -180,14 +349,22 @@ def _ordinary_value(column: ColumnSchema, index: int) -> Any:
         )
     if family == "boolean":
         return bool(index % 2)
-    if family in {"string", "category", "object"}:
+    if family in {"string", "category"}:
+        if (
+            column.regex is not None
+            or column.min_length is not None
+            or column.max_length is not None
+        ):
+            return _text_witness(column.regex, column.min_length, column.max_length)
+        return f"value-{index}" if column.unique else ("alpha", "βeta", "")[index % 3]
+    if family == "object":
         return f"value-{index}" if column.unique else ("alpha", "βeta", "")[index % 3]
     if family == "binary":
         return f"bytes-{index}".encode()
     if family == "date":
         return dt.date(2020, 1, 1) + dt.timedelta(days=index)
     if family == "datetime":
-        tz = dt.UTC if column.timezone else None
+        tz = ZoneInfo(column.timezone) if column.timezone else None
         return dt.datetime(2020, 1, 1, 12, tzinfo=tz) + dt.timedelta(days=index)
     if family == "time":
         return dt.time(index % 24, (index * 7) % 60)
@@ -210,16 +387,20 @@ def _base_rows(schema: FrameSchema, count: int = 3) -> list[dict[str, Any]]:
 def _extreme_value(column: ColumnSchema, high: bool) -> Any:
     family = dtype_family(column.dtype)
     if column.categories:
-        return column.categories[-1 if high else 0]
+        return _parse_bound(column.categories[-1 if high else 0], family, column.timezone)
     bound = column.maximum if high else column.minimum
     if bound is not None:
-        return _parse_bound(bound, family)
+        return _parse_bound(bound, family, column.timezone)
     if family == "integer":
         return _integer_limits(column.dtype)[int(high)]
     if family == "float":
         return float("inf") if high else float("-inf")
     if family == "decimal":
         return decimal.Decimal("999999999999999999.999999999") * (1 if high else -1)
+    if family in {"string", "category"} and (
+        column.regex is not None or column.min_length is not None or column.max_length is not None
+    ):
+        return _text_witness(column.regex, column.min_length, column.max_length)
     if family in {"string", "category", "object"}:
         return "𐍈e\u0301" if high else ""
     if family == "binary":
@@ -227,7 +408,7 @@ def _extreme_value(column: ColumnSchema, high: bool) -> Any:
     if family == "date":
         return dt.date(2100, 12, 31) if high else dt.date(1900, 1, 1)
     if family == "datetime":
-        tz = dt.UTC if column.timezone else None
+        tz = ZoneInfo(column.timezone) if column.timezone else None
         year = 2100 if high else 1900
         return dt.datetime(year, 12 if high else 1, 31 if high else 1, tzinfo=tz)
     if family == "duration":
@@ -244,20 +425,26 @@ def _rows_fit_contract(schema: FrameSchema, rows: list[dict[str, Any]]) -> bool:
         values = [row[column.name] for row in rows]
         if not column.nullable and any(value is None for value in values):
             return False
-        if column.categories is not None and any(
-            value is not None and value not in column.categories for value in values
-        ):
-            return False
+        family = dtype_family(column.dtype)
+        if column.categories is not None:
+            categories = {
+                repr(_parse_bound(value, family, column.timezone))
+                for value in column.categories
+                if value is not None
+            }
+            if any(value is not None and repr(value) not in categories for value in values):
+                return False
         if column.unique:
             markers = [repr(value) for value in values]
             if len(markers) != len(set(markers)):
                 return False
-        family = dtype_family(column.dtype)
-        minimum = _parse_bound(column.minimum, family)
-        maximum = _parse_bound(column.maximum, family)
+        minimum = _parse_bound(column.minimum, family, column.timezone)
+        maximum = _parse_bound(column.maximum, family, column.timezone)
         for value in values:
             if value is None:
                 continue
+            if family in {"string", "category"} and not _text_matches(value, column):
+                return False
             if (
                 isinstance(value, float)
                 and math.isnan(value)
@@ -265,8 +452,9 @@ def _rows_fit_contract(schema: FrameSchema, rows: list[dict[str, Any]]) -> bool:
             ):
                 return False
             try:
+                comparable_value = _parse_bound(value, family, column.timezone)
                 pa.array(
-                    [value],
+                    [comparable_value],
                     type=arrow_type(column.dtype, timezone=column.timezone),
                     from_pandas=False,
                 )
@@ -279,9 +467,9 @@ def _rows_fit_contract(schema: FrameSchema, rows: list[dict[str, Any]]) -> bool:
             ):
                 return False
             try:
-                if minimum is not None and value < minimum:
+                if minimum is not None and comparable_value < minimum:
                     return False
-                if maximum is not None and value > maximum:
+                if maximum is not None and comparable_value > maximum:
                     return False
             except TypeError:
                 return False
@@ -362,6 +550,27 @@ def adversarial_cases(
                 temporal[0][column.name] = _extreme_value(column, False)
                 temporal[1][column.name] = _extreme_value(column, True)
         append_if_valid("temporal-boundaries", temporal)
+
+    transition_values: dict[str, tuple[dt.datetime, ...]] = {}
+    for column in schema.columns:
+        if dtype_family(column.dtype) != "datetime" or column.timezone is None:
+            continue
+        minimum, maximum = _temporal_bounds(column)
+        local_minimum = minimum.astimezone(ZoneInfo(column.timezone)).replace(tzinfo=None)
+        local_maximum = maximum.astimezone(ZoneInfo(column.timezone)).replace(tzinfo=None)
+        values = _timezone_transition_values(column.timezone, local_minimum, local_maximum)
+        if values:
+            transition_values[column.name] = values
+    if transition_values and schema.max_rows:
+        row_count = min(
+            max(schema.min_rows, *(len(values) for values in transition_values.values())),
+            schema.max_rows,
+        )
+        transition_rows = _base_rows(schema, count=row_count)
+        for column_name, values in transition_values.items():
+            for index, row in enumerate(transition_rows):
+                row[column_name] = values[index % len(values)]
+        append_if_valid("timezone-transitions", transition_rows)
 
     categorical = [column for column in schema.columns if column.categories]
     if categorical:
@@ -526,7 +735,7 @@ def column_strategy(column: ColumnSchema, *, allow_null: bool = True) -> SearchS
     family = dtype_family(column.dtype)
     if column.categories is not None:
         non_null_categories = [
-            value
+            _parse_bound(value, family, column.timezone)
             for value in column.categories
             if value is not None and _value_fits_column(value, column)
         ]
@@ -562,43 +771,14 @@ def column_strategy(column: ColumnSchema, *, allow_null: bool = True) -> SearchS
         )
     elif family == "boolean":
         strategy = st.booleans()
-    elif family in {"string", "category", "object"}:
+    elif family in {"string", "category"}:
+        strategy = _text_strategy(column)
+    elif family == "object":
         strategy = st.text(max_size=100)
     elif family == "binary":
         strategy = st.binary(max_size=100)
-    elif family == "date":
-        date_minimum = cast(dt.date | None, _parse_bound(column.minimum, family)) or dt.date(
-            1900, 1, 1
-        )
-        date_maximum = cast(dt.date | None, _parse_bound(column.maximum, family)) or dt.date(
-            2100, 12, 31
-        )
-        strategy = st.dates(min_value=date_minimum, max_value=date_maximum)
-    elif family == "datetime":
-        datetime_minimum = cast(
-            dt.datetime | None, _parse_bound(column.minimum, family)
-        ) or dt.datetime(1900, 1, 1)
-        datetime_maximum = cast(
-            dt.datetime | None, _parse_bound(column.maximum, family)
-        ) or dt.datetime(2100, 12, 31)
-        if column.timezone:
-            strategy = st.datetimes(
-                min_value=datetime_minimum.replace(tzinfo=None),
-                max_value=datetime_maximum.replace(tzinfo=None),
-                timezones=st.just(dt.UTC),
-            )
-        else:
-            strategy = st.datetimes(
-                min_value=datetime_minimum,
-                max_value=datetime_maximum,
-                timezones=st.none(),
-            )
-    elif family == "time":
-        strategy = st.times(timezones=st.none())
-    elif family == "duration":
-        strategy = st.timedeltas(
-            min_value=dt.timedelta(days=-36500), max_value=dt.timedelta(days=36500)
-        )
+    elif family in {"date", "datetime", "time", "duration"}:
+        strategy = _temporal_value_strategy(column)
     elif family == "list":
         strategy = st.lists(st.text(max_size=30), max_size=10)
     elif family == "struct":
@@ -662,18 +842,27 @@ def _effective_max_rows(schema: FrameSchema) -> int:
 def _value_fits_column(value: Any, column: ColumnSchema) -> bool:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return False
-    if column.categories is not None:
-        allowed = {repr(json_safe(item)) for item in column.categories if item is not None}
-        if repr(json_safe(value)) not in allowed:
-            return False
     family = dtype_family(column.dtype)
-    minimum = _parse_bound(column.minimum, family)
-    maximum = _parse_bound(column.maximum, family)
+    comparable_value = _parse_bound(value, family, column.timezone)
+    if column.categories is not None:
+        allowed = {
+            repr(json_safe(_parse_bound(item, family, column.timezone)))
+            for item in column.categories
+            if item is not None
+        }
+        if repr(json_safe(comparable_value)) not in allowed:
+            return False
+    if family in {"string", "category"} and not _text_matches(comparable_value, column):
+        return False
+    minimum = _parse_bound(column.minimum, family, column.timezone)
+    maximum = _parse_bound(column.maximum, family, column.timezone)
     try:
-        if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+        if (minimum is not None and comparable_value < minimum) or (
+            maximum is not None and comparable_value > maximum
+        ):
             return False
         pa.array(
-            [value],
+            [comparable_value],
             type=arrow_type(column.dtype, timezone=column.timezone),
             from_pandas=False,
         )
@@ -710,8 +899,9 @@ def _shared_column_strategy(columns: list[ColumnSchema]) -> SearchStrategy[Any]:
     categorized = [column for column in columns if column.categories is not None]
     if categorized:
         base = min(categorized, key=_column_constraint_key)
+        family = dtype_family(base.dtype)
         candidates = [
-            value
+            _parse_bound(value, family, base.timezone)
             for value in base.categories or []
             if value is not None and all(_value_fits_column(value, column) for column in columns)
         ]
@@ -909,7 +1099,11 @@ def _comparison_holds(left: Any, operator: str, right: Any) -> bool:
 def _finite_column_values(column: ColumnSchema) -> list[Any] | None:
     family = dtype_family(column.dtype)
     if column.categories is not None:
-        values = [_parse_bound(value, family) for value in column.categories if value is not None]
+        values = [
+            _parse_bound(value, family, column.timezone)
+            for value in column.categories
+            if value is not None
+        ]
         return [value for value in values if _value_fits_column(value, column)]
     if family == "boolean":
         return [False, True]
@@ -1034,11 +1228,16 @@ def _temporal_bounds(column: ColumnSchema) -> tuple[Any, Any]:
     }
     minimum, maximum = defaults[family]
     if family == "datetime" and column.timezone:
-        minimum = minimum.replace(tzinfo=dt.UTC)
-        maximum = maximum.replace(tzinfo=dt.UTC)
+        zone = ZoneInfo(column.timezone)
+        minimum = minimum.replace(tzinfo=zone)
+        maximum = maximum.replace(tzinfo=zone)
     return (
-        _parse_bound(column.minimum, family) if column.minimum is not None else minimum,
-        _parse_bound(column.maximum, family) if column.maximum is not None else maximum,
+        _parse_bound(column.minimum, family, column.timezone)
+        if column.minimum is not None
+        else minimum,
+        _parse_bound(column.maximum, family, column.timezone)
+        if column.maximum is not None
+        else maximum,
     )
 
 
@@ -1075,11 +1274,22 @@ def _temporal_value_strategy(
         return st.dates(min_value=selected_minimum, max_value=selected_maximum)
     if family == "datetime":
         if column.timezone:
-            return st.datetimes(
-                min_value=selected_minimum.replace(tzinfo=None),
-                max_value=selected_maximum.replace(tzinfo=None),
-                timezones=st.just(dt.UTC),
+            zone = ZoneInfo(column.timezone)
+            local_minimum = selected_minimum.astimezone(zone).replace(tzinfo=None)
+            local_maximum = selected_maximum.astimezone(zone).replace(tzinfo=None)
+            strategy = st.datetimes(
+                min_value=local_minimum,
+                max_value=local_maximum,
+                timezones=st.just(zone),
+                allow_imaginary=True,
             )
+            if minimum is None and maximum is None and not strict_minimum and not strict_maximum:
+                transitions = _timezone_transition_values(
+                    column.timezone, local_minimum, local_maximum
+                )
+                if transitions:
+                    strategy = st.one_of(st.sampled_from(transitions), strategy)
+            return strategy
         return st.datetimes(
             min_value=selected_minimum,
             max_value=selected_maximum,
@@ -1106,7 +1316,7 @@ def _same_value_pair_strategy(
         categorized = left if left.categories is not None else right
         family = dtype_family(categorized.dtype)
         candidates = [
-            _parse_bound(value, family)
+            _parse_bound(value, family, categorized.timezone)
             for value in categorized.categories or []
             if value is not None
         ]

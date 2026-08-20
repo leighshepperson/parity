@@ -36,7 +36,7 @@ from parity.models import (
 from parity.provenance import collect_runtime_provenance
 from parity.reporting import report_payload
 
-SIGNATURE = "ms1:" + "a" * 64
+SIGNATURE = "ms3:" + "a" * 64
 runner = CliRunner()
 
 
@@ -158,7 +158,7 @@ def test_verifies_suite_and_migration_report_artifacts(
             EvidenceArtifactReason.FINDING_NOT_REPRODUCED,
         ),
         (
-            _replay(Status.FAILED, "ms1:" + "b" * 64),
+            _replay(Status.FAILED, "ms3:" + "b" * 64),
             Status.FAILED,
             EvidenceArtifactStatus.STALE,
             EvidenceArtifactReason.FINDING_CHANGED,
@@ -197,7 +197,7 @@ def test_tampered_report_signature_is_an_error_without_replay(
     artifact = _write_artifact(tmp_path / "artifacts" / "orders" / "finding")
     report = tmp_path / "report.json"
     report.write_text(
-        json.dumps(_report(str(artifact.relative_to(tmp_path)), signature="ms1:" + "b" * 64)),
+        json.dumps(_report(str(artifact.relative_to(tmp_path)), signature="ms3:" + "b" * 64)),
         encoding="utf-8",
     )
     called = False
@@ -322,9 +322,9 @@ def test_case_identity_mismatch_reports_a_bounded_reason(
     ("status", "actual"),
     [
         (EvidenceArtifactStatus.VERIFIED, None),
-        (EvidenceArtifactStatus.VERIFIED, "ms1:" + "b" * 64),
+        (EvidenceArtifactStatus.VERIFIED, "ms3:" + "b" * 64),
         (EvidenceArtifactStatus.STALE, SIGNATURE),
-        (EvidenceArtifactStatus.ERROR, "ms1:" + "b" * 64),
+        (EvidenceArtifactStatus.ERROR, "ms3:" + "b" * 64),
     ],
 )
 def test_artifact_result_rejects_contradictory_signatures(
@@ -453,7 +453,7 @@ def test_report_deduplicates_in_order_and_rejects_conflicting_artifact_binding(
         {
             "status": "failed",
             "artifact": str(artifact.relative_to(tmp_path)),
-            "finding_signature": "ms1:" + "b" * 64,
+            "finding_signature": "ms3:" + "b" * 64,
         }
     )
     report.write_text(json.dumps(payload), encoding="utf-8")

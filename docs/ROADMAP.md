@@ -1,104 +1,170 @@
 # Roadmap
 
-Parity is an open-source, local-first verifier for dataframe and numerical migrations. This roadmap
-lists technical priorities, not release dates or commitments. Work should be guided by reproducible
-public examples and the risk of false passes.
+Parity is an open-source, local-first behavioural compatibility engine. This roadmap describes
+technical direction, not release dates or commitments. Correctness, reproducible evidence and a
+clean contract boundary take priority over feature count.
 
-## Current usability foundation
+## Foundation in the current release
 
-The current release makes a complete migration easier to operate without broadening Parity into a
-source manager or general build system:
+The current architecture establishes the core verification loop:
 
-- an optional `parity-check[workspace]` flow creates isolated, locked reference/candidate workers
-  for one or more dependency lanes behind `parity migration init/setup/run`, while
-  `migration advance` moves one active adjacent pair without accumulating a history graph;
-- `cases_file` and bounded `case_defaults` remove repetitive large-config boilerplate while keeping
-  case identity, targets and input contracts visible;
-- side-specific `reference_kwargs` and `candidate_kwargs` let one wrapper expose controlled backend
-  switches without duplicating cases;
-- worker Parity and target-package requirements fail closed before target execution; and
-- `parity evidence verify` batch-replays mismatch-classified findings referenced by suite or
-  migration reports.
+- canonical fixtures, deterministic boundary cases and Hypothesis generation/shrinking;
+- first-class semantic Return/Raise outcomes with normalized exception evidence;
+- independently classified `ms3:` findings, integrity-bound artifacts and exact replay;
+- a dependency-light Python worker that does not install Parity into target environments;
+- first-class arbitrary command targets over a documented Arrow/JSON protocol;
+- small input adapters and per-side successful-output canonicalizers for changed APIs;
+- project-owned Hypothesis strategies or bounded iterable generators;
+- deterministic case-level concurrency plus opt-in target native-thread limits;
+- paired performance ratios with bootstrap confidence intervals;
+- composable case files/defaults and side-specific arguments without hiding case identity or input
+  contracts;
+- batch verification of retained mismatch evidence from suite and migration reports;
+- separately locked released/local and local/local migration workspaces, with local source
+  provenance; and
+- one active adjacent migration pair with reusable core controls rather than an append-only history.
 
-The workspace consumes a released reference and an existing local candidate checkout. It does not
-clone, patch or modify source. Durable core cases remain mapped in the current manifest; hop-specific
-cases and reports are replaced as the baseline advances. Parity's `ms1:` value is a mismatch-shape
-digest, not a cryptographic signature or attestation.
+The controller owns search, comparison, findings and artifacts. Targets own only translation into a
+shared behavioural contract. That division must remain clear as the project grows.
 
-## Make the current release dependable
+## Make findings excellent
 
-- Keep configuration, exit codes, reports and replay artifacts consistent across patch releases.
-- Treat false passes, irreproducible counterexamples and input-isolation failures as release
-  blockers.
-- Improve diagnostics for schema, dtype, ordering, null, datetime, exception and tolerance
-  differences.
-- Test supported Python versions and operating systems, including subprocess and timeout paths.
-- Add pinned, runnable case studies from public projects and retain confirmed failures as regression
-  fixtures.
-- Document cross-environment campaigns, redaction, artifact handling and common CI configurations.
-- Keep the migration coverage gate resistant to partial execution, missing case evidence and
-  vacuous all-excluded inventories, with versioned, data-safe reports bound to the reviewed
-  manifest and effective Parity configuration.
-- Exercise managed workspaces across supported platforms, resolver failures and multi-lane public
-  migrations while keeping explicit externally provisioned interpreter paths supported.
-- Preserve evidence-verification exit semantics and distinguish stale behavioural evidence from
-  corrupt, unverifiable or unauthenticated evidence.
+- Keep semantic `FAILED` separate from infrastructure `ERROR` in every CLI, report and API.
+- Improve data-safe summaries so a large campaign says what changed and where without disclosing
+  witness values or raw exception text.
+- Separate unrelated incompatibilities while keeping signatures stable across irrelevant paths,
+  addresses, timestamps, IDs and dependency-version strings.
+- Preserve exact private evidence, deterministic deduplication, minimized witnesses and independent
+  replay for every accepted finding.
+- Add mismatch classes only from concrete migrations; do not present a signature or heuristic
+  diagnosis as a root-cause proof.
+- Keep evidence verification explicit about stale behaviour, corrupt artifacts, runtime drift and
+  unverifiable execution.
 
-## Broaden semantic coverage
+## Harden target isolation and protocol boundaries
 
-- Cover more Arrow logical types, especially decimals, categorical values, durations and nested
-  columns.
-- Strengthen generation around empty inputs, duplicate and null keys, multi-column joins, timezone
-  boundaries, extreme numeric values and mixed missing-value representations.
-- Extend valid-domain constraints only from concrete examples, with temporal spacing and grouped
-  ordering as likely follow-ups to the initial ordering and row-comparison vocabulary.
-- Exercise multi-input relational campaigns on more public join and lookup implementations, and
-  refine the small relationship vocabulary from reproducible examples.
-- Improve mismatch-signature classification without presenting signatures as root causes or bugs.
-- Add explicit comparison policies where real migrations require them while keeping strict behaviour
-  as the default.
-- Improve performance checks with clearer warm-up, sampling and uncertainty reporting.
-- Add standard machine-readable CI output where it provides useful review annotations.
+- Exercise portable Python workers against increasingly old target environments while keeping the
+  controller on supported modern Python. Python 2 is practical only through a maintained protocol
+  adapter; it must not compromise the current worker or controller.
+- Build conformance fixtures for command adapters in several runtimes and document implementation
+  templates only after their failure behaviour is tested.
+- Improve process-group termination, timeouts and resource limits across supported operating
+  systems.
+- Preserve strict two-phase preflight: transport/runtime first, endpoint imports/configuration
+  second, no target invocation in either phase.
+- Keep runtime/source identity path-free and replayable without pretending it is a cryptographic
+  supply-chain attestation.
+- Explore container or remote executors only behind the same target protocol and observation model.
 
-## Extend carefully
+## Broaden input domains without a proprietary language
 
-- Define a small, documented adapter interface before adding engines beyond pandas, Polars and Arrow.
-- Consider optional DuckDB or Ibis support only with public compatibility fixtures and no new
-  pairwise conversion paths.
-- Explore stateful-sequence campaigns after their replay and shrinking contracts are well defined.
-- Explore metamorphic properties and user-supplied invariants as complements to
-  reference-versus-candidate comparison.
-- Keep generators, comparators and artifact readers independently testable and usable from Python.
+- Improve built-in schemas for useful numeric boundaries, temporal ranges, time zones, regex/string
+  constraints, enumerations and nullability.
+- Extend cross-column/object constraints from demonstrated cases, such as ordered date ranges,
+  low/high bounds and relational bundle invariants.
+- Keep custom Hypothesis strategies first-class so domain shrinking is not lost.
+- Keep bounded iterable providers compatible with existing corpora and domain-specific generators.
+- Add compact declarative vocabulary only when it remains understandable in code review; do not
+  recreate a general programming language in TOML.
+
+Schema or constraint inference by AI is outside core Parity. A separate tool may suggest a reviewed
+generator or schema and then use Parity to verify it.
+
+## Parallel discovery and reproducible scheduling
+
+Case-level parallelism remains the default unit because cases already own independent sessions,
+seeds and artifact directories. Search and shrinking inside one case remain serial.
+
+A later two-stage model may run several deterministic counterexample-discovery workers, deduplicate
+their findings, and then shrink accepted classes serially. It should be added only with reproducible
+seeds, bounded resources and tests showing scheduling cannot change accepted evidence. Performance
+measurement must remain isolated from competing case jobs, especially for BLAS/OpenMP workloads.
+
+## Observable effects
+
+The observation model should evolve beyond pure input-to-output functions without becoming a
+general workflow platform. Candidate effect contracts include:
+
+- stdout/stderr and exit code;
+- files created, removed or changed;
+- database mutations;
+- HTTP/network calls;
+- subprocess invocations; and
+- structured logs/events.
+
+Today a reviewed adapter can project such effects into a canonical return, but Parity does not own
+their isolation, cleanup or capture. First-class support requires deterministic evidence,
+comparison, shrinking and replay semantics for each effect class before implementation.
+
+## Performance evidence
+
+- Continue validating the profiler against deliberately CPU- and memory-heavy implementations, not
+  sleep-based timing stand-ins.
+- Report confidence intervals, sample counts and gate reasons consistently in terminal, Markdown,
+  JSON and JUnit projections.
+- Fail closed when an enforced metric has insufficient or unavailable evidence.
+- Document runner controls and oversubscription hazards; target execution usually dominates, so do
+  not optimize controller internals without profiles.
+- Consider stronger robust statistics only when real campaigns demonstrate a failure of the paired
+  bootstrap design.
+
+## Adversarial development method
+
+Every substantial hardening change should be exercised against real historical migrations:
+
+1. include known-stable controls;
+2. include several unrelated incompatibilities and mismatch classes;
+3. let generation discover witnesses rather than supplying every failing example;
+4. require shrinking where the provider supports it;
+5. replay every independent finding;
+6. inspect clustering, status and provenance; and
+7. preserve a small permanent regression test for each engine defect found.
+
+Large one-off harnesses are validation evidence, not the primary unit-test suite. Public case
+studies should record exact historical versions; general documentation should not pin moving
+examples that become stale.
+
+## Architecture toward 2.x
+
+Do not rewrite Parity in Rust now. Parity 1.x should stabilize implementation-neutral contracts:
+
+- process orchestration and target protocol;
+- canonical input/output and observation models;
+- comparison and finding signatures;
+- artifacts, runtime/source provenance and replay;
+- scheduling, timeouts and resource policies; and
+- Python generator/adapter APIs.
+
+Once those boundaries have extensive real-world evidence, a future engine could move orchestration,
+scheduling, protocol validation, comparison and artifacts to Rust while Python continues to own
+Hypothesis, Python adapters, custom generators and the Python API. That is an option created by clean
+interfaces, not a current objective.
 
 ## Before 1.0
 
-- Version and document the configuration, migration-manifest, suite-report, migration-report and
-  counterexample-manifest formats.
-- Finalize the public contracts that will receive 1.x stability guarantees.
-- Keep unsupported contract errors explicit and actionable.
-- Publish a supported platform matrix and reproducible release process.
-- Demonstrate the verifier on several independent public projects without project-specific engine
-  changes.
-
-## Possible later experiments
-
-After the core is dependable, it may be useful to investigate stateful transformations, numerical
-invariants, comparisons across languages or hardware, and signed provenance for evidence exchanged
-between systems. These are exploratory ideas. They should become project work only when a concrete
-public use case shows that they belong in Parity rather than another tool.
+- Version and document configuration, migration manifests, target protocol, suite/migration reports,
+  artifacts/replay and mismatch signatures.
+- Demonstrate stable controls, meaningful independent findings, shrinking, replay and provenance on
+  several unrelated non-trivial migrations.
+- Publish a supported controller/portable-target/platform matrix and reproducible release process.
+- Keep unsupported contract versions and setup failures explicit and actionable.
+- Finalize the small public contracts that merit 1.x compatibility guarantees.
 
 ## Non-goals
 
 - Claiming that property-based comparison is a formal proof.
+- Deciding which implementation expresses business intent.
+- Automatically generating, planning or repairing a migration.
+- Becoming an AI migration product; an AI migrator may consume Parity as a verification layer.
 - Running hostile code as a security sandbox.
-- Uploading source, frames or artifacts to a hosted service by default.
-- Becoming a dataframe engine, application runtime or dashboard framework.
-- Adding adapters faster than they can be tested and maintained.
-- Claiming that a migration manifest automatically discovers an exhaustive public API or proves
-  that a mapped case exercises the unit it names.
+- Managing, switching or editing users' Git branches/worktrees.
+- Becoming a general build system, dataframe engine, application runtime or dashboard.
+- Growing a large proprietary input-description language.
+- Rewriting the engine in Rust before the behavioural contracts are stable.
+- Preserving awkward pre-1.0 design decisions when a clean break materially improves the engine.
 
 ## Choosing priorities
 
-A proposal is strongest when it includes a public or synthetic reference/candidate pair, a semantic
-difference that existing tests miss and a clear explanation of why the fix belongs in the shared
-verifier. A small, well-evidenced improvement should take priority over a broad speculative feature.
+A proposal is strongest when it includes a public or synthetic reference/candidate pair, a stable
+control, a semantic or infrastructure failure that current tests mishandle, and a small permanent
+regression test. A narrow, well-evidenced improvement should beat a broad speculative feature.

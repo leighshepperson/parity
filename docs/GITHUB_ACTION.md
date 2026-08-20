@@ -90,14 +90,20 @@ composite Action cannot upload files created by a later, separate CLI step, so a
 | `artifact-name` | `parity-report` | GitHub artifact name. |
 | `retention-days` | `14` | Artifact lifetime. |
 
+The Action intentionally leaves case concurrency and target native-thread limits in the reviewed
+configuration. Set top-level `jobs` and `native_threads` in `parity.toml`; use `jobs = 1` for
+performance evidence intended as a gate or retained comparison.
+
 Outputs are `exit-code`, `result-json` and `junit-xml`. A failing action step prevents normal later
 steps; use `if: always()` or job-level handling if a later consumer needs them.
 
 ## Dependency environments
 
-The action installs Parity, pandas, Polars and its own runtime dependencies. Install your project
-and any private packages in earlier steps. Callable `python` fields can point to separately prepared
-reference and candidate virtual environments.
+The action installs the Parity controller and its runtime dependencies. Install your project and
+any private packages in earlier steps. Callable `python` fields can point to separately prepared
+reference and candidate environments; each needs PyArrow, its selected adapter dependency and the
+application, not a second full Parity installation. Command targets can point to a separately built
+protocol adapter executable.
 
 ## Artifact privacy
 

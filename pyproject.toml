@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "parity-check"
 dynamic = ["version"]
-description = "Local-first semantic verification for dataframe and numerical migrations"
+description = "Behavioural compatibility verification for software migrations"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Leigh Shepperson" }]
-keywords = ["dataframe", "pandas", "polars", "testing", "migration", "property-based-testing"]
+keywords = ["compatibility", "testing", "migration", "regression", "property-based-testing"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -36,6 +36,7 @@ dependencies = [
   "pydantic>=2.7",
   "rich>=13.7",
   "typer>=0.16.1",
+  "tzdata>=2024.1; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
@@ -136,3 +137,10 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["hypothesis.*", "psutil.*", "pyarrow.*", "polars.*"]
 ignore_missing_imports = true
+
+# This Python 3.8-compatible file is executed by path in dependency-isolated
+# targets. Protocol conformance and a Python 3.8 AST parse cover it directly;
+# importing controller typing helpers would defeat that boundary.
+[[tool.mypy.overrides]]
+module = ["parity.portable_worker"]
+ignore_errors = true

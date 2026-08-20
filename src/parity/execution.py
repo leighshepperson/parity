@@ -16,17 +16,17 @@ import importlib
 import json
 import keyword
 import os
-import re
 import secrets
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast, get_type_hints
@@ -38,6 +38,14 @@ import pyarrow.ipc as ipc
 from parity._version import __version__
 from parity.adapters import from_arrow as adapter_from_arrow
 from parity.adapters import to_arrow as adapter_to_arrow
+from parity.exception_semantics import (
+    exception_fingerprint,
+    extract_exception_details,
+    is_message_fingerprint,
+    normalize_exception_details,
+    normalize_exception_message,
+    redact_exception_text,
+)
 from parity.models import CallableSpec, JsonValue, PandasInput, RunMetrics
 from parity.provenance import (
     RuntimeProvenance,
@@ -47,7 +55,11 @@ from parity.provenance import (
 )
 from parity.targets import is_import_target
 
-_WORKER_PROTOCOL_VERSION = 4
+_TARGET_PROTOCOL_VERSION = 1
+_MAX_TARGET_RESPONSE_BYTES = 1024 * 1024
+_MAX_TARGET_JSON_OUTPUT_BYTES = 16 * 1024 * 1024
+_MAX_TARGET_ARROW_OUTPUT_BYTES = 256 * 1024 * 1024
+_PROTOCOL_READ_CHUNK_BYTES = 1024 * 1024
 
 InputKind: TypeAlias = Literal["single", "positional", "keyword"]
 ArrowInputBundle: TypeAlias = pa.Table | Sequence[pa.Table] | Mapping[str, pa.Table]
@@ -77,6 +89,7 @@ class ExecutionOutcome(StrEnum):
 
     RETURNED = "returned"
     RAISED = "raised"
+    ERROR = "error"
     TIMED_OUT = "timed_out"
     CRASHED = "crashed"
 
@@ -88,24 +101,64 @@ class ExceptionInfo:
     module: str
     type: str
     message: str
+    message_fingerprint: str | None = None
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        semantics = normalize_exception_message(self.message)
+        object.__setattr__(self, "message", semantics.pattern)
+        object.__setattr__(
+            self,
+            "message_fingerprint",
+            self.message_fingerprint
+            if is_message_fingerprint(self.message_fingerprint)
+            else semantics.fingerprint,
+        )
+        object.__setattr__(self, "details", normalize_exception_details(self.details))
 
     @classmethod
     def from_exception(cls, error: BaseException) -> ExceptionInfo:
+        semantics = normalize_exception_message(str(error))
         return cls(
             module=type(error).__module__,
             type=type(error).__qualname__,
-            message=redact_text(str(error)),
+            message=semantics.pattern,
+            message_fingerprint=semantics.fingerprint,
+            details=extract_exception_details(error),
         )
 
-    def to_dict(self) -> dict[str, str]:
-        return {"module": self.module, "type": self.type, "message": self.message}
+    @property
+    def fingerprint(self) -> str:
+        """Opaque semantic identity used by comparison and finding signatures."""
+
+        return exception_fingerprint(
+            self.module,
+            self.type,
+            self.message_fingerprint or normalize_exception_message(self.message).fingerprint,
+            self.details,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "module": self.module,
+            "type": self.type,
+            "message": self.message,
+            "message_fingerprint": self.message_fingerprint,
+            "details": dict(self.details),
+        }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ExceptionInfo:
         return cls(
             module=str(value.get("module", "builtins")),
             type=str(value.get("type", "Exception")),
-            message=redact_text(str(value.get("message", ""))),
+            message=str(value.get("message", "")),
+            message_fingerprint=(
+                str(value["message_fingerprint"])
+                if is_message_fingerprint(value.get("message_fingerprint"))
+                else None
+            ),
+            details=normalize_exception_details(value.get("details")),
         )
 
 
@@ -151,10 +204,6 @@ class ExecutionError(RuntimeError):
     """Raised for invalid execution configuration, never for user exceptions."""
 
 
-_ABSOLUTE_PATH = re.compile(r"(?<![\w.])(?:[A-Za-z]:[\\/][^\s:'\"]+|/(?:[^\s/'\"]+/)+[^\s:'\"]*)")
-_SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)\s*=\s*([^\s,;]+)"
-)
 _PROCESS_CONTEXT_LOCK = threading.RLock()
 
 
@@ -258,8 +307,7 @@ def _mutated_labels(
 def redact_text(text: str) -> str:
     """Remove common path and secret-assignment forms from diagnostic text."""
 
-    value = _SECRET_ASSIGNMENT.sub(r"\1=<redacted>", text)
-    return _ABSOLUTE_PATH.sub("<path>", value)
+    return redact_exception_text(text)
 
 
 def import_callable(target: str) -> Callable[..., Any]:
@@ -292,6 +340,91 @@ def _write_arrow(table: pa.Table, path: Path) -> None:
 def _read_arrow(path: Path) -> pa.Table:
     with path.open("rb") as stream:
         return ipc.open_file(stream).read_all()
+
+
+def _read_protocol_file(
+    call_root: Path,
+    path: Path,
+    *,
+    expected_name: str,
+    max_bytes: int,
+) -> bytes:
+    """Read one stable regular protocol file without following redirects.
+
+    Command targets are trusted code, but their protocol output is still parsed
+    defensively.  Open-by-descriptor plus before/after identity checks reject
+    symlinks, hard links, replacements and concurrent mutation.  Reading at most
+    ``max_bytes + 1`` makes the size limit authoritative even if a broken target
+    appends after publishing the path.
+    """
+
+    if path.parent != call_root or path.name != expected_name:
+        raise ValueError("target protocol path is not an immediate call-directory child")
+    if max_bytes < 0:  # pragma: no cover - internal constant contract
+        raise ValueError("target protocol size limit must be non-negative")
+    try:
+        before = path.lstat()
+    except OSError as error:
+        raise ValueError("target protocol file is missing") from error
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise ValueError("target protocol file must be a single-linked regular file")
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError("target protocol file could not be opened safely") from error
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or not os.path.samestat(before, opened)
+        ):
+            raise ValueError("target protocol file changed before it was opened")
+        if opened.st_size > max_bytes:
+            raise ValueError("target protocol file exceeds its size limit")
+
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(_PROTOCOL_READ_CHUNK_BYTES, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > max_bytes:
+            raise ValueError("target protocol file exceeds its size limit")
+
+        after = os.fstat(descriptor)
+        current = path.lstat()
+        if (
+            not stat.S_ISREG(after.st_mode)
+            or after.st_nlink != 1
+            or not os.path.samestat(opened, after)
+            or not os.path.samestat(opened, current)
+            or opened.st_size != after.st_size
+            or after.st_size != len(payload)
+            or opened.st_mtime_ns != after.st_mtime_ns
+            or opened.st_ctime_ns != after.st_ctime_ns
+        ):
+            raise ValueError("target protocol file changed while it was read")
+        return payload
+    except OSError as error:
+        raise ValueError("target protocol file could not be read safely") from error
+    finally:
+        os.close(descriptor)
+
+
+def _read_target_arrow(call_root: Path, path: Path) -> pa.Table:
+    payload = _read_protocol_file(
+        call_root,
+        path,
+        expected_name="output.arrow",
+        max_bytes=_MAX_TARGET_ARROW_OUTPUT_BYTES,
+    )
+    return ipc.open_file(pa.BufferReader(payload)).read_all()
 
 
 def _arrow_bytes(table: pa.Table) -> bytes:
@@ -553,7 +686,7 @@ def _runtime_drift_observation(
     if expected is None or not (differences := diff_runtime(expected, actual)):
         return None
     return Observation(
-        outcome=ExecutionOutcome.CRASHED,
+        outcome=ExecutionOutcome.ERROR,
         exception=ExceptionInfo(
             module="parity.execution",
             type="RuntimeDriftError",
@@ -576,13 +709,15 @@ def _runtime_contract_observation(
 ) -> Observation | None:
     failures = runtime_contract_failures(
         actual,
-        expected_parity_version=expected_parity_version or __version__,
+        expected_parity_version=(
+            expected_parity_version or __version__ if actual.executor == "parity-python" else None
+        ),
         required_distributions=spec.required_distributions,
     )
     if not failures:
         return None
     return Observation(
-        outcome=ExecutionOutcome.CRASHED,
+        outcome=ExecutionOutcome.ERROR,
         exception=ExceptionInfo(
             module="parity.execution",
             type="RuntimeContractError",
@@ -590,6 +725,27 @@ def _runtime_contract_observation(
         ),
         metrics=metrics,
         runtime=actual,
+    )
+
+
+def _preflight_failure_observation(
+    observation: Observation,
+    *,
+    phase: Literal["transport", "endpoint"],
+    runtime: RuntimeProvenance | None = None,
+) -> Observation:
+    """Attach a stable, data-safe reason code to one readiness failure."""
+
+    label = "TargetTransportError" if phase == "transport" else "TargetEndpointError"
+    return Observation(
+        outcome=observation.outcome,
+        exception=ExceptionInfo(
+            module="parity.execution",
+            type=label,
+            message=f"target {phase} preflight failed",
+        ),
+        metrics=observation.metrics,
+        runtime=observation.runtime or runtime,
     )
 
 
@@ -613,6 +769,8 @@ def execute_current(
     inputs = _normalize_inputs(input_table)
     invocation_kwargs = dict(static_kwargs or {})
     _validate_invocation_binding(inputs, static_args, invocation_kwargs)
+    if spec.command is not None:
+        raise ExecutionError("command endpoints require isolated protocol execution")
     if spec.python is not None and Path(spec.python).resolve() != Path(sys.executable).resolve():
         raise ExecutionError("a different Python executable requires isolated execution")
     started = time.perf_counter()
@@ -639,7 +797,12 @@ def execute_current(
                     peak_rss_bytes=memory.peak or None,
                 ):
                     return drift
+                if spec.target is None:  # pragma: no cover - CallableSpec invariant
+                    raise ExecutionError("Python target is missing")
                 function = import_callable(spec.target)
+                canonicalizer = (
+                    import_callable(spec.canonicalizer) if spec.canonicalizer is not None else None
+                )
                 adapter = _resolve_adapter(spec.adapter, function)
                 arguments, before = _materialize_inputs(
                     inputs, adapter, pandas_input=spec.pandas_input
@@ -666,6 +829,24 @@ def execute_current(
                     )
                 mutated_inputs = _mutated_labels(inputs, arguments, before, adapter)
                 return_type = f"{type(returned).__module__}.{type(returned).__qualname__}"
+                if canonicalizer is not None:
+                    try:
+                        returned = canonicalizer(returned)
+                    except BaseException:
+                        canonicalization_error = ExecutionError(
+                            "target output canonicalizer failed"
+                        )
+                        return Observation(
+                            outcome=ExecutionOutcome.ERROR,
+                            exception=ExceptionInfo.from_exception(canonicalization_error),
+                            mutated_inputs=mutated_inputs,
+                            return_type=return_type,
+                            metrics=RunMetrics(
+                                duration_seconds=time.perf_counter() - started,
+                                peak_rss_bytes=memory.peak or None,
+                            ),
+                            runtime=runtime,
+                        )
                 try:
                     table = _return_to_arrow(returned)
                 except Exception:
@@ -677,7 +858,7 @@ def execute_current(
                         f"return type {return_type} could not be canonicalized"
                     )
                     return Observation(
-                        outcome=ExecutionOutcome.RAISED,
+                        outcome=ExecutionOutcome.ERROR,
                         exception=ExceptionInfo.from_exception(conversion_error),
                         mutated_inputs=mutated_inputs,
                         return_type=return_type,
@@ -705,7 +886,7 @@ def execute_current(
                         f"return type {return_type} is neither tabular nor JSON-serializable"
                     )
                     return Observation(
-                        outcome=ExecutionOutcome.RAISED,
+                        outcome=ExecutionOutcome.ERROR,
                         exception=ExceptionInfo.from_exception(return_error),
                         mutated_inputs=mutated_inputs,
                         return_type=return_type,
@@ -730,7 +911,7 @@ def execute_current(
         except BaseException:
             boundary_error = ExecutionError("execution boundary failed before comparison")
             return Observation(
-                outcome=ExecutionOutcome.RAISED,
+                outcome=ExecutionOutcome.ERROR,
                 exception=ExceptionInfo.from_exception(boundary_error),
                 return_type=return_type,
                 metrics=RunMetrics(
@@ -804,7 +985,7 @@ def execute_callable_current(
                     f"return type {return_type} could not be canonicalized"
                 )
                 return Observation(
-                    outcome=ExecutionOutcome.RAISED,
+                    outcome=ExecutionOutcome.ERROR,
                     exception=ExceptionInfo.from_exception(conversion_error),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
@@ -832,7 +1013,7 @@ def execute_callable_current(
                     f"return type {return_type} is neither tabular nor JSON-serializable"
                 )
                 return Observation(
-                    outcome=ExecutionOutcome.RAISED,
+                    outcome=ExecutionOutcome.ERROR,
                     exception=ExceptionInfo.from_exception(return_error),
                     mutated_inputs=mutated_inputs,
                     return_type=return_type,
@@ -857,7 +1038,7 @@ def execute_callable_current(
         except BaseException:
             boundary_error = ExecutionError("execution boundary failed before comparison")
             return Observation(
-                outcome=ExecutionOutcome.RAISED,
+                outcome=ExecutionOutcome.ERROR,
                 exception=ExceptionInfo.from_exception(boundary_error),
                 return_type=return_type,
                 metrics=RunMetrics(
@@ -913,26 +1094,27 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
 
 
 def _isolated_environment(spec: CallableSpec) -> dict[str, str]:
-    """Build a worker environment without persisting its potentially secret values."""
+    """Build an isolated target environment without controller import leakage."""
 
     environment = os.environ.copy()
+    # The controller's source or site-packages path can silently replace the
+    # target's dependency graph. Project import comes from the explicit workdir;
+    # a target that genuinely needs another root must declare PYTHONPATH itself.
+    environment.pop("PYTHONPATH", None)
+    if spec.native_threads is not None:
+        limit = str(spec.native_threads)
+        for name in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "BLIS_NUM_THREADS",
+        ):
+            # An endpoint-specific environment value is more explicit than the
+            # convenience limit and remains authoritative.
+            environment[name] = limit
     environment.update(spec.environment)
-    package_root = Path(__file__).resolve().parent.parent
-    # A source checkout needs its ``src`` root in child interpreters.  A wheel
-    # install does not: every configured worker must import Parity from its own
-    # environment.  Prepending a wheel's parent would add the orchestrator's
-    # entire site-packages directory and could silently replace the candidate's
-    # pandas, Polars, or target-library versions with the reference versions.
-    is_source_checkout = (
-        package_root.name == "src" and (package_root.parent / "pyproject.toml").is_file()
-    )
-    if is_source_checkout:
-        inherited_pythonpath = environment.get("PYTHONPATH")
-        environment["PYTHONPATH"] = (
-            os.pathsep.join([str(package_root), inherited_pythonpath])
-            if inherited_pythonpath
-            else str(package_root)
-        )
     return environment
 
 
@@ -947,49 +1129,6 @@ def _write_input_bundle(inputs: _NormalizedInputs, root: Path) -> dict[str, Any]
     return {"kind": inputs.kind, "items": items}
 
 
-def _read_input_bundle(value: Any, root: Path) -> _NormalizedInputs:
-    """Parse the worker bundle envelope, rejecting paths or labels outside the contract."""
-
-    if not isinstance(value, dict) or set(value) != {"kind", "items"}:
-        raise ValueError("invalid input bundle envelope")
-    kind = value["kind"]
-    if kind not in {"single", "positional", "keyword"}:
-        raise ValueError("invalid input bundle kind")
-    raw_items = value["items"]
-    if not isinstance(raw_items, list) or not raw_items:
-        raise ValueError("input bundle items must be a non-empty list")
-    if kind == "single" and len(raw_items) != 1:
-        raise ValueError("single input bundle must contain exactly one item")
-
-    resolved_root = root.resolve(strict=True)
-    parsed: list[tuple[str, pa.Table]] = []
-    for index, raw_item in enumerate(raw_items):
-        if not isinstance(raw_item, dict) or set(raw_item) != {"name", "path"}:
-            raise ValueError("invalid input bundle item")
-        name = raw_item["name"]
-        raw_path = raw_item["path"]
-        if not isinstance(name, str) or not isinstance(raw_path, str):
-            raise ValueError("invalid input bundle item fields")
-        expected_path = (resolved_root / f"input-{index:08d}.arrow").resolve()
-        supplied_path = Path(raw_path).resolve(strict=True)
-        if supplied_path != expected_path or supplied_path.parent != resolved_root:
-            raise ValueError("input bundle path escapes its call directory")
-        parsed.append((name, _read_arrow(supplied_path)))
-
-    labels = tuple(name for name, _ in parsed)
-    if len(set(labels)) != len(labels):
-        raise ValueError("input bundle labels must be unique")
-    if kind == "single" and labels != ("input",):
-        raise ValueError("invalid single input label")
-    if kind == "positional" and labels != tuple(str(index) for index in range(len(parsed))):
-        raise ValueError("invalid positional input labels")
-    if kind == "keyword" and any(
-        not label or not label.isidentifier() or keyword.iskeyword(label) for label in labels
-    ):
-        raise ValueError("invalid keyword input labels")
-    return _NormalizedInputs(cast(InputKind, kind), tuple(parsed))
-
-
 def execute_isolated(
     spec: CallableSpec,
     input_table: ArrowInputBundle,
@@ -999,213 +1138,150 @@ def execute_isolated(
     timeout_seconds: float = 30.0,
     expected_runtime: RuntimeProvenance | None = None,
 ) -> Observation:
-    """Execute in a disposable worker using the configured Python and workdir."""
+    """Execute once in a fresh target-protocol process."""
 
-    if timeout_seconds <= 0:
-        raise ValueError("timeout_seconds must be positive")
-    inputs = _normalize_inputs(input_table)
-    invocation_kwargs = dict(static_kwargs or {})
-    _validate_invocation_binding(inputs, static_args, invocation_kwargs)
-    executable = str(spec.python or sys.executable)
-    environment = _isolated_environment(spec)
-    started = time.perf_counter()
-    with tempfile.TemporaryDirectory(prefix="parity-worker-") as temporary:
-        root = Path(temporary)
-        request_path = root / "request.json"
-        response_path = root / "response.json"
-        output_arrow = root / "output.arrow"
-        output_json = root / "output.json"
-        request = {
-            "protocol_version": _WORKER_PROTOCOL_VERSION,
-            "spec": {
-                "target": spec.target,
-                "adapter": spec.adapter,
-                "pandas_input": spec.pandas_input,
-                "record_distributions": list(spec.provenance_distributions),
-                "required_distributions": spec.required_distributions,
-                # Popen already applies the workdir. Sending a relative path to
-                # the worker would apply it a second time (e.g. tests/tests).
-                "workdir": None,
-            },
-            "inputs": _write_input_bundle(inputs, root),
-            "output_arrow": str(output_arrow),
-            "output_json": str(output_json),
-            "static_args": list(static_args),
-            "static_kwargs": invocation_kwargs,
-            "expected_runtime": (
-                expected_runtime.model_dump(mode="json") if expected_runtime else None
-            ),
-            "expected_parity_version": __version__,
-        }
-        request_path.write_text(json.dumps(request), encoding="utf-8")
-        command = [executable, "-m", "parity.worker", str(request_path), str(response_path)]
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=spec.workdir,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=os.name == "posix",
-            )
-        except OSError as error:
-            return Observation(
-                outcome=ExecutionOutcome.CRASHED,
-                exception=ExceptionInfo.from_exception(error),
-                metrics=RunMetrics(duration_seconds=time.perf_counter() - started),
-            )
-        with _MemorySampler(process.pid) as memory:
-            try:
-                process.wait(timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
-                _terminate_process(process)
-                return Observation(
-                    outcome=ExecutionOutcome.TIMED_OUT,
-                    exception=ExceptionInfo(
-                        module="parity.execution",
-                        type="TimeoutError",
-                        message=f"implementation exceeded {timeout_seconds:g} seconds",
-                    ),
-                    metrics=RunMetrics(
-                        duration_seconds=time.perf_counter() - started,
-                        peak_rss_bytes=memory.peak or None,
-                    ),
-                )
-        # A transformation may start background descendants and return. The
-        # disposable worker contract does not allow them to outlive the call.
-        _terminate_process(process)
-        if process.returncode != 0 or not response_path.is_file():
-            return Observation(
-                outcome=ExecutionOutcome.CRASHED,
-                exception=ExceptionInfo(
-                    module="parity.execution",
-                    type="WorkerError",
-                    message=f"isolated worker exited with status {process.returncode}",
-                ),
-                metrics=RunMetrics(
-                    duration_seconds=time.perf_counter() - started,
-                    peak_rss_bytes=memory.peak or None,
-                ),
-            )
-        try:
-            response: dict[str, Any] = json.loads(response_path.read_text(encoding="utf-8"))
-            observation = _observation_from_worker(
-                response,
-                output_arrow,
-                output_json,
-                expected_input_labels=inputs.labels,
-                allow_outputless_success=False,
-            )
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-            return Observation(
-                outcome=ExecutionOutcome.CRASHED,
-                exception=ExceptionInfo(
-                    module="parity.execution",
-                    type="WorkerProtocolError",
-                    message=f"invalid isolated worker response: {type(error).__name__}",
-                ),
-                metrics=RunMetrics(
-                    duration_seconds=time.perf_counter() - started,
-                    peak_rss_bytes=memory.peak or None,
-                ),
-            )
-        # Parent sampling includes descendants and is more representative when
-        # available; retain the worker metric as a fallback for very short calls.
-        if memory.peak:
-            observation.metrics.peak_rss_bytes = max(
-                memory.peak, observation.metrics.peak_rss_bytes or 0
-            )
-        return observation
+    with IsolatedExecutionSession(
+        spec,
+        timeout_seconds=timeout_seconds,
+        expected_runtime=expected_runtime,
+    ) as session:
+        return session.execute(
+            input_table,
+            static_args=static_args,
+            static_kwargs=static_kwargs,
+        )
 
 
-def _observation_from_worker(
+def _observation_from_target(
     response: Mapping[str, Any],
+    call_root: Path,
     output_arrow: Path,
     output_json: Path,
     *,
     expected_input_labels: tuple[str, ...],
     allow_outputless_success: bool,
+    expected_executor: Literal["portable-python", "command"],
 ) -> Observation:
+    """Validate one dependency-light target-protocol response."""
+
     expected_fields = {
+        "duration_seconds",
         "exception",
-        "has_table",
-        "has_value",
-        "metrics",
         "mutated_inputs",
         "outcome",
+        "output",
         "protocol_version",
         "return_type",
         "runtime",
     }
     if set(response) != expected_fields:
-        raise ValueError("invalid worker response fields")
-    if response.get("protocol_version") != _WORKER_PROTOCOL_VERSION:
-        raise ValueError("unsupported worker protocol")
-    outcome = ExecutionOutcome(str(response["outcome"]))
-    metrics = RunMetrics.model_validate(response["metrics"])
-    exception_raw = response.get("exception")
-    runtime = RuntimeProvenance.model_validate(response["runtime"])
+        raise ValueError("invalid target response fields")
+    if response.get("protocol_version") != _TARGET_PROTOCOL_VERSION:
+        raise ValueError("unsupported target protocol")
+    raw_outcome = response.get("outcome")
+    if raw_outcome not in {"returned", "raised", "error"}:
+        raise ValueError("invalid target outcome")
+    outcome = ExecutionOutcome(str(raw_outcome))
+    duration = response.get("duration_seconds")
+    if (
+        not isinstance(duration, (int, float))
+        or isinstance(duration, bool)
+        or not np.isfinite(duration)
+        or duration < 0
+    ):
+        raise ValueError("invalid target duration")
+    runtime = RuntimeProvenance.model_validate(response.get("runtime"))
+    if runtime.executor != expected_executor:
+        raise ValueError("target reported the wrong executor kind")
+
     mutated_inputs_raw = response.get("mutated_inputs")
-    has_table_raw = response.get("has_table")
-    has_value_raw = response.get("has_value")
     if not isinstance(mutated_inputs_raw, list) or not all(
         isinstance(label, str) for label in mutated_inputs_raw
     ):
-        raise ValueError("invalid mutated_inputs labels")
+        raise ValueError("invalid target mutation labels")
     mutated_inputs = tuple(mutated_inputs_raw)
     mutated_label_set = set(mutated_inputs)
-    if len(mutated_label_set) != len(mutated_inputs):
-        raise ValueError("duplicate mutated_inputs labels")
+    if len(mutated_inputs) != len(mutated_label_set):
+        raise ValueError("duplicate target mutation labels")
     if not mutated_label_set.issubset(expected_input_labels):
-        raise ValueError("unknown mutated_inputs label")
-    expected_mutation_order = tuple(
+        raise ValueError("unknown target mutation label")
+    if mutated_inputs != tuple(
         label for label in expected_input_labels if label in mutated_label_set
-    )
-    if mutated_inputs != expected_mutation_order:
-        raise ValueError("mutated_inputs labels are out of order")
-    if not isinstance(has_table_raw, bool) or not isinstance(has_value_raw, bool):
-        raise ValueError("invalid worker output flags")
-    if has_table_raw and has_value_raw:
-        raise ValueError("worker response cannot contain table and JSON outputs")
-    if (
-        outcome is ExecutionOutcome.RETURNED
-        and not has_table_raw
-        and not has_value_raw
-        and not allow_outputless_success
     ):
-        raise ValueError("execute worker response must contain an output")
+        raise ValueError("target mutation labels are out of order")
+
+    exception_raw = response.get("exception")
     if exception_raw is not None:
         if not isinstance(exception_raw, Mapping) or set(exception_raw) != {
             "module",
             "type",
             "message",
+            "details",
         }:
-            raise ValueError("invalid worker exception metadata")
-        if not all(isinstance(value, str) for value in exception_raw.values()):
-            raise ValueError("invalid worker exception fields")
+            raise ValueError("invalid target exception metadata")
+        if not all(
+            isinstance(exception_raw.get(key), str) for key in ("module", "type", "message")
+        ):
+            raise ValueError("invalid target exception fields")
+        details_raw = exception_raw.get("details")
+        if not isinstance(details_raw, Mapping):
+            raise ValueError("invalid target exception details")
+        if normalize_exception_details(details_raw) != dict(details_raw):
+            raise ValueError("unsafe target exception details")
+
+    output_raw = response.get("output")
+    output_kind: str | None
+    if output_raw is None:
+        output_kind = None
+    elif isinstance(output_raw, Mapping) and set(output_raw) == {"kind"}:
+        output_kind = output_raw.get("kind")
+        if output_kind not in {"arrow", "json"}:
+            raise ValueError("invalid target output kind")
+    else:
+        raise ValueError("invalid target output metadata")
+
     return_type_raw = response.get("return_type")
     if return_type_raw is not None and not isinstance(return_type_raw, str):
-        raise ValueError("invalid worker return type")
-    if outcome is ExecutionOutcome.RETURNED and exception_raw is not None:
-        raise ValueError("returned worker response cannot contain an exception")
-    if outcome is not ExecutionOutcome.RETURNED and exception_raw is None:
-        raise ValueError("failed worker response must contain an exception")
-    if outcome is not ExecutionOutcome.RETURNED and (has_table_raw or has_value_raw):
-        raise ValueError("failed worker response cannot contain an output")
+        raise ValueError("invalid target return type")
+    if outcome is ExecutionOutcome.RETURNED:
+        if exception_raw is not None:
+            raise ValueError("returned target response cannot contain an exception")
+        if output_kind is None and not allow_outputless_success:
+            raise ValueError("target execution returned without an output")
+    else:
+        if exception_raw is None:
+            raise ValueError("failed target response requires an exception")
+        if output_kind is not None:
+            raise ValueError("failed target response cannot contain an output")
+
     observation = Observation(
         outcome=outcome,
-        metrics=metrics,
-        exception=ExceptionInfo.from_dict(exception_raw) if exception_raw else None,
+        metrics=RunMetrics(duration_seconds=float(duration)),
+        exception=(
+            ExceptionInfo(
+                module=str(exception_raw["module"]),
+                type=str(exception_raw["type"]),
+                message=str(exception_raw["message"]),
+                details=cast(Mapping[str, Any], exception_raw["details"]),
+            )
+            if exception_raw is not None
+            else None
+        ),
         mutated_inputs=mutated_inputs,
         return_type=return_type_raw,
-        has_value=has_value_raw,
         runtime=runtime,
     )
-    if has_table_raw:
-        observation.table = _read_arrow(output_arrow)
-    if observation.has_value:
-        observation.value = json.loads(output_json.read_text(encoding="utf-8"))
+    if output_kind == "arrow":
+        observation.table = _read_target_arrow(call_root, output_arrow)
+    elif output_kind == "json":
+        payload = _read_protocol_file(
+            call_root,
+            output_json,
+            expected_name="output.json",
+            max_bytes=_MAX_TARGET_JSON_OUTPUT_BYTES,
+        )
+        observation.value = json.loads(payload.decode("utf-8"))
+        observation.has_value = True
     return observation
 
 
@@ -1245,6 +1321,7 @@ class IsolatedExecutionSession:
         self._closed = False
         self._broken = False
         self._runtime_validated = False
+        self._validated_runtime: RuntimeProvenance | None = None
         self._lock = threading.RLock()
 
     @property
@@ -1262,12 +1339,11 @@ class IsolatedExecutionSession:
     def _start(self) -> subprocess.Popen[bytes]:
         if self._process is not None:
             return self._process
-        command = [
-            str(self.spec.python or sys.executable),
-            "-m",
-            "parity.session_worker",
-            str(self._root),
-        ]
+        if self.spec.command is not None:
+            command = [*self.spec.command, str(self._root)]
+        else:
+            worker = Path(__file__).with_name("portable_worker.py").resolve()
+            command = [str(self.spec.python or sys.executable), str(worker), str(self._root)]
         self._process = subprocess.Popen(
             command,
             cwd=self.spec.workdir,
@@ -1312,7 +1388,7 @@ class IsolatedExecutionSession:
         static_args: Sequence[JsonValue] = (),
         static_kwargs: Mapping[str, JsonValue] | None = None,
         timeout_seconds: float | None = None,
-        _operation: Literal["execute", "provenance"] = "execute",
+        _operation: Literal["execute", "inspect", "runtime"] = "execute",
     ) -> Observation:
         """Execute one call, preserving worker state but never input objects."""
 
@@ -1349,31 +1425,32 @@ class IsolatedExecutionSession:
             output_arrow = call_root / "output.arrow"
             output_json = call_root / "output.json"
             try:
-                request = {
-                    "protocol_version": _WORKER_PROTOCOL_VERSION,
-                    "operation": _operation,
-                    "spec": {
+                endpoint: dict[str, Any]
+                if self.spec.command is not None:
+                    endpoint = {
+                        "kind": "command",
+                        "record_distributions": list(self.spec.provenance_distributions),
+                    }
+                else:
+                    endpoint = {
+                        "kind": "python",
                         "target": self.spec.target,
+                        "canonicalizer": self.spec.canonicalizer,
                         "adapter": self.spec.adapter,
                         "pandas_input": self.spec.pandas_input,
                         "record_distributions": list(self.spec.provenance_distributions),
-                        "required_distributions": self.spec.required_distributions,
-                        # The parent applies environment overrides at process
-                        # creation and applies cwd once. Never persist secret
-                        # values or ask the child to chdir a second time.
-                        "workdir": None,
-                    },
+                    }
+                request = {
+                    "protocol_version": _TARGET_PROTOCOL_VERSION,
+                    "operation": _operation,
+                    "endpoint": endpoint,
                     "inputs": _write_input_bundle(inputs, call_root),
-                    "output_arrow": str(output_arrow),
-                    "output_json": str(output_json),
+                    "output": {
+                        "arrow": str(output_arrow),
+                        "json": str(output_json),
+                    },
                     "static_args": list(static_args),
                     "static_kwargs": invocation_kwargs,
-                    "expected_runtime": (
-                        self.expected_runtime.model_dump(mode="json")
-                        if self.expected_runtime and _operation == "execute"
-                        else None
-                    ),
-                    "expected_parity_version": __version__,
                 }
                 request_path.write_text(json.dumps(request), encoding="utf-8")
 
@@ -1397,7 +1474,7 @@ class IsolatedExecutionSession:
 
                 deadline = time.monotonic() + timeout
                 with _MemorySampler(process.pid) as memory:
-                    while not response_path.is_file():
+                    while not os.path.lexists(response_path):
                         returncode = process.poll()
                         if returncode is not None:
                             self._fail_closed()
@@ -1433,15 +1510,25 @@ class IsolatedExecutionSession:
                         time.sleep(min(0.005, remaining))
 
                 try:
-                    response: dict[str, Any] = json.loads(response_path.read_text(encoding="utf-8"))
-                    observation = _observation_from_worker(
+                    response_payload = _read_protocol_file(
+                        call_root,
+                        response_path,
+                        expected_name="response.json",
+                        max_bytes=_MAX_TARGET_RESPONSE_BYTES,
+                    )
+                    response: dict[str, Any] = json.loads(response_payload.decode("utf-8"))
+                    observation = _observation_from_target(
                         response,
+                        call_root,
                         output_arrow,
                         output_json,
                         expected_input_labels=inputs.labels,
-                        allow_outputless_success=_operation == "provenance",
+                        allow_outputless_success=_operation in {"inspect", "runtime"},
+                        expected_executor=(
+                            "command" if self.spec.command is not None else "portable-python"
+                        ),
                     )
-                except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                except Exception as error:
                     self._fail_closed()
                     return Observation(
                         outcome=ExecutionOutcome.CRASHED,
@@ -1459,6 +1546,22 @@ class IsolatedExecutionSession:
                     observation.metrics.peak_rss_bytes = max(
                         memory.peak, observation.metrics.peak_rss_bytes or 0
                     )
+                if (
+                    self._validated_runtime is not None
+                    and observation.runtime is not None
+                    and diff_runtime(self._validated_runtime, observation.runtime)
+                ):
+                    self._fail_closed()
+                    return Observation(
+                        outcome=ExecutionOutcome.ERROR,
+                        exception=ExceptionInfo(
+                            module="parity.execution",
+                            type="RuntimeDriftError",
+                            message="target runtime changed after preflight",
+                        ),
+                        metrics=observation.metrics,
+                        runtime=observation.runtime,
+                    )
                 return observation
             finally:
                 # Call directories can contain user values.  Remove them after
@@ -1466,26 +1569,35 @@ class IsolatedExecutionSession:
                 shutil.rmtree(call_root, ignore_errors=True)
 
     def inspect_runtime(self, *, timeout_seconds: float | None = None) -> Observation:
-        """Collect worker provenance without importing or invoking the target."""
+        """Validate transport and collect provenance without importing the target."""
 
         return self.execute(
             pa.table({}),
             timeout_seconds=timeout_seconds,
-            _operation="provenance",
+            _operation="runtime",
         )
 
-    def preflight_runtime(self, *, timeout_seconds: float | None = None) -> Observation:
-        """Validate worker identity and requirements before any target import."""
+    def inspect_endpoint(self, *, timeout_seconds: float | None = None) -> Observation:
+        """Validate target, canonicalizer, and adapter imports without invocation."""
+
+        return self.execute(
+            pa.table({}),
+            timeout_seconds=timeout_seconds,
+            _operation="inspect",
+        )
+
+    def preflight_transport(self, *, timeout_seconds: float | None = None) -> Observation:
+        """Validate transport, runtime identity, and requirements before user imports."""
 
         with self._lock:
             if self._closed or self._broken:
                 return self._unavailable(time.perf_counter())
-            if self._runtime_validated:
+            if self._validated_runtime is not None:
                 return self.inspect_runtime(timeout_seconds=timeout_seconds)
             observation = self.inspect_runtime(timeout_seconds=timeout_seconds)
             if not observation.succeeded or observation.runtime is None:
                 self._fail_closed()
-                return observation
+                return _preflight_failure_observation(observation, phase="transport")
             failure = _runtime_contract_observation(
                 self.spec,
                 observation.runtime,
@@ -1494,8 +1606,43 @@ class IsolatedExecutionSession:
             if failure is not None:
                 self._fail_closed()
                 return failure
-            self._runtime_validated = True
+            if drift := _runtime_drift_observation(
+                self.expected_runtime,
+                observation.runtime,
+                started=time.perf_counter() - observation.metrics.duration_seconds,
+                peak_rss_bytes=observation.metrics.peak_rss_bytes,
+            ):
+                self._fail_closed()
+                return drift
+            self._validated_runtime = observation.runtime
             return observation
+
+    def preflight_endpoint(self, *, timeout_seconds: float | None = None) -> Observation:
+        """Validate target, canonicalizer, and adapter imports after transport checks."""
+
+        with self._lock:
+            if self._closed or self._broken:
+                return self._unavailable(time.perf_counter())
+            if self._runtime_validated:
+                return self.inspect_endpoint(timeout_seconds=timeout_seconds)
+            transport = self.preflight_transport(timeout_seconds=timeout_seconds)
+            if not transport.succeeded or transport.runtime is None:
+                return transport
+            endpoint = self.inspect_endpoint(timeout_seconds=timeout_seconds)
+            if not endpoint.succeeded or endpoint.runtime is None:
+                self._fail_closed()
+                return _preflight_failure_observation(
+                    endpoint,
+                    phase="endpoint",
+                    runtime=transport.runtime,
+                )
+            self._runtime_validated = True
+            return endpoint
+
+    def preflight_runtime(self, *, timeout_seconds: float | None = None) -> Observation:
+        """Validate transport, imports, runtime identity, and requirements."""
+
+        return self.preflight_endpoint(timeout_seconds=timeout_seconds)
 
     def close(self) -> None:
         """Terminate this worker and descendants and remove all protocol files."""
@@ -1520,11 +1667,14 @@ def execute(
 ) -> Observation:
     """Execute using current or isolated mode.
 
-    Auto mode selects isolation when a Python executable is configured.  Engines
-    that require timeout enforcement should pass ``isolated=True`` explicitly.
+    Auto mode selects isolation when a Python executable or protocol command is
+    configured. Engines that require timeout enforcement should pass
+    ``isolated=True`` explicitly.
     """
 
-    use_isolated = spec.python is not None if isolated is None else isolated
+    use_isolated = (
+        spec.python is not None or spec.command is not None if isolated is None else isolated
+    )
     if use_isolated:
         return execute_isolated(
             spec,

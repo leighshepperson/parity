@@ -2,15 +2,17 @@
 
 The workspace deliberately describes source locations; it never checks out or
 changes source code.  ``tox`` owns environment lifecycle, while ``uv`` turns
-the small human-authored inputs into one pinned lock per dependency lane.
+the small human-authored inputs into one pinned lock per worker and dependency lane.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -28,7 +30,6 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 from pydantic import Field, field_validator, model_validator
 
-from parity import __version__
 from parity.config import load_config
 from parity.migration import (
     MigrationResult,
@@ -36,7 +37,7 @@ from parity.migration import (
     run_migration,
     write_migration_json,
 )
-from parity.models import ParityConfig, StrictModel
+from parity.models import CallableSpec, ParityConfig, Status, StrictModel
 
 _WORKSPACE_NAME_PATTERN = r"^[A-Za-z0-9_.-]+$"
 WorkspaceName = Annotated[str, Field(min_length=1, pattern=_WORKSPACE_NAME_PATTERN)]
@@ -46,6 +47,78 @@ _ENV_PYTHON = re.compile(r"^env_python\s*=\s*(?P<path>.+?)\s*$", re.MULTILINE)
 _PINNED_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]+\])?==[^\s\\]+")
 _STATE_DIRECTORY = Path(".parity") / "workspace"
 _WORKSPACE_EXTRA = "parity-check[workspace]"
+_SOURCE_REPORT = "source-provenance.json"
+_GIT_OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_SOURCE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+PackageMode = Literal["editable", "editable-legacy"]
+
+_SOURCE_ORIGIN_PROBE = r"""
+import importlib.metadata
+import importlib.util
+import json
+import os
+import pathlib
+import sys
+import urllib.parse
+import urllib.request
+
+def normalized(value):
+    return "-".join(filter(None, __import__("re").split(r"[-_.]+", value.lower())))
+
+def contained(value, root):
+    try:
+        pathlib.Path(value).resolve(strict=True).relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+try:
+    subject = sys.argv[1]
+    expected = pathlib.Path(sys.argv[2]).resolve(strict=True)
+    names = set(json.loads(sys.argv[3]))
+    distribution = importlib.metadata.distribution(subject)
+    if normalized(distribution.metadata["Name"]) != subject:
+        raise RuntimeError
+    direct = json.loads(distribution.read_text("direct_url.json") or "{}")
+    parsed = urllib.parse.urlsplit(direct.get("url", ""))
+    if parsed.scheme != "file" or not direct.get("dir_info", {}).get("editable"):
+        raise RuntimeError
+    raw_path = urllib.request.url2pathname(urllib.parse.unquote(parsed.path))
+    if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+        raw_path = "//" + parsed.netloc + raw_path
+    if pathlib.Path(raw_path).resolve(strict=True) != expected:
+        raise RuntimeError
+    declared = distribution.read_text("top_level.txt") or ""
+    for line in declared.splitlines():
+        name = line.strip()
+        if name.isidentifier():
+            names.add(name)
+    if not names or len(names) > 128:
+        raise RuntimeError
+    matched = False
+    for name in sorted(names):
+        spec = importlib.util.find_spec(name)
+        if spec is None:
+            continue
+        if spec.origin not in {None, "built-in", "frozen"}:
+            if not contained(spec.origin, expected):
+                raise RuntimeError
+            matched = True
+            continue
+        if spec.submodule_search_locations is not None and any(
+            contained(location, expected) for location in spec.submodule_search_locations
+        ):
+            matched = True
+            continue
+        raise RuntimeError
+    if not matched:
+        raise RuntimeError
+except BaseException:
+    print("unverified")
+    raise SystemExit(1)
+print("verified")
+"""
 
 
 def _reference_requirement(value: str) -> tuple[Requirement, Specifier, tuple[str, ...]]:
@@ -93,9 +166,12 @@ class MigrationWorkspace(StrictModel):
     """Human-authored, versioned migration workspace document."""
 
     version: Literal[1] = 1
-    reference: str
+    reference: str | None = None
+    reference_path: Path | None = None
     candidate: Path = Path(".")
-    python: str
+    python: str | None = None
+    reference_python: str | None = None
+    candidate_python: str | None = None
     config: Path = Path("parity.toml")
     manifest: Path = Path("migration.toml")
     report_dir: Path = Path(".parity/workspace/reports")
@@ -106,7 +182,9 @@ class MigrationWorkspace(StrictModel):
 
     @field_validator("reference")
     @classmethod
-    def validate_reference(cls, requirement: str) -> str:
+    def validate_reference(cls, requirement: str | None) -> str | None:
+        if requirement is None:
+            return None
         try:
             _reference_requirement(requirement)
         except ValueError as exc:
@@ -116,27 +194,51 @@ class MigrationWorkspace(StrictModel):
             ) from exc
         return requirement
 
-    @field_validator("python")
+    @field_validator("python", "reference_python", "candidate_python")
     @classmethod
-    def validate_python(cls, version: str) -> str:
+    def validate_python(cls, version: str | None) -> str | None:
+        if version is None:
+            return None
         match = _PYTHON_VERSION.fullmatch(version)
         if match is None:
             raise ValueError("python must be a major.minor version such as 3.12")
-        if (int(match.group("major")), int(match.group("minor"))) < (3, 11):
-            raise ValueError("python must satisfy Parity's Python >=3.11 requirement")
+        if (int(match.group("major")), int(match.group("minor"))) < (3, 8):
+            raise ValueError("target Python must be at least 3.8")
         return version
 
     @model_validator(mode="after")
-    def unique_lanes(self) -> MigrationWorkspace:
+    def validate_workspace(self) -> MigrationWorkspace:
+        if (self.reference is None) == (self.reference_path is None):
+            raise ValueError("set exactly one of reference or reference_path")
+        if self.python is None and (self.reference_python is None or self.candidate_python is None):
+            raise ValueError("set shared python or both reference_python and candidate_python")
         names = [lane.name for lane in self.lanes]
         if len(names) != len(set(names)):
             raise ValueError("workspace lane names must be unique")
         return self
 
     @property
+    def effective_reference_python(self) -> str:
+        """Return the reference target version after applying the shared shorthand."""
+
+        version = self.reference_python or self.python
+        assert version is not None  # validated above
+        return version
+
+    @property
+    def effective_candidate_python(self) -> str:
+        """Return the candidate target version after applying the shared shorthand."""
+
+        version = self.candidate_python or self.python
+        assert version is not None  # validated above
+        return version
+
+    @property
     def reference_extras(self) -> tuple[str, ...]:
         """Return extras requested from both package implementations."""
 
+        if self.reference is None:
+            return ()
         _, _, extras = _reference_requirement(self.reference)
         return extras
 
@@ -155,15 +257,72 @@ class ResolvedWorkspace:
 
     path: Path
     root: Path
-    reference: str
+    reference: str | None
     reference_extras: tuple[str, ...]
     candidate: Path
-    candidate_package: Literal["editable", "editable-legacy"]
-    python: str
+    candidate_package: PackageMode
+    reference_python: str
+    candidate_python: str
     config: Path
     manifest: Path
     report_dir: Path
     lanes: tuple[ResolvedWorkspaceLane, ...]
+    reference_path: Path | None = None
+    reference_package: PackageMode | None = None
+
+    @property
+    def is_local_comparison(self) -> bool:
+        """Whether both sides are user-owned source checkouts."""
+
+        return self.reference_path is not None
+
+    @property
+    def subject_name(self) -> str:
+        """Return the normalized distribution under comparison."""
+
+        if self.reference is not None:
+            return _reference_name(self.reference)
+        if self.reference_path is None:  # pragma: no cover - dataclass invariant
+            raise WorkspaceError("workspace has no reference source")
+        return _source_distribution_name(self.reference_path, side="reference")
+
+
+class SourceRevision(StrictModel):
+    """Path-free identity of one immutable source snapshot."""
+
+    git_head: str
+    dirty: bool
+    source_sha256: str
+
+    @field_validator("git_head")
+    @classmethod
+    def validate_git_head(cls, value: str) -> str:
+        if _GIT_OBJECT_ID.fullmatch(value) is None:
+            raise ValueError("git_head must be a lowercase Git object ID")
+        return value
+
+    @field_validator("source_sha256")
+    @classmethod
+    def validate_source_digest(cls, value: str) -> str:
+        if _SOURCE_DIGEST.fullmatch(value) is None:
+            raise ValueError("source_sha256 must be a lowercase SHA-256 digest")
+        return value
+
+
+class WorkspaceSourceProvenance(StrictModel):
+    """Data-safe source identity for one local/local comparison."""
+
+    distribution: str
+    reference: SourceRevision
+    candidate: SourceRevision
+
+    @field_validator("distribution")
+    @classmethod
+    def validate_distribution(cls, value: str) -> str:
+        normalized = str(canonicalize_name(value))
+        if value != normalized:
+            raise ValueError("distribution must be normalized")
+        return value
 
 
 @dataclass(frozen=True)
@@ -200,6 +359,7 @@ class WorkspaceRunResult:
     """All migration results produced by a workspace run."""
 
     lanes: tuple[LaneMigrationResult, ...]
+    source_provenance: Path | None = None
 
 
 def _toml_string(value: str) -> str:
@@ -253,16 +413,29 @@ def render_workspace(workspace: MigrationWorkspace) -> str:
     lines = [
         "# parity.workspace.toml — generated by Parity",
         "# Relative paths are resolved beside this file.",
-        "# Parity uses the candidate checkout in place; it never clones or modifies it.",
+        "# Parity uses local checkouts in place; it never clones or modifies them.",
         "version = 1",
-        f"reference = {_toml_string(workspace.reference)}",
-        f"candidate = {_toml_string(_path_text(workspace.candidate))}",
-        f"python = {_toml_string(workspace.python)}",
-        f"config = {_toml_string(_path_text(workspace.config))}",
-        f"manifest = {_toml_string(_path_text(workspace.manifest))}",
-        f"report_dir = {_toml_string(_path_text(workspace.report_dir))}",
-        "",
     ]
+    if workspace.reference is not None:
+        lines.append(f"reference = {_toml_string(workspace.reference)}")
+    else:
+        assert workspace.reference_path is not None
+        lines.append(f"reference_path = {_toml_string(_path_text(workspace.reference_path))}")
+    lines.append(f"candidate = {_toml_string(_path_text(workspace.candidate))}")
+    if workspace.python is not None:
+        lines.append(f"python = {_toml_string(workspace.python)}")
+    if workspace.reference_python is not None:
+        lines.append(f"reference_python = {_toml_string(workspace.reference_python)}")
+    if workspace.candidate_python is not None:
+        lines.append(f"candidate_python = {_toml_string(workspace.candidate_python)}")
+    lines.extend(
+        [
+            f"config = {_toml_string(_path_text(workspace.config))}",
+            f"manifest = {_toml_string(_path_text(workspace.manifest))}",
+            f"report_dir = {_toml_string(_path_text(workspace.report_dir))}",
+            "",
+        ]
+    )
     for lane in workspace.lanes:
         lines.extend(
             [
@@ -341,9 +514,12 @@ def _resolve_report_dir(root: Path, value: Path) -> Path:
 def write_workspace(
     destination: str | Path = "parity.workspace.toml",
     *,
-    reference: str,
+    reference: str | None = None,
+    reference_path: Path | None = None,
     candidate: Path = Path("."),
     python_version: str | None = None,
+    reference_python_version: str | None = None,
+    candidate_python_version: str | None = None,
     config: Path = Path("parity.toml"),
     manifest: Path = Path("migration.toml"),
     report_dir: Path = Path(".parity/workspace/reports"),
@@ -363,6 +539,12 @@ def write_workspace(
             workspace_path=path,
             invocation_cwd=invocation,
         )
+        if reference_path is not None:
+            reference_path = rebase_workspace_path(
+                reference_path,
+                workspace_path=path,
+                invocation_cwd=invocation,
+            )
         config = rebase_workspace_path(
             config,
             workspace_path=path,
@@ -394,10 +576,19 @@ def write_workspace(
         effective_lanes = list(lanes)
     effective_lanes = effective_lanes or [WorkspaceLane(name="default")]
     try:
+        if (
+            python_version is None
+            and reference_python_version is None
+            and candidate_python_version is None
+        ):
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
         workspace = MigrationWorkspace(
             reference=reference,
+            reference_path=reference_path,
             candidate=candidate,
-            python=python_version or f"{sys.version_info.major}.{sys.version_info.minor}",
+            python=python_version,
+            reference_python=reference_python_version,
+            candidate_python=candidate_python_version,
             config=config,
             manifest=manifest,
             report_dir=report_dir,
@@ -429,16 +620,16 @@ def _reference_contract(requirement: str) -> tuple[str, str, Version]:
     return str(canonicalize_name(parsed.name)), str(specifier), version
 
 
-def _candidate_name(candidate: Path) -> str:
-    """Read a candidate distribution name without executing project code."""
+def _source_distribution_name(source: Path, *, side: str) -> str:
+    """Read a source distribution name without executing project code."""
 
     declared: list[str] = []
-    pyproject = candidate / "pyproject.toml"
+    pyproject = source / "pyproject.toml"
     if pyproject.is_file():
         try:
             document = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
-            raise WorkspaceError("candidate pyproject.toml could not be read safely") from exc
+            raise WorkspaceError(f"{side} pyproject.toml could not be read safely") from exc
         project = document.get("project")
         if isinstance(project, dict) and isinstance(project.get("name"), str):
             declared.append(project["name"])
@@ -448,14 +639,14 @@ def _candidate_name(candidate: Path) -> str:
             if isinstance(poetry, dict) and isinstance(poetry.get("name"), str):
                 declared.append(poetry["name"])
 
-    setup_cfg = candidate / "setup.cfg"
+    setup_cfg = source / "setup.cfg"
     if setup_cfg.is_file():
         parser = ConfigParser(interpolation=None)
         try:
             with setup_cfg.open(encoding="utf-8") as stream:
                 parser.read_file(stream)
         except (OSError, UnicodeError, ConfigParserError) as exc:
-            raise WorkspaceError("candidate setup.cfg could not be read safely") from exc
+            raise WorkspaceError(f"{side} setup.cfg could not be read safely") from exc
         if parser.has_option("metadata", "name"):
             declared.append(parser.get("metadata", "name"))
 
@@ -463,11 +654,26 @@ def _candidate_name(candidate: Path) -> str:
     if len(normalized) != 1:
         detail = "is not declared statically" if not normalized else "is contradictory"
         raise WorkspaceError(
-            f"candidate distribution name {detail}; managed setup requires project.name, "
+            f"{side} distribution name {detail}; managed setup requires project.name, "
             "tool.poetry.name or setup.cfg [metadata] name so it cannot install the wrong package. "
-            "Provision worker interpreters explicitly for dynamic legacy metadata"
+            "Dynamic setup.py metadata is intentionally not executed by the Parity driver"
         )
     return normalized.pop()
+
+
+def _source_package_mode(source: Path, *, side: str) -> PackageMode:
+    """Validate one local package source and select its tox package mode."""
+
+    if not source.is_dir():
+        raise WorkspaceError(f"{side} must be an existing local checkout directory")
+    if (source / "pyproject.toml").is_file():
+        return "editable"
+    if (source / "setup.py").is_file():
+        return "editable-legacy"
+    raise WorkspaceError(
+        f"{side} checkout needs pyproject.toml or setup.py; "
+        "Parity does not fetch or modify source code"
+    )
 
 
 def _load_workspace_document(path: str | Path) -> tuple[Path, MigrationWorkspace]:
@@ -494,23 +700,29 @@ def load_workspace(path: str | Path = "parity.workspace.toml") -> ResolvedWorksp
 
     root = workspace_path.parent
     candidate = _resolve_path(root, document.candidate)
-    if not candidate.is_dir():
-        raise WorkspaceError("candidate must be an existing local checkout directory")
-    if (candidate / "pyproject.toml").is_file():
-        candidate_package: Literal["editable", "editable-legacy"] = "editable"
-    elif (candidate / "setup.py").is_file():
-        candidate_package = "editable-legacy"
+    candidate_package = _source_package_mode(candidate, side="candidate")
+    candidate_name = _source_distribution_name(candidate, side="candidate")
+    reference_path = (
+        _resolve_path(root, document.reference_path)
+        if document.reference_path is not None
+        else None
+    )
+    reference_package = (
+        _source_package_mode(reference_path, side="reference")
+        if reference_path is not None
+        else None
+    )
+    if reference_path is not None:
+        if reference_path == candidate:
+            raise WorkspaceError("reference_path and candidate must be different checkouts")
+        reference_name = _source_distribution_name(reference_path, side="reference")
     else:
-        raise WorkspaceError(
-            "candidate checkout needs pyproject.toml or setup.py; "
-            "Parity does not fetch or modify source code"
-        )
-    reference_name = _reference_name(document.reference)
-    candidate_name = _candidate_name(candidate)
+        assert document.reference is not None
+        reference_name = _reference_name(document.reference)
     if candidate_name != reference_name:
         raise WorkspaceError(
             f"candidate distribution {candidate_name!r} does not match reference distribution "
-            f"{reference_name!r}; refusing to install both packages into the candidate worker"
+            f"{reference_name!r}; refusing to compare different subjects"
         )
 
     resolved_lanes: list[ResolvedWorkspaceLane] = []
@@ -545,11 +757,14 @@ def load_workspace(path: str | Path = "parity.workspace.toml") -> ResolvedWorksp
         reference_extras=document.reference_extras,
         candidate=candidate,
         candidate_package=candidate_package,
-        python=document.python,
+        reference_python=document.effective_reference_python,
+        candidate_python=document.effective_candidate_python,
         config=config,
         manifest=manifest,
         report_dir=report_dir,
         lanes=tuple(resolved_lanes),
+        reference_path=reference_path,
+        reference_package=reference_package,
     )
 
 
@@ -602,6 +817,26 @@ def _is_generated_lane_report(path: Path) -> bool:
     )
 
 
+def _is_generated_source_report(path: Path) -> bool:
+    """Recognize a complete path-free source provenance report."""
+
+    if path.is_symlink():
+        return False
+    try:
+        payload: Any = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        return False
+    try:
+        WorkspaceSourceProvenance.model_validate(
+            {key: value for key, value in payload.items() if key != "schema_version"}
+        )
+    except ValueError:
+        return False
+    return set(payload) == {"schema_version", "distribution", "reference", "candidate"}
+
+
 def _invalidate_active_reports(report_dir: Path, lane_names: Sequence[str]) -> None:
     """Discard generated lane reports while preserving unrelated files."""
 
@@ -611,6 +846,18 @@ def _invalidate_active_reports(report_dir: Path, lane_names: Sequence[str]) -> N
         raise WorkspaceError("active migration reports could not be inspected") from exc
     active_names = set(lane_names)
     for entry in entries:
+        if entry.name == _SOURCE_REPORT:
+            if not entry.is_symlink() and not _is_generated_source_report(entry):
+                continue
+            if not (entry.is_file() or entry.is_symlink()):
+                raise WorkspaceError("active source provenance report is not a replaceable file")
+            try:
+                entry.unlink()
+            except OSError as exc:
+                raise WorkspaceError(
+                    "active source provenance report could not be invalidated"
+                ) from exc
+            continue
         if entry.suffix != ".json" or re.fullmatch(_WORKSPACE_NAME_PATTERN, entry.stem) is None:
             continue
         if entry.stem not in active_names and not _is_generated_lane_report(entry):
@@ -630,6 +877,254 @@ def _invalidate_declared_workspace_reports(path: str | Path) -> None:
     _invalidate_active_reports(report_dir, [lane.name for lane in document.lanes])
 
 
+def _git_output(source: Path, arguments: Sequence[str]) -> bytes:
+    """Run one read-only Git query without exposing source paths in failures."""
+
+    git = shutil.which("git")
+    if git is None:
+        raise WorkspaceError("local source comparison requires Git on PATH")
+    try:
+        completed = subprocess.run(
+            [git, "-C", str(source), *arguments],
+            cwd=source,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise WorkspaceError("local source Git inspection could not start") from exc
+    if completed.returncode != 0:
+        raise WorkspaceError(
+            "local sources must be Git worktrees with a committed HEAD; "
+            "Parity never creates or changes worktrees"
+        )
+    return completed.stdout
+
+
+def _git_root(source: Path) -> Path:
+    raw = _git_output(source, ["rev-parse", "--show-toplevel"])
+    try:
+        root = Path(os.fsdecode(raw.rstrip(b"\r\n"))).resolve(strict=True)
+    except OSError as exc:
+        raise WorkspaceError("Git reported an invalid local source worktree") from exc
+    if not root.is_dir():  # pragma: no cover - resolve(strict=True) narrows this in practice
+        raise WorkspaceError("Git reported an invalid local source worktree")
+    try:
+        source.resolve().relative_to(root)
+    except ValueError as exc:
+        raise WorkspaceError("local source is not contained by its Git worktree") from exc
+    return root
+
+
+def _hash_source_entry(digest: Any, root: Path, relative: Path) -> None:
+    """Hash one lexical Git source entry without following symlink targets."""
+
+    path = root / relative
+    encoded_path = os.fsencode(relative.as_posix())
+    digest.update(len(encoded_path).to_bytes(8, "big"))
+    digest.update(encoded_path)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        digest.update(b"missing\0")
+        return
+    except OSError as exc:
+        raise WorkspaceError("a local source entry could not be inspected") from exc
+
+    mode = metadata.st_mode
+    if stat.S_ISLNK(mode):
+        digest.update(b"symlink\0")
+        try:
+            target = os.readlink(path)
+        except OSError as exc:
+            raise WorkspaceError("a local source symlink could not be inspected") from exc
+        target_bytes = os.fsencode(target)
+        digest.update(len(target_bytes).to_bytes(8, "big"))
+        digest.update(target_bytes)
+        return
+    if stat.S_ISREG(mode):
+        digest.update(b"file\0")
+        digest.update(b"executable\0" if mode & 0o111 else b"regular\0")
+        try:
+            with path.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+        except OSError as exc:
+            raise WorkspaceError("a local source file could not be read") from exc
+        return
+    if stat.S_ISDIR(mode):
+        # Git links (submodules) appear as directory entries. Their checked-out
+        # contents and nested HEAD/status must participate in the snapshot.
+        digest.update(b"directory\0")
+        if _git_root(path) == root:
+            raise WorkspaceError(
+                "local source contains an uninitialized Git submodule; "
+                "initialize it before running Parity"
+            )
+        nested = _source_revision(path)
+        digest.update(nested.git_head.encode("ascii"))
+        digest.update(b"dirty\0" if nested.dirty else b"clean\0")
+        digest.update(nested.source_sha256.encode("ascii"))
+        return
+    raise WorkspaceError("local source contains an unsupported filesystem entry")
+
+
+def _source_revision(source: Path) -> SourceRevision:
+    """Capture one deterministic, path-free Git worktree snapshot."""
+
+    root = _git_root(source)
+    head_bytes = _git_output(root, ["rev-parse", "--verify", "HEAD"]).strip()
+    try:
+        head = head_bytes.decode("ascii")
+    except UnicodeDecodeError as exc:  # pragma: no cover - Git object IDs are ASCII
+        raise WorkspaceError("Git returned an invalid local source HEAD") from exc
+    if _GIT_OBJECT_ID.fullmatch(head) is None:
+        raise WorkspaceError("Git returned an invalid local source HEAD")
+
+    status_before = _git_output(
+        root,
+        [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ],
+    )
+
+    def tree_digest() -> str:
+        listed = _git_output(
+            root,
+            ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        )
+        raw_paths = [item for item in listed.split(b"\0") if item]
+        if len(raw_paths) != len(set(raw_paths)):
+            raise WorkspaceError("Git returned duplicate local source entries")
+        digest = hashlib.sha256(b"parity-source-v1\0")
+        for raw_path in sorted(raw_paths):
+            relative = Path(os.fsdecode(raw_path))
+            if relative.is_absolute() or ".." in relative.parts:
+                raise WorkspaceError("Git returned an unsafe local source entry")
+            _hash_source_entry(digest, root, relative)
+        return digest.hexdigest()
+
+    source_digest = tree_digest()
+    head_after = _git_output(root, ["rev-parse", "--verify", "HEAD"]).strip()
+    status_after = _git_output(
+        root,
+        [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ],
+    )
+    if head_after != head_bytes or status_after != status_before or tree_digest() != source_digest:
+        raise WorkspaceError("a local source changed while Parity was inspecting it")
+    return SourceRevision(
+        git_head=head,
+        dirty=bool(status_before),
+        source_sha256=source_digest,
+    )
+
+
+def _capture_source_provenance(workspace: ResolvedWorkspace) -> WorkspaceSourceProvenance | None:
+    """Capture both user-owned sources when the reference is local."""
+
+    if workspace.reference_path is None:
+        return None
+    return WorkspaceSourceProvenance(
+        distribution=workspace.subject_name,
+        reference=_source_revision(workspace.reference_path),
+        candidate=_source_revision(workspace.candidate),
+    )
+
+
+def _assert_sources_unchanged(
+    workspace: ResolvedWorkspace,
+    expected: WorkspaceSourceProvenance | None,
+) -> None:
+    if expected is None:
+        return
+    if _capture_source_provenance(workspace) != expected:
+        raise WorkspaceError(
+            "a local source changed during managed execution; results are not valid"
+        )
+
+
+def _runtime_source_revision(runtime: object, subject: str) -> SourceRevision | None:
+    """Extract one portable endpoint identity without retaining a source path."""
+
+    identities = getattr(runtime, "identities", ())
+    for identity in identities:
+        if getattr(identity, "name", None) != subject:
+            continue
+        if getattr(identity, "kind", None) != "git-worktree-v1":
+            raise WorkspaceError("target reported an unsupported local source identity")
+        try:
+            return SourceRevision(
+                git_head=identity.revision,
+                dirty=identity.dirty,
+                source_sha256=identity.sha256,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise WorkspaceError("target reported an invalid local source identity") from exc
+    return None
+
+
+def _assert_lane_source_provenance(
+    result: MigrationResult,
+    expected: WorkspaceSourceProvenance | None,
+) -> None:
+    """Require semantic lane evidence to carry each driver's source snapshot."""
+
+    if expected is None:
+        return
+    for case in result.suite.cases:
+        if case.status in {Status.ERROR, Status.SKIPPED}:
+            continue
+        if case.provenance is None:
+            raise WorkspaceError("target did not report local source provenance")
+        for side, expected_revision in (
+            ("reference", expected.reference),
+            ("candidate", expected.candidate),
+        ):
+            runtime = getattr(case.provenance, side)
+            observed = (
+                _runtime_source_revision(runtime, expected.distribution)
+                if runtime is not None
+                else None
+            )
+            if observed != expected_revision:
+                raise WorkspaceError(
+                    f"{side} target source provenance did not match the inspected checkout"
+                )
+
+
+def _write_source_provenance(
+    provenance: WorkspaceSourceProvenance,
+    destination: Path,
+) -> Path:
+    """Write a path-free, relocatable source identity report atomically."""
+
+    payload = {
+        "schema_version": 1,
+        **provenance.model_dump(mode="json"),
+    }
+    if os.path.lexists(destination) and not (
+        destination.is_symlink() or _is_generated_source_report(destination)
+    ):
+        raise WorkspaceError(
+            "source provenance destination contains an unrelated file; choose another report_dir"
+        )
+    _atomic_write_text(
+        destination,
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        force=True,
+    )
+    return destination
+
+
 def advance_workspace(
     path: str | Path = "parity.workspace.toml",
     *,
@@ -643,12 +1138,18 @@ def advance_workspace(
     """
 
     workspace_path, document = _load_workspace_document(path)
+    if document.reference is None:
+        raise WorkspaceError(
+            "migration advance applies only to released references; "
+            "update reference_path explicitly for a local checkout pair"
+        )
     try:
         advanced = document.model_copy(update={"reference": reference})
         # ``model_copy(update=...)`` intentionally does not validate updates.
         advanced = MigrationWorkspace.model_validate(advanced.model_dump(mode="python"))
     except ValueError as exc:
         raise WorkspaceError(f"invalid migration workspace: {exc}") from exc
+    assert advanced.reference is not None
     current_name = _reference_name(document.reference)
     advanced_name = _reference_name(advanced.reference)
     if advanced_name != current_name:
@@ -792,40 +1293,70 @@ def render_tox_config(
         'requires = ["tox>=4.44", "tox-uv>=1.29", "uv>=0.9.1"]',
         f"env_list = {_toml_array(env_names)}",
         f"work_dir = {_toml_string(_path_text(env_dir))}",
-        f"package_root = {_toml_string(_path_text(workspace.candidate))}",
         "",
     ]
     for lane in workspace.lanes:
-        lock = state_root / "locks" / f"requirements.{lane.name}.txt"
         reference_env = _lane_env_name(lane.name, "reference")
         candidate_env = _lane_env_name(lane.name, "candidate")
         common = [
-            f"base_python = [{_toml_string(workspace.python)}]",
             'runner = "uv-venv-runner"',
-            f"deps = [{_toml_string(f'-r{_path_text(lock)}')}]",
             "pass_env = []",
             "commands = []",
         ]
-        lines.extend(
+        reference_lock = state_root / "locks" / f"requirements.{lane.name}.reference.txt"
+        candidate_lock = state_root / "locks" / f"requirements.{lane.name}.candidate.txt"
+        reference_package = workspace.reference_package or "skip"
+        reference_section = [
+            f"[env.{_toml_string(reference_env)}]",
+            'description = "locked reference worker"',
+            f"package = {_toml_string(reference_package)}",
+            f"base_python = [{_toml_string(workspace.reference_python)}]",
+        ]
+        if workspace.reference_path is not None:
+            reference_section.append(
+                f"package_root = {_toml_string(_path_text(workspace.reference_path))}",
+            )
+        reference_section.extend(
             [
-                f"[env.{_toml_string(reference_env)}]",
-                'description = "locked reference worker"',
-                'package = "skip"',
+                f"deps = [{_toml_string(f'-r{_path_text(reference_lock)}')}]",
                 *common,
-                "",
-                f"[env.{_toml_string(candidate_env)}]",
-                'description = "candidate checkout worker"',
-                f"package = {_toml_string(workspace.candidate_package)}",
-                *common,
-                "constrain_package_deps = true",
-                "use_frozen_constraints = true",
             ]
         )
+        if workspace.reference_path is not None:
+            reference_section.extend(
+                [
+                    "constrain_package_deps = true",
+                    "use_frozen_constraints = true",
+                ]
+            )
+        if workspace.reference_package == "editable-legacy":
+            reference_section.append("uv_seed = true")
+
+        candidate_section = [
+            f"[env.{_toml_string(candidate_env)}]",
+            'description = "candidate checkout worker"',
+            f"package = {_toml_string(workspace.candidate_package)}",
+            f"base_python = [{_toml_string(workspace.candidate_python)}]",
+            f"package_root = {_toml_string(_path_text(workspace.candidate))}",
+            f"deps = [{_toml_string(f'-r{_path_text(candidate_lock)}')}]",
+            *common,
+            "constrain_package_deps = true",
+            "use_frozen_constraints = true",
+        ]
         if workspace.reference_extras:
-            lines.append(f"extras = {_toml_array(workspace.reference_extras)}")
+            # A released reference requirement already carries the extras. The
+            # candidate editable needs the matching optional dependency set.
+            candidate_section.append(f"extras = {_toml_array(workspace.reference_extras)}")
         if workspace.candidate_package == "editable-legacy":
-            lines.append("uv_seed = true")
-        lines.append("")
+            candidate_section.append("uv_seed = true")
+        lines.extend(
+            [
+                *reference_section,
+                "",
+                *candidate_section,
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -886,28 +1417,55 @@ def _failure_log(state_root: Path, name: str) -> Path:
     return _private_state_directory(state_root, "logs") / f"{name}.log"
 
 
+def _package_dependency_input(source: Path) -> Path:
+    """Return packaging metadata that uv can resolve without installing the project."""
+
+    for name in ("pyproject.toml", "setup.py", "setup.cfg"):
+        candidate = source / name
+        if candidate.is_file():
+            return candidate
+    raise WorkspaceError("local package metadata disappeared during setup")
+
+
+def _worker_runtime_requirements() -> tuple[str, ...]:
+    """Return only dependencies required by the portable Arrow transport."""
+
+    return ("pyarrow>=16",)
+
+
 def _compile_lane_lock(
     workspace: ResolvedWorkspace,
     lane: ResolvedWorkspaceLane,
     *,
+    side: Literal["reference", "candidate"],
     uv: str,
     state_root: Path,
     refresh: bool,
 ) -> Path:
     inputs_dir = _private_state_directory(state_root, "inputs")
     locks_dir = _private_state_directory(state_root, "locks")
-    generated_input = inputs_dir / f"{lane.name}.in"
+    generated_input = inputs_dir / f"{lane.name}.{side}.in"
+    source_requirement = ""
+    package_input: Path | None = None
+    if side == "reference":
+        if workspace.reference is not None:
+            source_requirement = f"{workspace.reference}\n"
+        else:
+            assert workspace.reference_path is not None
+            package_input = _package_dependency_input(workspace.reference_path)
+    else:
+        package_input = _package_dependency_input(workspace.candidate)
     _atomic_write_text(
         generated_input,
         "# Generated by Parity. Do not edit.\n"
-        f"parity-check=={__version__}\n"
-        f"{workspace.reference}\n",
+        + "".join(f"{requirement}\n" for requirement in _worker_runtime_requirements())
+        + source_requirement,
         force=True,
     )
 
-    lock = locks_dir / f"requirements.{lane.name}.txt"
+    lock = locks_dir / f"requirements.{lane.name}.{side}.txt"
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f"requirements.{lane.name}.", suffix=".txt", dir=locks_dir
+        prefix=f"requirements.{lane.name}.{side}.", suffix=".txt", dir=locks_dir
     )
     os.close(descriptor)
     temporary = Path(temporary_name)
@@ -925,30 +1483,37 @@ def _compile_lane_lock(
             "--no-header",
             "--no-annotate",
             "--python-version",
-            workspace.python,
+            (workspace.reference_python if side == "reference" else workspace.candidate_python),
             "--output-file",
             str(temporary),
         ]
         if refresh:
             command.append("--upgrade")
+        if workspace.reference_extras and package_input is not None:
+            for extra in workspace.reference_extras:
+                command.extend(["--extra", extra])
         if lane.requirements is not None:
             command.append(str(lane.requirements))
         command.append(str(generated_input))
+        if package_input is not None:
+            command.append(str(package_input))
         _run_checked(
             command,
             cwd=workspace.root,
-            operation=f"dependency resolution for lane {lane.name!r}",
-            failure_log=_failure_log(state_root, f"resolve-{lane.name}"),
+            operation=f"dependency resolution for lane {lane.name!r} {side} worker",
+            failure_log=_failure_log(state_root, f"resolve-{lane.name}-{side}"),
         )
         try:
             rendered_lock = temporary.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
             raise WorkspaceError(
-                f"dependency resolution for lane {lane.name!r} did not produce a valid lock"
+                f"dependency resolution for lane {lane.name!r} {side} worker did not produce "
+                "a valid lock"
             ) from exc
         if not any(_PINNED_REQUIREMENT.match(line) for line in rendered_lock.splitlines()):
             raise WorkspaceError(
-                f"dependency resolution for lane {lane.name!r} produced no pinned requirements"
+                f"dependency resolution for lane {lane.name!r} {side} worker produced no "
+                "pinned requirements"
             )
         os.replace(temporary, lock)
     except BaseException:
@@ -1017,13 +1582,15 @@ def _setup_resolved_workspace(
     for child in ("inputs", "locks", "envs", "logs"):
         _private_state_directory(state_root, child)
     for lane in workspace.lanes:
-        _compile_lane_lock(
-            workspace,
-            lane,
-            uv=uv,
-            state_root=state_root,
-            refresh=refresh_locks,
-        )
+        for side in ("reference", "candidate"):
+            _compile_lane_lock(
+                workspace,
+                lane,
+                side=side,
+                uv=uv,
+                state_root=state_root,
+                refresh=refresh_locks,
+            )
     tox_config = state_root / "tox.toml"
     _atomic_write_text(
         tox_config,
@@ -1077,10 +1644,17 @@ def setup_workspace(
 ) -> WorkspaceSetup:
     """Resolve locks, prepare every tox environment and return worker paths."""
 
-    return _setup_resolved_workspace(
-        load_workspace(path),
-        refresh_locks=refresh_locks,
-    )
+    workspace = load_workspace(path)
+    source_provenance = _capture_source_provenance(workspace)
+    config: ParityConfig | None = None
+    if workspace.is_local_comparison:
+        config = _bind_subject_distribution(workspace, load_config(workspace.config))
+        _validate_source_import_isolation(workspace, config)
+    setup = _setup_resolved_workspace(workspace, refresh_locks=refresh_locks)
+    if config is not None:
+        _validate_local_source_installs(setup, config)
+    _assert_sources_unchanged(workspace, source_provenance)
+    return setup
 
 
 def _bind_subject_distribution(
@@ -1089,24 +1663,26 @@ def _bind_subject_distribution(
 ) -> ParityConfig:
     """Bind the managed workspace's subject into every effective worker contract."""
 
-    subject, exact_requirement, reference_version = _reference_contract(workspace.reference)
+    subject = workspace.subject_name
     effective = config.model_copy(deep=True)
     for case in effective.cases:
-        existing = case.reference.required_distributions.get(subject)
-        if existing is not None and reference_version not in SpecifierSet(existing):
-            raise WorkspaceError(
-                "reference runtime requirements conflict with the workspace subject version"
-            )
-        case.reference.required_distributions = {
-            **case.reference.required_distributions,
-            subject: exact_requirement,
-        }
+        if workspace.reference is not None:
+            _, exact_requirement, reference_version = _reference_contract(workspace.reference)
+            existing = case.reference.required_distributions.get(subject)
+            if existing is not None and reference_version not in SpecifierSet(existing):
+                raise WorkspaceError(
+                    "reference runtime requirements conflict with the workspace subject version"
+                )
+            case.reference.required_distributions = {
+                **case.reference.required_distributions,
+                subject: exact_requirement,
+            }
         for endpoint in (case.reference, case.candidate):
             endpoint.record_distributions = sorted(
                 set(endpoint.record_distributions).union({subject})
             )
-            # A managed worker must import harness modules from the workspace,
-            # never from a configured candidate checkout directory.
+            # Managed workers import wrappers from the neutral harness; local
+            # subjects arrive only through their verified installations.
             endpoint.workdir = workspace.root
     return effective
 
@@ -1124,42 +1700,234 @@ def _pythonpath_entries(value: str, *, base: Path) -> tuple[Path, ...]:
     return tuple(entries)
 
 
-def _validate_reference_import_isolation(
+def _validate_source_import_isolation(
     workspace: ResolvedWorkspace,
     config: ParityConfig,
 ) -> None:
-    """Reject managed layouts that can put candidate source on reference sys.path."""
+    """Reject layouts that can bypass either managed editable installation."""
 
-    def exposes_candidate(import_root: Path) -> bool:
+    def exposes_source(import_root: Path, source: Path) -> bool:
         root = import_root.resolve()
-        candidate = workspace.candidate.resolve()
-        if root == candidate or root == (candidate / "src").resolve():
+        source = source.resolve()
+        if root == source or root == (source / "src").resolve():
             return True
         try:
-            candidate.relative_to(root)
+            source.relative_to(root)
         except ValueError:
             return False
         return True
 
-    if exposes_candidate(workspace.root):
-        raise WorkspaceError(
-            "workspace root exposes the candidate checkout to the reference worker; place the "
-            "workspace and wrappers in a contained subdirectory such as migrations"
-        )
+    sources = [("candidate", workspace.candidate)]
+    if workspace.reference_path is not None:
+        sources.append(("reference", workspace.reference_path))
+    for label, source in sources:
+        if exposes_source(workspace.root, source):
+            raise WorkspaceError(
+                f"workspace root exposes the {label} checkout to a managed worker; place the "
+                "workspace and wrappers in a contained subdirectory such as migrations"
+            )
 
     inherited = os.environ.get("PYTHONPATH", "")
     for case in config.cases:
-        effective_pythonpath = case.reference.environment.get("PYTHONPATH", inherited)
-        for import_root in _pythonpath_entries(
-            effective_pythonpath,
-            base=workspace.root,
-        ):
-            if not exposes_candidate(import_root):
-                continue
-            raise WorkspaceError(
-                "reference PYTHONPATH exposes the candidate checkout; remove that import root "
-                "before running the managed workspace"
+        for side, endpoint in (("reference", case.reference), ("candidate", case.candidate)):
+            effective_pythonpath = endpoint.environment.get("PYTHONPATH", inherited)
+            for import_root in _pythonpath_entries(
+                effective_pythonpath,
+                base=workspace.root,
+            ):
+                for label, source in sources:
+                    if not exposes_source(import_root, source):
+                        continue
+                    raise WorkspaceError(
+                        f"{side} PYTHONPATH exposes the {label} checkout; remove that import root "
+                        "before running the managed workspace"
+                    )
+
+
+_NON_PACKAGE_ROOTS = {
+    "benchmarks",
+    "build",
+    "dist",
+    "docs",
+    "examples",
+    "scripts",
+    "test",
+    "tests",
+    "tools",
+}
+
+
+def _declared_python_modules(source: Path) -> set[str]:
+    """Read explicit single-module declarations without executing packaging code."""
+
+    modules: set[str] = set()
+    pyproject = source / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            document = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+            raise WorkspaceError("local pyproject.toml could not be read safely") from exc
+        tool = document.get("tool")
+        setuptools = tool.get("setuptools") if isinstance(tool, dict) else None
+        declared = setuptools.get("py-modules") if isinstance(setuptools, dict) else None
+        if isinstance(declared, list):
+            modules.update(item for item in declared if isinstance(item, str))
+
+    setup_cfg = source / "setup.cfg"
+    if setup_cfg.is_file():
+        parser = ConfigParser(interpolation=None)
+        try:
+            with setup_cfg.open(encoding="utf-8") as stream:
+                parser.read_file(stream)
+        except (OSError, UnicodeError, ConfigParserError) as exc:
+            raise WorkspaceError("local setup.cfg could not be read safely") from exc
+        if parser.has_option("options", "py_modules"):
+            modules.update(
+                item.strip()
+                for line in parser.get("options", "py_modules").splitlines()
+                for item in line.split(",")
+                if item.strip()
             )
+    return {name for name in modules if name.isidentifier()}
+
+
+def _contains_python_source(directory: Path) -> bool:
+    """Find Python source below a namespace root without following symlink trees."""
+
+    pending = [directory]
+    inspected = 0
+    while pending:
+        current = pending.pop()
+        try:
+            entries = tuple(current.iterdir())
+        except OSError as exc:
+            raise WorkspaceError("local source import roots could not be inspected") from exc
+        for entry in entries:
+            inspected += 1
+            if inspected > 10_000:
+                raise WorkspaceError("local source import discovery exceeded its safety bound")
+            if entry.is_symlink() or entry.name.startswith(".") or entry.name == "__pycache__":
+                continue
+            if entry.is_file() and entry.suffix in {".py", ".pyi"}:
+                return True
+            if entry.is_dir():
+                pending.append(entry)
+    return False
+
+
+def _source_import_names(source: Path, distribution: str) -> tuple[str, ...]:
+    """Infer package imports while excluding flat-layout tooling and test trees."""
+
+    import_root = source / "src" if (source / "src").is_dir() else source
+    distribution_module = distribution.replace("-", "_")
+    declared_modules = _declared_python_modules(source)
+    names: set[str] = set()
+    try:
+        entries = tuple(import_root.iterdir())
+    except OSError as exc:
+        raise WorkspaceError("local source import roots could not be inspected") from exc
+    for entry in entries:
+        name: str | None = None
+        if (
+            entry.is_file()
+            and entry.suffix in {".py", ".pyi"}
+            and (entry.stem == distribution_module or entry.stem in declared_modules)
+        ):
+            name = entry.stem
+        elif (
+            entry.is_dir()
+            and not entry.is_symlink()
+            and not entry.name.startswith(".")
+            and (entry.name not in _NON_PACKAGE_ROOTS or entry.name == distribution_module)
+            and (
+                (entry / "__init__.py").is_file()
+                or (entry / "__init__.pyi").is_file()
+                or _contains_python_source(entry)
+            )
+        ):
+            name = entry.name
+        if name is not None and name.isidentifier():
+            names.add(name)
+        if len(names) > 128:
+            raise WorkspaceError("local source declares too many top-level import candidates")
+    if not names:
+        raise WorkspaceError("local source declares no importable Python packages")
+    return tuple(sorted(names))
+
+
+def _origin_probe_environment(overrides: dict[str, str]) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.update(overrides)
+    return environment
+
+
+def _validate_source_install(
+    python: Path,
+    *,
+    source: Path,
+    subject: str,
+    side: Literal["reference", "candidate"],
+    workspace_root: Path,
+    environment: dict[str, str],
+) -> None:
+    """Prove installed metadata and imports both resolve to the declared checkout."""
+
+    names = _source_import_names(source, subject)
+    try:
+        completed = subprocess.run(
+            [
+                str(python),
+                "-c",
+                _SOURCE_ORIGIN_PROBE,
+                subject,
+                str(source),
+                json.dumps(names),
+            ],
+            cwd=workspace_root,
+            env=_origin_probe_environment(environment),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise WorkspaceError(f"{side} editable-source verification could not start") from exc
+    if completed.returncode != 0 or completed.stdout.strip() != "verified":
+        raise WorkspaceError(
+            f"{side} worker did not import the subject distribution from its declared checkout; "
+            "the editable install may be missing or shadowed"
+        )
+
+
+def _validate_local_source_installs(setup: WorkspaceSetup, config: ParityConfig) -> None:
+    """Validate editable identity under every effective worker environment."""
+
+    workspace = setup.workspace
+    if workspace.reference_path is None:
+        return
+    subject = workspace.subject_name
+    seen: set[tuple[str, str, tuple[tuple[str, str], ...]]] = set()
+    for lane in setup.lanes:
+        for case in config.cases:
+            checks: tuple[
+                tuple[Literal["reference", "candidate"], Path, Path, CallableSpec], ...
+            ] = (
+                ("reference", lane.reference_python, workspace.reference_path, case.reference),
+                ("candidate", lane.candidate_python, workspace.candidate, case.candidate),
+            )
+            for side, python, source, endpoint in checks:
+                environment_items = tuple(sorted(endpoint.environment.items()))
+                marker = (str(python), side, environment_items)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                _validate_source_install(
+                    python,
+                    source=source,
+                    subject=subject,
+                    side=side,
+                    workspace_root=workspace.root,
+                    environment=dict(environment_items),
+                )
 
 
 def run_workspace(
@@ -1177,29 +1945,52 @@ def run_workspace(
         workspace,
         load_config(workspace.config),
     )
-    _validate_reference_import_isolation(workspace, config)
+    _validate_source_import_isolation(workspace, config)
+    source_provenance = _capture_source_provenance(workspace)
     if progress is not None:
         progress("setup", None)
-    setup = _setup_resolved_workspace(
-        workspace,
-        refresh_locks=refresh_locks,
+    try:
+        setup = _setup_resolved_workspace(
+            workspace,
+            refresh_locks=refresh_locks,
+        )
+        _validate_local_source_installs(setup, config)
+        _assert_sources_unchanged(workspace, source_provenance)
+        report_dir = _report_directory(setup.workspace)
+        lane_results: list[LaneMigrationResult] = []
+        for lane in setup.lanes:
+            _assert_sources_unchanged(workspace, source_provenance)
+            _invalidate_lane_report(report_dir, lane.name)
+            if progress is not None:
+                progress("lane", lane.name)
+            effective = config.model_copy(deep=True)
+            for case in effective.cases:
+                case.reference.python = lane.reference_python
+                case.candidate.python = lane.candidate_python
+            result = run_migration(manifest, effective)
+            _assert_sources_unchanged(workspace, source_provenance)
+            _assert_lane_source_provenance(result, source_provenance)
+            report = write_migration_json(result, report_dir / f"{lane.name}.json")
+            lane_results.append(LaneMigrationResult(name=lane.name, result=result, report=report))
+            if progress is not None:
+                progress("complete", lane.name)
+        _assert_sources_unchanged(workspace, source_provenance)
+        source_report = (
+            _write_source_provenance(source_provenance, report_dir / _SOURCE_REPORT)
+            if source_provenance is not None
+            else None
+        )
+        _assert_sources_unchanged(workspace, source_provenance)
+    except BaseException:
+        if source_provenance is not None:
+            existing = _existing_report_directory(workspace)
+            if existing is not None:
+                _invalidate_active_reports(existing, [lane.name for lane in workspace.lanes])
+        raise
+    return WorkspaceRunResult(
+        lanes=tuple(lane_results),
+        source_provenance=source_report,
     )
-    report_dir = _report_directory(setup.workspace)
-    lane_results: list[LaneMigrationResult] = []
-    for lane in setup.lanes:
-        _invalidate_lane_report(report_dir, lane.name)
-        if progress is not None:
-            progress("lane", lane.name)
-        effective = config.model_copy(deep=True)
-        for case in effective.cases:
-            case.reference.python = lane.reference_python
-            case.candidate.python = lane.candidate_python
-        result = run_migration(manifest, effective)
-        report = write_migration_json(result, report_dir / f"{lane.name}.json")
-        lane_results.append(LaneMigrationResult(name=lane.name, result=result, report=report))
-        if progress is not None:
-            progress("complete", lane.name)
-    return WorkspaceRunResult(lanes=tuple(lane_results))
 
 
 __all__ = [
@@ -1208,10 +1999,12 @@ __all__ = [
     "MigrationWorkspace",
     "ResolvedWorkspace",
     "ResolvedWorkspaceLane",
+    "SourceRevision",
     "WorkspaceError",
     "WorkspaceLane",
     "WorkspaceRunResult",
     "WorkspaceSetup",
+    "WorkspaceSourceProvenance",
     "advance_workspace",
     "load_workspace",
     "parse_lane_options",

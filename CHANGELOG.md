@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.12.0
+
+### Behaviour and findings
+
+- Model every target invocation as a first-class semantic `Return(canonical_value)` or
+  `Raise(exception_type, normalized_message, structured_details)` outcome. Return-versus-raise and
+  meaningfully different raises are behavioural incompatibilities.
+- Normalize exception messages and allow-listed validation details into privacy-safe fingerprints,
+  separating unrelated numerical, API and validation regressions while volatile paths, addresses,
+  timestamps, IDs, versions and witness literals do not destabilize deduplication.
+- Report safe structured reference/candidate exception outcomes with well-known qualified types,
+  allow-listed Pydantic error codes/location shapes and NumPy API tokens. Custom identifier-shaped
+  metadata remains opaque. Terminal findings print the complete `ms3:` replay signature without
+  exposing raw messages or witness values.
+- Reserve `ERROR` for failures that prevent a meaningful comparison: transport/import/adapter/
+  canonicalisation failure, invalid protocol, timeout or worker crash. A target-raised exception,
+  including `TimeoutError`, remains semantic evidence and produces `FAILED` when the sides differ.
+- Generate `ms3:` mismatch-shape fingerprints with ordered Return/Raise state, qualified exception
+  type and normalized exception semantics.
+- Surface data-safe mismatch summaries and paths in human reports while preserving exact evidence
+  in private replay artifacts.
+
+### Decoupled targets
+
+- Replace full target-side Parity workers with a dependency-light portable Python worker. Isolated
+  Python environments now need PyArrow, their selected adapter dependency and the application under
+  test—not Parity, Pydantic, Hypothesis, Rich or Typer.
+- Add two-phase target preflight: validate both transports/runtime identities and declared
+  requirements before importing either endpoint, then validate target, adapter and
+  output-canonicalizer imports without invoking application code. When one transport fails, the
+  deferred peer endpoint is explicitly `not_checked` with `TargetEndpointNotChecked`, rather than
+  ambiguously ready or failed.
+- Add first-class external command targets over target protocol v1. Any local executable can serve
+  as a reference or candidate through private Arrow/JSON call directories and strict
+  Return/Raise/Error observations.
+- Keep command credentials out of reports and replay contracts, reject automatic replay when an
+  executable contract had to be redacted, and require replayed command paths to remain inside the
+  original invocation project.
+- Bound every command-protocol response/output read and reject redirects, hard links, non-regular
+  files, replacement and concurrent mutation at that artifact boundary.
+- Add optional per-side output canonicalizers so APIs may return different domain objects while
+  preserving a small shared behavioural contract.
+- Preserve generic runtime and path-free source identity for Python and non-Python targets, and bind
+  those identities into replay.
+
+### Generation, scheduling and performance
+
+- Add first-class project generators through `generation.generator`. Hypothesis strategies retain
+  shrinking; bounded iterables reuse deterministic domain corpora without growing the TOML schema
+  into a proprietary data language.
+- Add full-match regular expressions, string-length bounds and IANA time-zone-aware datetime
+  generation, including applicable daylight-saving gaps, folds and transition boundaries.
+- Raise the default distinct-finding budget from one to ten so unrelated incompatibilities are
+  normally separated without requiring a discovery-specific configuration override.
+- Add `parity check --jobs N` and top-level `jobs` for ordered case-level concurrency. Each case owns
+  isolated sessions and artifact paths; discovery/shrinking inside a case remains serial.
+- Add `--native-threads N` and callable-level native thread limits for common BLAS/OpenMP pools,
+  preventing case concurrency from multiplying target-side thread pools.
+- Replace point-estimate performance gates with deterministic paired-bootstrap confidence
+  intervals. Gates require enough repeats and fail only when the interval's lower bound exceeds the
+  configured speed or memory threshold.
+- Fail with infrastructure `ERROR` when enabled performance measurement lacks a validated passing
+  input or cannot complete, instead of silently omitting the requested evidence.
+
+### Migration workflow and documentation
+
+- Support released-versus-local and local-versus-local managed workspaces with independently locked
+  environments. Local pairs verify editable import origins, record path-free Git/content provenance
+  and fail closed if either checkout changes during a run.
+- Document one `parity check`-centred workflow, changed-API adapters, custom generators,
+  branch/worktree regression testing, rolling adjacent migrations, performance uncertainty and the
+  external target protocol.
+- Reframe Parity as a general open-source behavioural compatibility engine. Code generation and
+  migration repair remain intentionally outside the core; AI tools may consume Parity as a
+  deterministic verification layer.
+
 ## 0.11.0
 
 - Make managed migrations one explicit active adjacent pair. Add `parity migration advance`,
@@ -19,12 +95,12 @@
 
 ## 0.10.0
 
-- Add `parity migration init/setup/run`, an optional managed workspace that uses tox, tox-uv and uv
-  to prepare locked reference/candidate workers and run every dependency lane.
+- Add `parity migration init/setup/run`, an optional managed workspace that prepares separately
+  locked reference/candidate environments and runs every dependency lane.
 - Add `cases_file`, bounded `case_defaults`, and side-specific `reference_kwargs` /
   `candidate_kwargs` for concise migration suites without hiding case identity or input contracts.
-- Add fail-closed `required_distributions` checks and exact worker/controller Parity agreement before
-  target import or invocation.
+- Add fail-closed `required_distributions` checks and runtime provenance before target import or
+  invocation.
 - Add `parity evidence verify` for integrity checking and batch replay of findings referenced by
   suite or migration reports, with data-safe output and stable `0`/`1`/`2` exits.
 - Require complete runtime provenance and an effective-configuration hash for automatic replay.

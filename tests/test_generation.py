@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import datetime as dt
 import math
+import re
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import polars as pl
@@ -380,6 +383,133 @@ def test_adversarial_cases_preserve_declared_frame_constraints() -> None:
 @settings(max_examples=20, deadline=None)
 def test_bounded_positive_float_strategy_is_valid(score: float | None) -> None:
     assert score is None or 5.0 <= score <= 7.0
+
+
+@given(
+    column_strategy(
+        ColumnSchema(
+            name="code",
+            dtype="string",
+            nullable=False,
+            regex=r"item-[0-9]+",
+            min_length=7,
+            max_length=8,
+        )
+    )
+)
+@settings(max_examples=30, deadline=None)
+def test_text_strategy_honours_full_regex_and_length_bounds(code: str) -> None:
+    assert re.fullmatch(r"item-[0-9]+", code)
+    assert 7 <= len(code) <= 8
+
+
+def test_regex_strategy_retains_hypothesis_shrinking() -> None:
+    strategy = column_strategy(
+        ColumnSchema(
+            name="code",
+            dtype="string",
+            nullable=False,
+            regex=r"item-[0-9]+",
+            min_length=7,
+            max_length=8,
+        )
+    )
+
+    counterexample = find(
+        strategy,
+        lambda value: int(value.removeprefix("item-")) >= 10,
+        settings=settings(max_examples=500, database=None, deadline=None, derandomize=True),
+    )
+
+    assert counterexample == "item-10"
+
+
+def _is_imaginary(value: dt.datetime) -> bool:
+    zone = value.tzinfo
+    assert zone is not None
+    round_trip = value.astimezone(dt.UTC).astimezone(zone)
+    return round_trip.replace(tzinfo=None) != value.replace(tzinfo=None)
+
+
+def _is_ambiguous(value: dt.datetime) -> bool:
+    zone = value.tzinfo
+    assert zone is not None
+    wall_time = value.replace(tzinfo=None)
+    first = wall_time.replace(tzinfo=zone, fold=0)
+    second = wall_time.replace(tzinfo=zone, fold=1)
+    return (
+        first.utcoffset() != second.utcoffset()
+        and not _is_imaginary(first)
+        and not _is_imaginary(second)
+    )
+
+
+def test_datetime_strategy_uses_configured_zone_and_covers_dst_gap_and_fold() -> None:
+    strategy = column_strategy(
+        ColumnSchema(
+            name="at",
+            dtype="datetime",
+            nullable=False,
+            timezone="America/New_York",
+            minimum="2024-01-01T00:00:00",
+            maximum="2024-12-31T23:59:59",
+        )
+    )
+    configured = settings(max_examples=500, database=None, deadline=None, derandomize=True)
+
+    imaginary = find(strategy, _is_imaginary, settings=configured)
+    repeated_wall_time = dt.datetime(2024, 11, 3, 1, 30)
+    first_fold = find(
+        strategy,
+        lambda value: (
+            _is_ambiguous(value)
+            and value.fold == 0
+            and value.replace(tzinfo=None) == repeated_wall_time
+        ),
+        settings=configured,
+    )
+    second_fold = find(
+        strategy,
+        lambda value: (
+            _is_ambiguous(value)
+            and value.fold == 1
+            and value.replace(tzinfo=None) == repeated_wall_time
+        ),
+        settings=configured,
+    )
+
+    assert isinstance(imaginary.tzinfo, ZoneInfo)
+    assert imaginary.tzinfo.key == "America/New_York"
+    assert imaginary.month == 3
+    assert first_fold.replace(tzinfo=None) == second_fold.replace(tzinfo=None)
+    assert first_fold.utcoffset() != second_fold.utcoffset()
+
+
+def test_adversarial_cases_include_real_timezone_transition_boundaries() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="at",
+                dtype="datetime",
+                nullable=False,
+                timezone="America/New_York",
+                minimum="2024-01-01T00:00:00",
+                maximum="2024-12-31T23:59:59",
+            )
+        ],
+        min_rows=1,
+        max_rows=8,
+    )
+
+    case = next(case for case in adversarial_cases(schema) if case.name == "timezone-transitions")
+    values = case.table.column("at").to_pylist()
+
+    assert {value.month for value in values} == {3, 11}
+    assert {value.utcoffset() for value in values} == {
+        dt.timedelta(hours=-5),
+        dt.timedelta(hours=-4),
+    }
+    assert any(value.fold == 1 for value in values)
 
 
 @given(frame_strategy(rich_schema()))

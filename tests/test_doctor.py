@@ -7,7 +7,6 @@ import sys
 import zipfile
 from pathlib import Path
 
-from parity import __version__
 from parity.doctor import REQUIRED_DEPENDENCIES, diagnose, diagnose_config
 from parity.models import CallableSpec, CaseConfig, ParityConfig
 
@@ -26,8 +25,12 @@ def _configured_case(
     required_distributions: dict[str, str] | None = None,
     python: Path | None = None,
 ) -> CaseConfig:
+    (tmp_path / "doctor_target.py").write_text(
+        "def transform(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
     spec = CallableSpec(
-        target="module.that.does.not.exist:transform",
+        target="doctor_target:transform",
         adapter="arrow",
         python=python or Path(sys.executable),
         workdir=tmp_path,
@@ -44,13 +47,15 @@ def _configured_case(
     )
 
 
-def test_config_doctor_inspects_workers_without_importing_targets(tmp_path: Path) -> None:
+def test_config_doctor_preflights_portable_workers_without_invoking_targets(tmp_path: Path) -> None:
     report = diagnose_config(ParityConfig(cases=[_configured_case(tmp_path)]))
     assert report.healthy
     case = report.cases[0]
     assert case.reference.status == "ready"
     assert case.reference.python_version
-    assert case.reference.parity_version == __version__
+    assert case.reference.executor == "portable-python"
+    assert case.reference.parity_version is None
+    assert case.reference.parity_satisfied is None
     assert case.reference.distributions[0].name == "pytest"
     assert case.reference.distributions[0].status == "installed"
 
@@ -59,7 +64,7 @@ def test_config_doctor_inspects_workers_without_importing_targets(tmp_path: Path
     assert sys.executable not in rendered
     assert "PRIVATE_TOKEN" not in rendered
     assert "must-not-appear" not in rendered
-    assert "module.that.does.not.exist" not in rendered
+    assert "doctor_target" not in rendered
 
 
 def test_config_doctor_fails_when_explicit_distribution_is_missing(tmp_path: Path) -> None:
@@ -88,29 +93,27 @@ def test_config_doctor_enforces_required_distribution_specifier(tmp_path: Path) 
 
     assert report.healthy is False
     worker = report.cases[0].reference
-    assert worker.parity_satisfied is True
+    assert worker.parity_satisfied is None
     dependency = worker.distributions[0]
     assert dependency.status == "installed"
     assert dependency.requirement == "<0"
     assert dependency.satisfied is False
     rendered = json.dumps(report.to_dict())
     assert '"requirement": "<0"' in rendered
-    assert "module.that.does.not.exist" not in rendered
+    assert "doctor_target" not in rendered
     assert str(tmp_path) not in rendered
     assert "PRIVATE_TOKEN" not in rendered
 
 
-def test_config_doctor_requires_worker_parity_to_match_orchestrator(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_config_doctor_does_not_require_target_side_parity(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("parity.doctor.__version__", "999.0.0")
 
     report = diagnose_config(ParityConfig(cases=[_configured_case(tmp_path)]))
 
-    assert report.healthy is False
+    assert report.healthy is True
     assert report.cases[0].reference.status == "ready"
-    assert report.cases[0].reference.parity_satisfied is False
-    assert report.cases[0].candidate.parity_satisfied is False
+    assert report.cases[0].reference.parity_satisfied is None
+    assert report.cases[0].candidate.parity_satisfied is None
 
 
 def test_config_doctor_reports_worker_failure_without_python_path(tmp_path: Path) -> None:
@@ -120,7 +123,78 @@ def test_config_doctor_reports_worker_failure_without_python_path(tmp_path: Path
     )
     assert not report.healthy
     assert report.cases[0].reference.status == "crashed"
+    assert report.cases[0].reference.error_code == "TargetTransportError"
     assert str(missing_python) not in json.dumps(report.to_dict())
+
+
+def test_config_doctor_checks_both_transports_before_importing_either_endpoint(
+    tmp_path: Path,
+) -> None:
+    imported = tmp_path / "reference-imported.txt"
+    (tmp_path / "guarded_doctor_target.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(imported)!r}).write_text('imported', encoding='utf-8')\n"
+        "def transform(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
+    case = _configured_case(tmp_path)
+    case.reference.target = "guarded_doctor_target:transform"
+    case.candidate.python = tmp_path / "missing-candidate-python"
+
+    report = diagnose_config(ParityConfig(cases=[case]))
+
+    assert report.healthy is False
+    assert report.cases[0].reference.status == "not_checked"
+    assert report.cases[0].reference.error_code == "TargetEndpointNotChecked"
+    assert report.cases[0].candidate.status == "crashed"
+    assert report.cases[0].candidate.error_code == "TargetTransportError"
+    assert imported.exists() is False
+
+
+def test_config_doctor_classifies_missing_target_as_endpoint_error(tmp_path: Path) -> None:
+    case = _configured_case(tmp_path)
+    case.reference.target = "missing_doctor_target:transform"
+
+    report = diagnose_config(ParityConfig(cases=[case]))
+
+    assert not report.healthy
+    assert report.cases[0].reference.status == "error"
+    assert report.cases[0].reference.error_code == "TargetEndpointError"
+    assert "missing_doctor_target" not in json.dumps(report.to_dict())
+
+
+def test_config_doctor_classifies_missing_arrow_as_transport_error(tmp_path: Path) -> None:
+    environment = tmp_path / "arrowless"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(environment)],
+        check=True,
+    )
+    interpreter = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+    report = diagnose_config(ParityConfig(cases=[_configured_case(tmp_path, python=interpreter)]))
+
+    assert not report.healthy
+    worker = report.cases[0].reference
+    assert worker.status == "error"
+    assert worker.error_code == "TargetTransportError"
+    assert worker.executor == "portable-python"
+
+
+def test_config_doctor_classifies_endpoint_import_timeout(tmp_path: Path) -> None:
+    (tmp_path / "slow_doctor_target.py").write_text(
+        "import time\ntime.sleep(2)\ndef transform(frame):\n    return frame\n",
+        encoding="utf-8",
+    )
+    case = _configured_case(tmp_path)
+    case.reference.target = "slow_doctor_target:transform"
+    case.candidate.target = "slow_doctor_target:transform"
+    case.timeout_seconds = 1.0
+
+    report = diagnose_config(ParityConfig(cases=[case]))
+
+    assert not report.healthy
+    assert report.cases[0].reference.status == "timed_out"
+    assert report.cases[0].reference.error_code == "TargetEndpointError"
 
 
 def test_config_doctor_filters_case_names(tmp_path: Path) -> None:
@@ -287,9 +361,12 @@ from parity.doctor import diagnose_config
 from parity.models import CallableSpec, CaseConfig, ParityConfig
 
 root = Path(sys.argv[1])
+(root / "worker_target.py").write_text(
+    "def transform(frame):\\n    return frame\\n", encoding="utf-8"
+)
 def specification(name):
     return CallableSpec(
-        target="missing:callable",
+        target="worker_target:transform",
         adapter="arrow",
         python=root / name / "bin" / "python",
         workdir=root,

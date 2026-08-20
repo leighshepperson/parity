@@ -16,13 +16,12 @@ datetime-related segfaults. Both fixtures are synthetic and both sides use the s
 From the Parity repository root with CPython 3.11 or later:
 
 ```sh
+python -m pip install -e ".[dev]"
 for side in reference candidate; do
   python -m venv case_studies/pandas_version_groupby/environments/$side/.venv
   PIP_CACHE_DIR=/tmp/parity-pip-cache \
     case_studies/pandas_version_groupby/environments/$side/.venv/bin/pip install \
     -r case_studies/pandas_version_groupby/environments/$side/requirements.txt
-  case_studies/pandas_version_groupby/environments/$side/.venv/bin/pip install \
-    --no-deps -e .
 done
 (
   cd case_studies/pandas_version_groupby
@@ -31,7 +30,7 @@ done
   environments/candidate/.venv/bin/python direct_repro.py \
     > reports/candidate-direct-repro.json
   set +e
-  environments/candidate/.venv/bin/parity check --config parity.toml \
+  parity check --config parity.toml \
     --no-performance --json reports/report.json --markdown reports/report.md
   test $? -eq 1
 )
@@ -40,3 +39,5 @@ done
 Expected result: one shape finding and exit code `1`. The committed report captures different
 pandas versions and the same Python, NumPy, and PyArrow versions for both workers. Compared row
 values are omitted. Replay artifacts stay in ignored `.parity-pandas-versions/`.
+Only the controller environment installs Parity; the two target environments contain their pinned
+dependencies and PyArrow transport.

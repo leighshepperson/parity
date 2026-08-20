@@ -72,10 +72,9 @@ src/parity/
   adapters/          pandas/Polars/Arrow boundary
   schema.py          portable schema inference/materialisation
   generation.py      deterministic cases and Hypothesis strategies
-  execution.py       observations and callable invocation
+  execution.py       target sessions, protocol validation and observations
+  portable_worker.py dependency-light Python target adapter (Python 3.8-compatible)
   provenance.py      bounded runtime identities and safe config fingerprints
-  worker.py          isolated worker protocol
-  session_worker.py  persistent isolated worker protocol
   comparison.py      semantic equivalence policies
   engine.py          suite/live orchestration and replay
   artifacts.py       atomic evidence persistence
@@ -91,6 +90,8 @@ tests/               unit, property and integration tests
 ## Engineering rules
 
 - Preserve a single Arrow input boundary. Do not add pairwise pandas/engine conversions.
+- Keep the portable target worker independent of Parity and controller-only dependencies.
+- Keep external commands and Python workers on the same versioned observation protocol.
 - Make equivalence policy explicit and validated. Avoid “smart” implicit tolerance widening.
 - An uncertain execution is an error, never a pass.
 - Compare semantic success before measuring performance.
@@ -126,13 +127,14 @@ Never silently reinterpret a policy value.
 
 - **Unit:** canonicalisation, comparator branches, config validation and report redaction.
 - **Property:** adapter round trips, row-multiset comparison and schema generation invariants.
-- **Worker:** timeout, crash, exception, mutation and environment boundaries.
+- **Target protocol:** preflight, timeout, crash, exception, mutation and environment boundaries.
 - **Artifact:** atomic writes, hash binding, corrupt/incomplete replay rejection.
 - **Corpus:** every deliberately wrong migration is detected and every corrected pair passes.
 - **Integration:** CLI exit codes, pytest fixture and composite-action smoke path.
 
-Tests must avoid network access, wall-clock flakiness and private fixtures. Performance correctness
-tests use controlled fake observations; they do not assert machine-specific speed.
+Tests must avoid network access, wall-clock flakiness and private fixtures. Statistical performance
+logic uses controlled observations, while an end-to-end CPU-heavy reference/candidate test proves
+that target timing is actually measured. Neither should assert a machine-specific absolute speed.
 
 ## Documentation and release
 
@@ -149,16 +151,25 @@ against an immutable release tag; ordinary pushes to `main` never move the Actio
 `dry_run` enabled while reviewing the validated commit, and disable it only for the intended
 recovery. The same monotonic and lease guards apply; do not create or force-move the alias by hand.
 
-Before a workspace feature is published, build its wheel locally and point uv at that private
-wheel directory for the integration smoke:
+Before a workspace feature is published, build its wheel, install that wheel and the workspace
+dependencies into a clean controller environment, and run the integration smoke from there:
 
 ```bash
-python -m build
-UV_FIND_LINKS="$PWD/dist" parity migration run --workspace path/to/parity.workspace.toml
+PARITY_SMOKE_DIR="$(mktemp -d)"
+python -m build --wheel --outdir "$PARITY_SMOKE_DIR/dist"
+python -m venv "$PARITY_SMOKE_DIR/controller"
+"$PARITY_SMOKE_DIR/controller/bin/python" -m pip install \
+  "$PARITY_SMOKE_DIR"/dist/parity_check-*.whl
+"$PARITY_SMOKE_DIR/controller/bin/python" -m pip install tox tox-uv uv
+"$PARITY_SMOKE_DIR/controller/bin/parity" version
+"$PARITY_SMOKE_DIR/controller/bin/parity" migration run \
+  --workspace path/to/parity.workspace.toml
 ```
 
-The resulting lock must bind `parity-check` to the local wheel hash and both workers must report the
-same source version as the controller. Do not add this pre-release override to user-facing workspace
-files; published users resolve the ordinary exact package version.
+The fresh output directory guarantees that the wheel glob selects only the build under test. Target
+locks must contain the portable worker's transport requirement and the selected
+application/adapter dependencies, but must not install the full controller merely to satisfy the
+harness. Do not add a local-wheel override to user-facing workspace files; published users install
+the ordinary package release.
 
 For contribution mechanics, see [CONTRIBUTING.md](CONTRIBUTING.md).

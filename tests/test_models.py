@@ -8,6 +8,7 @@ from parity.models import (
     CaseConfig,
     ColumnSchema,
     ComparisonPolicy,
+    ExampleResult,
     FrameSchema,
     GenerationConfig,
     InputBundle,
@@ -92,11 +93,26 @@ def test_frame_constraints_validate_references_duplicates_and_comparability() ->
 
 def test_generation_stability_repeats_is_bounded() -> None:
     assert GenerationConfig().search
+    assert GenerationConfig().max_findings == 10
     assert GenerationConfig().stability_repeats == 2
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         GenerationConfig(stability_repeats=0)
     with pytest.raises(ValidationError, match="less than or equal to 10"):
         GenerationConfig(stability_repeats=11)
+
+
+def test_finding_signatures_use_only_the_current_contract() -> None:
+    ExampleResult(
+        source="generated:shrunk",
+        status=Status.FAILED,
+        finding_signature="ms3:" + "a" * 64,
+    )
+    with pytest.raises(ValidationError, match="String should match pattern"):
+        ExampleResult(
+            source="generated:shrunk",
+            status=Status.FAILED,
+            finding_signature="ms2:" + "a" * 64,
+        )
 
 
 def test_keyed_row_alignment_contract_is_explicit_and_backward_compatible() -> None:
@@ -202,6 +218,23 @@ def test_column_categories_are_unique_and_respect_nullability() -> None:
             nullable=False,
             categories=["a", None],
         )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"dtype": "integer", "min_length": 1}, "only valid for text columns"),
+        ({"dtype": "string", "min_length": 3, "max_length": 2}, "cannot be greater"),
+        ({"dtype": "string", "regex": "["}, "invalid regex"),
+        ({"dtype": "datetime", "timezone": "Not/A_Real_Zone"}, "unknown IANA timezone"),
+        ({"dtype": "string", "timezone": "UTC"}, "only valid for datetime columns"),
+    ],
+)
+def test_column_text_and_timezone_constraints_are_validated(
+    kwargs: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        ColumnSchema.model_validate({"name": "value", **kwargs})
 
 
 def test_input_bundle_rejects_partial_fixture_sets() -> None:

@@ -97,6 +97,8 @@ def _case_supports_automatic_replay(
 ) -> bool:
     if not all(isinstance(case.get(side), dict) for side in ("reference", "candidate")):
         return False
+    if any(_contains_redaction(case.get(side)) for side in ("reference", "candidate")):
+        return False
     invocation_arguments = (
         case.get("static_args"),
         case.get("static_kwargs"),
@@ -145,12 +147,58 @@ def _spec_for_replay(
             # silently change dependency semantics. External interpreters make
             # the artifact evidence-only unless the user authors a config.
             return None
+    command: list[str] | None = None
+    if spec.command is not None:
+        command = []
+        redact_next = False
+        invocation_root = invocation_directory.resolve()
+        launch_root = spec.workdir.resolve() if spec.workdir is not None else invocation_root
+        for index, argument in enumerate(spec.command):
+            if redact_next:
+                command.append("<redacted>")
+                redact_next = False
+                continue
+            sanitized = redact_text(argument)
+            executable = Path(argument)
+            path_like_executable = index == 0 and (
+                executable.is_absolute()
+                or argument.startswith(".")
+                or os.sep in argument
+                or (os.altsep is not None and os.altsep in argument)
+            )
+            if path_like_executable:
+                resolved_executable = (
+                    executable.resolve()
+                    if executable.is_absolute()
+                    else (launch_root / executable).resolve()
+                )
+                try:
+                    resolved_executable.relative_to(invocation_root)
+                except ValueError:
+                    # Never persist an external host path or substitute another
+                    # executable during replay.
+                    return None
+                if not resolved_executable.is_file():
+                    return None
+                sanitized = os.path.relpath(resolved_executable, launch_root)
+                if os.sep not in sanitized and (os.altsep is None or os.altsep not in sanitized):
+                    sanitized = f".{os.sep}{sanitized}"
+            if "=" in argument:
+                key, _separator, _value = argument.partition("=")
+                if _SECRET_KEY.search(key):
+                    sanitized = f"{key}=<redacted>"
+            elif _SECRET_KEY.search(argument.lstrip("-")):
+                redact_next = True
+            command.append(sanitized)
     return {
         "target": spec.target,
+        "command": command,
+        "canonicalizer": spec.canonicalizer,
         "adapter": spec.adapter,
         "pandas_input": spec.pandas_input,
         "record_distributions": spec.record_distributions,
         "required_distributions": spec.required_distributions,
+        "native_threads": spec.native_threads,
         # Replays inherit environment from the caller.  Recording even innocent
         # values makes accidental credential persistence much more likely.
         "python": python,
@@ -170,10 +218,28 @@ def _case_for_replay(
 ) -> dict[str, Any]:
     if isinstance(case, CaseConfig):
         config = case.model_dump(mode="json", by_alias=True)
+        generation = config.get("generation")
+        if isinstance(generation, dict):
+            # The exact Arrow witness replaces project code as the replay input
+            # authority. Replaying must not import or run the generator again.
+            generation["generator"] = None
         if single_input:
             config["fixture"] = next(iter(input_files.values()))
+            config["schema"] = None
+            config["input_bundle"] = None
         else:
             bundle = config.get("input_bundle")
+            if bundle is None and case.generation.generator is not None:
+                bundle = {
+                    "binding": "keyword",
+                    "inputs": {
+                        name: {"fixture": filename} for name, filename in input_files.items()
+                    },
+                    "relationships": [],
+                }
+                config["fixture"] = None
+                config["schema"] = None
+                config["input_bundle"] = bundle
             if not isinstance(bundle, dict) or not isinstance(bundle.get("inputs"), dict):
                 # A direct ArtifactStore caller can persist a bundle without a
                 # configured campaign. Keep the evidence, but make the replay
@@ -267,7 +333,11 @@ class ArtifactStore:
             if isinstance(case, CaseConfig):
                 if single_input and case.input_bundle is not None:
                     raise ValueError("a bundled case requires all configured input tables")
-                if not single_input and case.input_bundle is None:
+                if (
+                    not single_input
+                    and case.input_bundle is None
+                    and case.generation.generator is None
+                ):
                     raise ValueError("a single-input case cannot store an input bundle")
                 if case.input_bundle is not None:
                     expected_names = tuple(case.input_bundle.inputs)

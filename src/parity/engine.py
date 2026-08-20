@@ -16,7 +16,7 @@ import re
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
@@ -26,6 +26,7 @@ from parity._version import __version__
 from parity.adapters import load_arrow_fixture, to_arrow
 from parity.artifacts import ArtifactStore
 from parity.comparison import compare_observations, mismatch_signature
+from parity.custom_generation import CustomGenerator, load_custom_generator
 from parity.diagnostics import diagnose
 from parity.execution import (
     ArrowInputBundle,
@@ -73,6 +74,7 @@ from parity.schema import infer_schema, rows_satisfy_frame_constraints, validate
 from parity.shrinking import (
     find_unseen_bundle_counterexample,
     find_unseen_counterexample,
+    find_unseen_custom_counterexample,
 )
 
 
@@ -118,23 +120,14 @@ class _StopGeneratedCampaign(BaseException):
 
 
 def _infrastructure_error(observation: Observation) -> bool:
-    if observation.outcome in {ExecutionOutcome.CRASHED, ExecutionOutcome.TIMED_OUT}:
-        return True
-    # The callable returned normally, but Parity could not preserve its value as
-    # Arrow or JSON. Treating two identical serialization failures as equivalent
-    # would turn an unobservable comparison into a false pass. User-raised
-    # exceptions have no return_type and remain part of the semantic contract.
-    if observation.outcome is ExecutionOutcome.RAISED and observation.return_type is not None:
-        return True
-    exception = observation.exception
-    return bool(
-        exception
-        and (
-            exception.module.startswith("parity.")
-            or exception.type
-            in {"ExecutionError", "WorkerError", "WorkerProtocolError", "TimeoutError"}
-        )
-    )
+    # Infrastructure is an explicit execution outcome. Never infer it from an
+    # exception's class or module: a target is allowed to raise TimeoutError,
+    # ExecutionError, or any other exception as observable domain behaviour.
+    return observation.outcome in {
+        ExecutionOutcome.ERROR,
+        ExecutionOutcome.CRASHED,
+        ExecutionOutcome.TIMED_OUT,
+    }
 
 
 def _infrastructure_mismatch(label: str, observation: Observation) -> Mismatch:
@@ -330,6 +323,7 @@ def _campaign(
     fixture: CampaignInput | None,
     input_bundle: InputBundle | None = None,
     bundle_schemas: Mapping[str, FrameSchema] | None = None,
+    custom_generator: CustomGenerator | None = None,
     comparison: ComparisonPolicy,
     generation: GenerationConfig,
     performance_config: PerformanceConfig,
@@ -351,14 +345,19 @@ def _campaign(
     failures: list[ExampleResult] = []
     deterministic_count = 0
     generated_count = 0
-    representative: CampaignInput | None = fixture
+    representative: CampaignInput | None = None
     reference_runtime = observed_provenance.reference if observed_provenance else None
     candidate_runtime = observed_provenance.candidate if observed_provenance else None
     seen_signatures: set[str] = set()
     operational_error = False
 
-    if (schema is None) == (input_bundle is None or bundle_schemas is None):
-        raise ValueError("campaign requires exactly one single-frame or input-bundle contract")
+    has_single_contract = schema is not None
+    has_bundle_contract = input_bundle is not None and bundle_schemas is not None
+    has_custom_contract = custom_generator is not None
+    if sum((has_single_contract, has_bundle_contract, has_custom_contract)) != 1:
+        raise ValueError(
+            "campaign requires exactly one single-frame, input-bundle, or custom-generator contract"
+        )
 
     # Frame and relationship constraints define the valid domain even when
     # deterministic edge families are disabled. Validate explicit fixtures
@@ -396,11 +395,25 @@ def _campaign(
             confirmation_pair_runner,
         )
 
+    def remember_representative(value: CampaignInput) -> None:
+        """Retain the largest validated input observed by this campaign."""
+
+        nonlocal representative
+        if representative is None or _input_row_count(value) > _input_row_count(representative):
+            # Arrow tables are immutable. Copy only the bundle container so a
+            # custom strategy cannot later rebind one of its logical inputs.
+            representative = value if isinstance(value, pa.Table) else dict(value)
+
     deterministic: list[tuple[str, CampaignInput]]
     if exact_only:
         if fixture is None:
             raise ReplayError("the replay artifact has no input fixture")
         deterministic = [("replay", fixture)]
+    elif custom_generator is not None:
+        deterministic = [
+            (f"generated:custom:{index}", value)
+            for index, value in enumerate(custom_generator.examples, start=1)
+        ]
     elif input_bundle is not None and bundle_schemas is not None:
         if generation.adversarial_examples:
             fixtures = fixture if isinstance(fixture, dict) else None
@@ -431,9 +444,10 @@ def _campaign(
         raise ValueError("generation.search=false requires at least one deterministic input")
 
     for source, value in deterministic:
-        deterministic_count += 1
-        if representative is None or _input_row_count(value) > _input_row_count(representative):
-            representative = value
+        if source.startswith("generated:custom:"):
+            generated_count += 1
+        else:
+            deterministic_count += 1
         reference, candidate, mismatches, status = observe(value)
         if status is Status.ERROR:
             failure = _example_result(source, reference, candidate, mismatches, status)
@@ -494,6 +508,7 @@ def _campaign(
                 break
             if operational_error:
                 break
+            remember_representative(value)
         if status is Status.FAILED:
             if exact_only:
                 failure = _example_result(source, reference, candidate, mismatches, status)
@@ -621,6 +636,7 @@ def _campaign(
         and not exact_only
         and not operational_error
         and len(seen_signatures) < generation.max_findings
+        and (custom_generator is None or custom_generator.uses_hypothesis)
     ):
         latest: tuple[Observation, Observation, list[Mismatch], Status] | None = None
         latest_value: CampaignInput | None = None
@@ -635,11 +651,25 @@ def _campaign(
                 # BaseException prevents Hypothesis from retrying or shrinking.
                 raise _StopGeneratedCampaign
             if latest[3] is Status.PASSED:
+                remember_representative(value)
                 return None
             return mismatch_signature(latest[2])
 
         try:
-            if input_bundle is not None and bundle_schemas is not None:
+            if custom_generator is not None and custom_generator.strategy is not None:
+                custom_counterexample = find_unseen_custom_counterexample(
+                    custom_generator.strategy,
+                    classify,
+                    seen_signatures,
+                    generation,
+                )
+                counterexample_value = (
+                    custom_counterexample.example if custom_counterexample is not None else None
+                )
+                counterexample_source = (
+                    custom_counterexample.source if custom_counterexample is not None else None
+                )
+            elif input_bundle is not None and bundle_schemas is not None:
                 counterexample = find_unseen_bundle_counterexample(
                     input_bundle,
                     bundle_schemas,
@@ -805,16 +835,8 @@ def _campaign(
 
     performance: PerformanceResult | None = None
     semantics_passed = not failures
-    if (
-        not exact_only
-        and semantics_passed
-        and performance_config.enabled
-        and benchmark is not None
-        and representative is not None
-    ):
-        try:
-            performance = benchmark(representative)
-        except BenchmarkError as error:
+    if not exact_only and semantics_passed and performance_config.enabled:
+        if benchmark is None or representative is None:
             failures.append(
                 ExampleResult(
                     source="performance",
@@ -822,15 +844,36 @@ def _campaign(
                     mismatches=[
                         Mismatch(
                             kind=MismatchKind.PERFORMANCE,
-                            message=str(error),
+                            message=(
+                                "performance measurement runner is unavailable"
+                                if benchmark is None
+                                else "performance measurement has no validated representative input"
+                            ),
                             path="$performance",
                         )
                     ],
                 )
             )
         else:
-            if performance.regression and performance_config.fail_on_regression:
-                failures.append(_performance_failure(performance))
+            try:
+                performance = benchmark(representative)
+            except BenchmarkError as error:
+                failures.append(
+                    ExampleResult(
+                        source="performance",
+                        status=Status.ERROR,
+                        mismatches=[
+                            Mismatch(
+                                kind=MismatchKind.PERFORMANCE,
+                                message=str(error),
+                                path="$performance",
+                            )
+                        ],
+                    )
+                )
+            else:
+                if performance.regression and performance_config.fail_on_regression:
+                    failures.append(_performance_failure(performance))
 
     semantic_failures = sorted(
         (failure for failure in failures if failure.finding_signature is not None),
@@ -841,10 +884,11 @@ def _campaign(
     diagnostic_mismatches = [
         mismatch
         for failure in failures
-        if not failure.source.startswith("deterministic:stability:")
+        if failure.status is Status.FAILED
         for mismatch in failure.mismatches
     ]
     status = _status_for(failures, None)
+    diagnoses = diagnose(diagnostic_mismatches) if status is Status.FAILED else []
     verification = "captured"
     if expected_provenance is not None:
         verification = (
@@ -859,8 +903,9 @@ def _campaign(
         examples_run=deterministic_count + generated_count,
         deterministic_examples=deterministic_count,
         generated_examples=generated_count,
+        finding_limit_reached=(not exact_only and len(seen_signatures) >= generation.max_findings),
         failures=failures,
-        diagnoses=diagnose(diagnostic_mismatches),
+        diagnoses=diagnoses,
         performance=performance,
         provenance=CaseProvenance(
             reference=reference_runtime,
@@ -882,10 +927,19 @@ def _configured_case(
     configured_started = time.perf_counter()
     input_bundle = case.input_bundle
     bundle_schemas: dict[str, FrameSchema] | None = None
-    if input_bundle is None:
-        fixture: CampaignInput | None = (
-            load_arrow_fixture(case.fixture) if case.fixture is not None else None
+    custom_generator: CustomGenerator | None = None
+    fixture: CampaignInput | None
+    schema: FrameSchema | None
+    if case.generation.generator is not None:
+        custom_generator = load_custom_generator(
+            case.generation.generator,
+            base_directory=case._base_directory,
+            max_examples=case.generation.max_examples,
         )
+        fixture = None
+        schema = None
+    elif input_bundle is None:
+        fixture = load_arrow_fixture(case.fixture) if case.fixture is not None else None
         schema = case.input_schema or (
             infer_schema(fixture) if isinstance(fixture, pa.Table) else None
         )
@@ -970,53 +1024,70 @@ def _configured_case(
         ) as candidate_session,
         ThreadPoolExecutor(max_workers=2, thread_name_prefix="parity-pair") as pool,
     ):
-        reference_future = pool.submit(reference_session.preflight_runtime)
-        candidate_future = pool.submit(candidate_session.preflight_runtime)
-        reference_probe = reference_future.result()
-        candidate_probe = candidate_future.result()
-        provenance_mismatches: list[Mismatch] = []
-        for label, expected, probe in (
-            (
-                "reference",
-                expected_provenance.reference if expected_provenance else None,
-                reference_probe,
-            ),
-            (
-                "candidate",
-                expected_provenance.candidate if expected_provenance else None,
-                candidate_probe,
-            ),
-        ):
-            if probe.runtime is None or not probe.succeeded:
-                detail = (
-                    probe.exception.message
-                    if probe.exception is not None
-                    and probe.exception.type == "RuntimeContractError"
-                    else "runtime provenance could not be verified"
-                )
-                provenance_mismatches.append(
-                    Mismatch(
-                        kind=MismatchKind.EXCEPTION,
-                        message=f"{label} {detail}",
-                        path=f"${label}.runtime",
+
+        def preflight_mismatches(
+            reference_probe: Observation,
+            candidate_probe: Observation,
+        ) -> list[Mismatch]:
+            mismatches: list[Mismatch] = []
+            for label, expected, probe in (
+                (
+                    "reference",
+                    expected_provenance.reference if expected_provenance else None,
+                    reference_probe,
+                ),
+                (
+                    "candidate",
+                    expected_provenance.candidate if expected_provenance else None,
+                    candidate_probe,
+                ),
+            ):
+                if probe.runtime is None or not probe.succeeded:
+                    exception = probe.exception
+                    exception_type = exception.type if exception is not None else None
+                    if exception is not None and exception_type == "RuntimeContractError":
+                        detail = exception.message
+                        component = "runtime"
+                    elif exception_type == "TargetEndpointError":
+                        detail = "endpoint preflight could not be completed"
+                        component = "endpoint"
+                    elif exception_type == "TargetTransportError":
+                        detail = "transport preflight could not be completed"
+                        component = "transport"
+                    else:
+                        detail = "runtime provenance could not be verified"
+                        component = "runtime"
+                    mismatches.append(
+                        Mismatch(
+                            kind=MismatchKind.EXCEPTION,
+                            message=f"{label} {detail}",
+                            path=f"${label}.{component}",
+                        )
                     )
-                )
-                continue
-            if expected is not None and (differences := diff_runtime(expected, probe.runtime)):
-                provenance_mismatches.append(
-                    Mismatch(
-                        kind=MismatchKind.EXCEPTION,
-                        message=(
-                            f"{label} runtime provenance drifted (" + ", ".join(differences) + ")"
-                        ),
-                        path=f"${label}.runtime",
+                    continue
+                if expected is not None and (differences := diff_runtime(expected, probe.runtime)):
+                    mismatches.append(
+                        Mismatch(
+                            kind=MismatchKind.EXCEPTION,
+                            message=(
+                                f"{label} runtime provenance drifted ("
+                                + ", ".join(differences)
+                                + ")"
+                            ),
+                            path=f"${label}.runtime",
+                        )
                     )
-                )
-        if provenance_mismatches:
+            return mismatches
+
+        def preflight_error(
+            mismatches: list[Mismatch],
+            reference_probe: Observation,
+            candidate_probe: Observation,
+        ) -> CaseResult:
             failure = ExampleResult(
                 source=("replay:provenance" if expected_provenance else "runtime:preflight"),
                 status=Status.ERROR,
-                mismatches=provenance_mismatches,
+                mismatches=mismatches,
                 reference_metrics=reference_probe.metrics,
                 candidate_metrics=candidate_probe.metrics,
             )
@@ -1024,7 +1095,7 @@ def _configured_case(
                 name=case.name,
                 status=Status.ERROR,
                 failures=[failure],
-                diagnoses=diagnose(provenance_mismatches),
+                diagnoses=[],
                 provenance=CaseProvenance(
                     reference=reference_probe.runtime,
                     candidate=candidate_probe.runtime,
@@ -1032,6 +1103,23 @@ def _configured_case(
                 ),
                 elapsed_seconds=time.perf_counter() - configured_started,
             )
+
+        # Validate both runtimes before importing either endpoint. A drift or
+        # unmet dependency on one side must not execute import-time code on the
+        # other side during replay or setup failure.
+        reference_future = pool.submit(reference_session.preflight_transport)
+        candidate_future = pool.submit(candidate_session.preflight_transport)
+        reference_probe = reference_future.result()
+        candidate_probe = candidate_future.result()
+        if provenance_mismatches := preflight_mismatches(reference_probe, candidate_probe):
+            return preflight_error(provenance_mismatches, reference_probe, candidate_probe)
+
+        reference_future = pool.submit(reference_session.preflight_endpoint)
+        candidate_future = pool.submit(candidate_session.preflight_endpoint)
+        reference_probe = reference_future.result()
+        candidate_probe = candidate_future.result()
+        if endpoint_mismatches := preflight_mismatches(reference_probe, candidate_probe):
+            return preflight_error(endpoint_mismatches, reference_probe, candidate_probe)
 
         def run(
             session: IsolatedExecutionSession,
@@ -1057,6 +1145,7 @@ def _configured_case(
             fixture=fixture,
             input_bundle=input_bundle,
             bundle_schemas=bundle_schemas,
+            custom_generator=custom_generator,
             comparison=case.comparison,
             generation=case.generation,
             performance_config=case.performance,
@@ -1108,15 +1197,25 @@ def run_suite(
         selected_cases=selected_cases,
         base_directory=config._base_directory,
     )
-    cases: list[CaseResult] = []
-    store = ArtifactStore(config.artifact_dir)
-    for case in config.cases:
-        if selected_cases is not None and case.name not in selected_cases:
-            continue
+    selected = [
+        case for case in config.cases if selected_cases is None or case.name in selected_cases
+    ]
+
+    def configured_case(case: CaseConfig) -> CaseResult:
+        effective_case = case.model_copy(deep=True)
+        if config.native_threads is not None:
+            if effective_case.reference.native_threads is None:
+                effective_case.reference.native_threads = config.native_threads
+            if effective_case.candidate.native_threads is None:
+                effective_case.candidate.native_threads = config.native_threads
         try:
-            result = _configured_case(case, store, config_sha256=config_sha256)
+            return _configured_case(
+                effective_case,
+                ArtifactStore(config.artifact_dir),
+                config_sha256=config_sha256,
+            )
         except Exception as error:
-            result = CaseResult(
+            return CaseResult(
                 name=case.name,
                 status=Status.ERROR,
                 failures=[
@@ -1134,9 +1233,29 @@ def run_suite(
                 ],
                 elapsed_seconds=0,
             )
-        cases.append(result)
-        if config.fail_fast and result.status is not Status.PASSED:
-            break
+
+    cases: list[CaseResult]
+    if not selected:
+        cases = []
+    elif config.jobs == 1:
+        cases = []
+        for case in selected:
+            result = configured_case(case)
+            cases.append(result)
+            if config.fail_fast and result.status is not Status.PASSED:
+                break
+    else:
+        ordered: list[CaseResult | None] = [None] * len(selected)
+        with ThreadPoolExecutor(
+            max_workers=min(config.jobs, len(selected)),
+            thread_name_prefix="parity-case",
+        ) as pool:
+            futures: dict[Future[CaseResult], int] = {
+                pool.submit(configured_case, case): index for index, case in enumerate(selected)
+            }
+            for future in as_completed(futures):
+                ordered[futures[future]] = future.result()
+        cases = [result for result in ordered if result is not None]
     return SuiteResult(
         status=_suite_status(cases),
         cases=cases,
@@ -1586,6 +1705,29 @@ def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> No
             if not resolved.is_relative_to(base):
                 raise ReplayError(f"replay {field} paths must stay inside the invocation directory")
             spec[field] = resolved
+        command = spec.get("command")
+        if isinstance(command, list) and command:
+            raw_executable = command[0]
+            if not isinstance(raw_executable, str):
+                raise ReplayError("invalid replay command declaration")
+            path_like = (
+                Path(raw_executable).is_absolute()
+                or raw_executable.startswith(".")
+                or os.sep in raw_executable
+                or (os.altsep is not None and os.altsep in raw_executable)
+            )
+            if path_like:
+                if Path(raw_executable).is_absolute():
+                    raise ReplayError("replay command paths must be relative")
+                launch_root = spec.get("workdir")
+                if not isinstance(launch_root, Path):
+                    launch_root = base
+                executable = Path(os.path.abspath(launch_root / raw_executable))
+                if not executable.is_relative_to(base) or not executable.is_file():
+                    raise ReplayError(
+                        "replay command paths must be existing files inside the invocation directory"
+                    )
+                command[0] = str(executable)
 
 
 def replay_artifact(path: str | Path) -> SuiteResult:
@@ -1629,6 +1771,8 @@ def replay_artifact(path: str | Path) -> SuiteResult:
     )
     if any(_contains_redaction(value) for value in invocation_arguments):
         raise ReplayError("redacted static arguments cannot be replayed automatically")
+    if any(_contains_redaction(case_data.get(side)) for side in ("reference", "candidate")):
+        raise ReplayError("redacted target configuration cannot be replayed automatically")
     _restore_environment(case_data)
     _resolve_replay_paths(case_data, Path.cwd().resolve())
     raw_bundle = case_data.get("input_bundle")

@@ -6,10 +6,12 @@ import contextlib
 import datetime as dt
 import decimal
 import math
+import re
 from collections.abc import Iterable, Mapping
 from functools import cmp_to_key
 from itertools import pairwise
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -163,11 +165,21 @@ def _schema_columns(schema: FrameSchema) -> dict[str, ColumnSchema]:
     return {column.name: column for column in schema.columns}
 
 
-def _parse_constraint_bound(value: Any, family: str) -> Any:
+def _parse_constraint_bound(value: Any, family: str, timezone: str | None = None) -> Any:
     if value is None:
         return None
-    if family == "datetime" and isinstance(value, str):
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if family == "datetime":
+        parsed = (
+            dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if isinstance(value, str)
+            else value
+        )
+        if timezone and isinstance(parsed, dt.datetime):
+            zone = ZoneInfo(timezone)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=zone)
+            return parsed.astimezone(zone)
+        return parsed
     if family == "date" and isinstance(value, str):
         return dt.date.fromisoformat(value)
     if family == "time" and isinstance(value, str):
@@ -183,7 +195,7 @@ def _finite_constraint_values(column: ColumnSchema) -> list[Any] | None:
     family = dtype_family(column.dtype)
     if column.categories is not None:
         return [
-            _parse_constraint_bound(value, family)
+            _parse_constraint_bound(value, family, column.timezone)
             for value in column.categories
             if value is not None and _value_within_column(value, column)
         ]
@@ -224,13 +236,14 @@ def _temporal_constraint_bounds(column: ColumnSchema) -> tuple[Any, Any]:
     }
     default_minimum, default_maximum = defaults[family]
     if family == "datetime" and column.timezone:
-        default_minimum = default_minimum.replace(tzinfo=dt.UTC)
-        default_maximum = default_maximum.replace(tzinfo=dt.UTC)
+        zone = ZoneInfo(column.timezone)
+        default_minimum = default_minimum.replace(tzinfo=zone)
+        default_maximum = default_maximum.replace(tzinfo=zone)
     return (
-        _parse_constraint_bound(column.minimum, family)
+        _parse_constraint_bound(column.minimum, family, column.timezone)
         if column.minimum is not None
         else default_minimum,
-        _parse_constraint_bound(column.maximum, family)
+        _parse_constraint_bound(column.maximum, family, column.timezone)
         if column.maximum is not None
         else default_maximum,
     )
@@ -315,26 +328,27 @@ def validate_frame_schema(schema: FrameSchema) -> None:
     columns = _schema_columns(schema)
     for column in schema.columns:
         if column.categories is not None:
-            valid = [
-                value
-                for value in column.categories
-                if value is None or _value_within_column(value, column)
-            ]
             invalid = [
-                value
-                for value in column.categories
-                if value is not None and not _value_within_column(value, column)
+                value for value in column.categories if not _value_within_column(value, column)
             ]
-            non_null_valid = [value for value in valid if value is not None]
-            if invalid and non_null_valid:
+            valid = [value for value in column.categories if _value_within_column(value, column)]
+            if invalid and not valid:
                 raise ValueError(
-                    f"column {column.name!r} contains categorical values outside its dtype "
-                    "or bounds"
+                    f"column {column.name!r} has no values representable in its categorical "
+                    "dtype, bounds, regex and length constraints"
                 )
-            if invalid and not valid and schema.min_rows > 0:
+            if invalid:
                 raise ValueError(
-                    f"column {column.name!r} has no values representable by dtype {column.dtype!r}"
+                    f"column {column.name!r} contains categorical values outside its dtype, "
+                    "bounds, regex or length constraints"
                 )
+        invalid_examples = [
+            value for value in column.examples if not _value_within_column(value, column)
+        ]
+        if invalid_examples:
+            raise ValueError(
+                f"column {column.name!r} contains examples outside its declared domain"
+            )
         if dtype_family(column.dtype) == "integer":
             minimum, maximum = _integer_domain_bounds(column)
             if minimum > maximum and not column.nullable:
@@ -658,28 +672,42 @@ def _column_domain_intersects(left: ColumnSchema, right: ColumnSchema) -> bool:
 def _value_within_column(value: Any, column: ColumnSchema) -> bool:
     if value is None:
         return column.nullable
-    if column.categories is not None and repr(value) not in {
-        repr(candidate) for candidate in column.categories if candidate is not None
-    }:
-        return False
+    family = dtype_family(column.dtype)
     try:
+        comparable_value = _parse_constraint_bound(value, family, column.timezone)
+        if column.categories is not None and repr(comparable_value) not in {
+            repr(_parse_constraint_bound(candidate, family, column.timezone))
+            for candidate in column.categories
+            if candidate is not None
+        }:
+            return False
+        if family in {"string", "category"}:
+            if not isinstance(comparable_value, str):
+                return False
+            if column.min_length is not None and len(comparable_value) < column.min_length:
+                return False
+            if column.max_length is not None and len(comparable_value) > column.max_length:
+                return False
+            if column.regex is not None and re.fullmatch(column.regex, comparable_value) is None:
+                return False
         pa.array(
-            [value],
+            [comparable_value],
             type=arrow_type(column.dtype, timezone=column.timezone),
             from_pandas=False,
         )
-    except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError, TypeError, ValueError):
-        return False
-    family = dtype_family(column.dtype)
-    comparable_value = _parse_constraint_bound(value, family)
-    minimum = _parse_constraint_bound(column.minimum, family)
-    maximum = _parse_constraint_bound(column.maximum, family)
-    try:
+        minimum = _parse_constraint_bound(column.minimum, family, column.timezone)
+        maximum = _parse_constraint_bound(column.maximum, family, column.timezone)
         if minimum is not None and comparable_value < minimum:
             return False
         if maximum is not None and comparable_value > maximum:
             return False
-    except TypeError:
+    except (
+        pa.ArrowInvalid,
+        pa.ArrowNotImplementedError,
+        pa.ArrowTypeError,
+        TypeError,
+        ValueError,
+    ):
         return False
     return True
 
