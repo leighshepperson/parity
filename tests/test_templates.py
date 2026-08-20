@@ -120,6 +120,7 @@ def test_project_template_is_minimal_fixture_backed_and_allows_same_target() -> 
         "row_order": "keyed",
         "row_keys": ["account_id", "period"],
     }
+    assert case["performance"] == {"enabled": False}
     assert "schema" not in case
     assert "generation" not in case
 

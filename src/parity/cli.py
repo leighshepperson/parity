@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+import shlex
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import typer
 from rich.console import Console
@@ -41,6 +43,63 @@ console = Console()
 error_console = Console(stderr=True)
 
 
+def _inspect_generated_adapter(
+    path: Path,
+) -> tuple[Literal["implemented", "invalid", "placeholder"], str | None]:
+    """Inspect generated adapter syntax and recognize its exact executable sentinel."""
+
+    from parity.templates import MIGRATION_ADAPTER_PLACEHOLDER_MESSAGE
+
+    source = path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError as exc:
+        location = f"line {exc.lineno}" if exc.lineno is not None else "unknown line"
+        return "invalid", f"{exc.msg} ({location})"
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+            continue
+        exception = node.exc
+        if (
+            isinstance(exception.func, ast.Name)
+            and exception.func.id == "NotImplementedError"
+            and len(exception.args) == 1
+            and not exception.keywords
+            and isinstance(exception.args[0], ast.Constant)
+            and exception.args[0].value == MIGRATION_ADAPTER_PLACEHOLDER_MESSAGE
+        ):
+            return "placeholder", None
+    return "implemented", None
+
+
+def _checklist_adapter_paths(
+    checklist: Any,
+    *,
+    checklist_path: Path,
+    workspace_root: Path,
+) -> tuple[Path, ...]:
+    """Resolve adapter-review files without allowing out-of-project reads."""
+
+    from parity.agent_output import ChecklistItemId
+
+    item = next(entry for entry in checklist.items if entry.id is ChecklistItemId.ADAPTER_SEMANTICS)
+    root = workspace_root.resolve()
+    paths: list[Path] = []
+    for declared in item.files:
+        relative = Path(declared)
+        if relative.is_absolute():
+            raise ValueError("checklist adapter paths must be relative to the checklist")
+        resolved = (checklist_path.parent / relative).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(
+                "checklist adapter paths must stay inside the workspace project"
+            ) from exc
+        paths.append(resolved)
+    return tuple(paths)
+
+
 def _fail(message: str, code: int = 2) -> None:
     rendered = Text()
     rendered.append("error:", style="bold red")
@@ -59,6 +118,18 @@ def _cli_path(path: str | Path, *, base: Path | None = None) -> str:
         return absolute.relative_to(root).as_posix() or "."
     except ValueError:
         return Path(os.path.relpath(absolute, root)).as_posix()
+
+
+def _written_path(path: str | Path) -> Path:
+    """Show a usable output path without exposing directories above the invocation."""
+
+    source = Path(path)
+    root = Path.cwd().resolve()
+    absolute = source.resolve() if source.is_absolute() else (root / source).resolve()
+    try:
+        return Path(absolute.relative_to(root).as_posix())
+    except ValueError:
+        return Path(absolute.name)
 
 
 def _artifact_has_executable_replay(path: Path) -> bool:
@@ -322,6 +393,11 @@ def init(
         _fail(str(exc))
     for item in created:
         _print_path_status("created", item)
+    config_argument = path.as_posix()
+    next_argv = ["parity", "check"]
+    if config_argument != "parity.toml":
+        next_argv.extend(["--config", config_argument])
+    typer.echo(f"next: {shlex.join(next_argv)}")
 
 
 @app.command("inspect")
@@ -472,7 +548,7 @@ def check(
             _fail(f"GitHub summary could not be written ({type(exc).__name__})")
     render_terminal(result, console=console)
     for path in written:
-        _print_path_status("wrote", Path(path.name))
+        _print_path_status("wrote", _written_path(path))
     if result.status is Status.ERROR:
         raise typer.Exit(2)
     if result.status is Status.FAILED:
@@ -526,7 +602,11 @@ def _render_migration_result(result: MigrationResult) -> None:
         from parity.reporting import render_terminal
 
         console.print("[bold]case evidence[/bold]")
-        render_terminal(result.suite, console=console)
+        render_terminal(
+            result.suite,
+            console=console,
+            artifact_renderer=lambda artifact: _cli_path(artifact),
+        )
 
 
 @migration_app.command("init")
@@ -1027,6 +1107,62 @@ def migration_validate(
             checklist = ContractChecklist.model_validate_json(
                 workspace.checklist.read_text(encoding="utf-8")
             )
+            adapter_states = [
+                (path, *_inspect_generated_adapter(path))
+                for path in _checklist_adapter_paths(
+                    checklist,
+                    checklist_path=workspace.checklist,
+                    workspace_root=workspace.root,
+                )
+            ]
+            invalid_adapters = [item for item in adapter_states if item[1] == "invalid"]
+            placeholder_adapters = [item for item in adapter_states if item[1] == "placeholder"]
+            if invalid_adapters:
+                adapter_path, _, detail = invalid_adapters[0]
+                issues.append(
+                    {
+                        "code": "adapter_python_invalid",
+                        "severity": "error",
+                        "message": f"fix invalid Python in the migration adapter: {detail}",
+                        "path": _cli_path(adapter_path, base=invocation),
+                    }
+                )
+                checks.append(
+                    {
+                        "code": "adapter_implemented",
+                        "status": "failed",
+                        "message": f"the migration adapter contains invalid Python: {detail}",
+                        "path": _cli_path(adapter_path, base=invocation),
+                    }
+                )
+            elif placeholder_adapters:
+                adapter_path = placeholder_adapters[0][0]
+                issues.append(
+                    {
+                        "code": "generated_adapter_placeholder",
+                        "severity": "review",
+                        "message": (
+                            "replace the generated NotImplementedError with the migration contract"
+                        ),
+                        "path": _cli_path(adapter_path, base=invocation),
+                    }
+                )
+                checks.append(
+                    {
+                        "code": "adapter_implemented",
+                        "status": "failed",
+                        "message": "the generated migration adapter is still a placeholder",
+                        "path": _cli_path(adapter_path, base=invocation),
+                    }
+                )
+            else:
+                checks.append(
+                    {
+                        "code": "adapter_implemented",
+                        "status": "passed",
+                        "message": "the generated migration adapter placeholder was replaced",
+                    }
+                )
             if checklist.unresolved_ids:
                 for identifier in checklist.unresolved_ids:
                     issues.append(
@@ -1088,7 +1224,7 @@ def migration_validate(
             )
         console.print(table)
         if needs_review:
-            console.print("[yellow]contract review is incomplete[/yellow]")
+            console.print("[yellow]migration contract is not ready[/yellow]")
         else:
             console.print("[green]migration contract is ready to run[/green]")
     if needs_review:
@@ -1280,9 +1416,9 @@ def migration_run(
             console.print()
         console.print(Text(f"dependency lane: {lane_result.name}", style="bold"))
         _render_migration_result(lane_result.result)
-        _print_path_status("report", Path(lane_result.report.name))
+        _print_path_status("report", Path(_cli_path(lane_result.report)))
     if completed.source_provenance is not None:
-        _print_path_status("source provenance", Path(completed.source_provenance.name))
+        _print_path_status("source provenance", Path(_cli_path(completed.source_provenance)))
     if has_error:
         raise typer.Exit(2)
     if has_failure:
@@ -1324,7 +1460,7 @@ def migration_check(
             written = write_migration_json(result, json_output)
         except OSError as exc:
             _fail(f"migration report could not be written ({type(exc).__name__})")
-        _print_path_status("wrote", Path(written.name))
+        _print_path_status("wrote", _written_path(written))
     _render_migration_result(result)
     if result.status is Status.ERROR:
         raise typer.Exit(2)
@@ -1392,7 +1528,7 @@ def evidence_verify(
             written = write_evidence_json(result, json_output)
         except OSError as exc:
             _fail(f"evidence report could not be written ({type(exc).__name__})")
-        _print_path_status("wrote", Path(written.name))
+        _print_path_status("wrote", _written_path(written))
     _render_evidence_result(result)
     if result.status is Status.ERROR:
         raise typer.Exit(2)
