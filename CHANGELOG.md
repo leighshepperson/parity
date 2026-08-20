@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.13.0
+
+### Managed migration workflow
+
+- Replace the asymmetric managed-workspace format with the breaking version 2 schema. Either side
+  may be an exact released requirement or an existing local checkout, declared with exactly one of
+  `reference_package` / `reference_path` and exactly one of `candidate_package` /
+  `candidate_path`. The matching CLI flags are `--reference-package`, `--reference-path`,
+  `--candidate-package` and `--candidate-path`.
+- Let `parity migration init` create the first fixture-backed `parity.toml` and migration ledger
+  with `--target` (or side-specific targets) plus `--fixture`. Existing reviewed case contracts are
+  never overwritten, including when `--force` replaces only the workspace declaration.
+- Bind exact released versions on both target sides, reuse separately hash-pinned locks by default,
+  and retain `--refresh-locks` as the deliberate dependency-update operation. Every local checkout
+  is installed editable, verified and reported with a path-free Git/content identity that replay
+  binds. Local/local runs additionally retain paired driver snapshots and a two-source
+  `source-provenance.json` report.
+
+### CLI and replay
+
+- Add the conventional `parity --version` spelling while retaining `parity version`.
+- Base configured artifact paths on the directory containing the loaded `parity.toml`; managed
+  workspaces reject a config directory that does not contain their workspace and generated
+  environments, keeping automatic replay paths configuration-local. Retain an
+  optional per-side `replay_blockers` map with bounded `live_callable`, `external_python`,
+  `external_workdir`, `external_command` or `missing_command` reason codes when automatic replay is
+  unavailable. Replay errors identify the affected side and the configuration-local repair.
+
 ## 0.12.0
 
 ### Behaviour and findings

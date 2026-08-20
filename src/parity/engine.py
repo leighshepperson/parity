@@ -1211,7 +1211,10 @@ def run_suite(
         try:
             return _configured_case(
                 effective_case,
-                ArtifactStore(config.artifact_dir),
+                ArtifactStore(
+                    config.artifact_dir,
+                    invocation_directory=config._base_directory or Path.cwd(),
+                ),
                 config_sha256=config_sha256,
             )
         except Exception as error:
@@ -1639,11 +1642,70 @@ def _replay_inputs(replay: dict[str, Any], manifest: dict[str, Any], root: Path)
     return inputs
 
 
+_REPLAY_BLOCKER_MESSAGES = {
+    "live_callable": (
+        "{side} live-callable target was not importable. Define it as a module-level import "
+        "target in parity.toml, rerun parity check, and replay the new artifact."
+    ),
+    "external_python": (
+        "{side}.python was outside the recorded configuration directory. Create or select "
+        "a virtual environment inside the directory containing parity.toml, set {side}.python "
+        "to its relative interpreter (or move parity.toml to a common containing directory), "
+        "rerun parity check, and replay the new artifact from that configuration directory."
+    ),
+    "external_workdir": (
+        "{side}.workdir was outside the recorded configuration directory. Move the target under "
+        "the directory containing parity.toml or move parity.toml to a common containing "
+        "directory, rerun parity check, and replay the new artifact from that directory."
+    ),
+    "external_command": (
+        "{side}.command resolved outside the recorded configuration directory. Put the "
+        "executable under the directory containing parity.toml, invoke it through PATH, or move "
+        "parity.toml to a common containing directory; then rerun parity check and replay the new "
+        "artifact from that configuration directory."
+    ),
+    "missing_command": (
+        "{side}.command did not resolve to an existing project file. Fix or recreate the "
+        "executable, rerun parity check, and replay the new artifact."
+    ),
+}
+
+
+def _reject_recorded_replay_blockers(replay: dict[str, Any]) -> None:
+    raw = replay.get("replay_blockers")
+    if raw is None:
+        return
+    if (
+        not isinstance(raw, dict)
+        or not raw
+        or any(side not in {"reference", "candidate"} for side in raw)
+        or any(
+            not isinstance(reason, str) or reason not in _REPLAY_BLOCKER_MESSAGES
+            for reason in raw.values()
+        )
+    ):
+        raise ReplayError("artifact contains an invalid replay blocker declaration")
+    details = [
+        _REPLAY_BLOCKER_MESSAGES[raw[side]].format(side=side)
+        for side in ("reference", "candidate")
+        if side in raw
+    ]
+    raise ReplayError("automatic replay is unavailable: " + " ".join(details))
+
+
+def _missing_replay_target(side: str) -> ReplayError:
+    return ReplayError(
+        f"{side} live-callable target cannot be reconstructed for automatic replay. Define it as "
+        "a module-level import target in parity.toml, rerun parity check, and replay the new "
+        "artifact."
+    )
+
+
 def _restore_environment(case_data: dict[str, Any]) -> None:
     for side in ("reference", "candidate"):
         spec = case_data.get(side)
         if not isinstance(spec, dict):
-            raise ReplayError("live-callable artifacts cannot be replayed automatically")
+            raise _missing_replay_target(side)
         required = spec.get("environment", {})
         if not isinstance(required, dict):
             raise ReplayError("invalid replay environment declaration")
@@ -1666,13 +1728,13 @@ def _contains_redaction(value: Any) -> bool:
 
 
 def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> None:
-    """Resolve sanitized paths relative to the replay invocation directory."""
+    """Resolve sanitized paths from the recorded configuration directory."""
 
     base = invocation_cwd.resolve()
     for side in ("reference", "candidate"):
         spec = case_data.get(side)
         if not isinstance(spec, dict):
-            raise ReplayError("live-callable artifacts cannot be replayed automatically")
+            raise _missing_replay_target(side)
         for field in ("workdir", "python"):
             raw = spec.get(field)
             if raw is None:
@@ -1683,10 +1745,18 @@ def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> No
                 raise ReplayError(f"invalid replay {field} declaration")
             relative = Path(raw)
             if relative.is_absolute():
-                raise ReplayError(f"replay {field} paths must be relative")
+                raise ReplayError(
+                    f"replay {side} {field} must be relative to the recorded configuration "
+                    "directory; place it under the directory containing parity.toml and run "
+                    "replay from there"
+                )
             lexical = Path(os.path.abspath(base / relative))
             if not lexical.is_relative_to(base):
-                raise ReplayError(f"replay {field} paths must stay inside the invocation directory")
+                raise ReplayError(
+                    f"replay {side} {field} paths must stay inside the recorded configuration "
+                    "directory; move it under the directory containing parity.toml and run "
+                    "replay from there"
+                )
             if field == "python":
                 # A normal project venv ends in a symlink to the host's base
                 # Python. The project-local launch path is authoritative; its
@@ -1695,15 +1765,25 @@ def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> No
                 # only the final executable symlink may target the host Python.
                 if not lexical.parent.resolve().is_relative_to(base):
                     raise ReplayError(
-                        "replay python parent directories must stay inside the invocation directory"
+                        f"replay {side}.python parent directories must stay inside the recorded "
+                        "configuration directory; recreate the virtual environment under the "
+                        "directory containing parity.toml"
                     )
                 if not lexical.is_file():
-                    raise ReplayError("replay python path must be an existing file")
+                    raise ReplayError(
+                        f"replay {side} python path must be an existing file; recreate the "
+                        "project-local virtual environment or rerun parity check with its current "
+                        "relative interpreter"
+                    )
                 spec[field] = lexical
                 continue
             resolved = lexical.resolve()
             if not resolved.is_relative_to(base):
-                raise ReplayError(f"replay {field} paths must stay inside the invocation directory")
+                raise ReplayError(
+                    f"replay {side}.{field} must stay inside the recorded configuration "
+                    "directory; move it under the directory containing parity.toml and run "
+                    "replay from there"
+                )
             spec[field] = resolved
         command = spec.get("command")
         if isinstance(command, list) and command:
@@ -1725,7 +1805,8 @@ def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> No
                 executable = Path(os.path.abspath(launch_root / raw_executable))
                 if not executable.is_relative_to(base) or not executable.is_file():
                     raise ReplayError(
-                        "replay command paths must be existing files inside the invocation directory"
+                        "replay command paths must be existing files inside the recorded "
+                        "configuration directory"
                     )
                 command[0] = str(executable)
 
@@ -1762,6 +1843,7 @@ def replay_artifact(path: str | Path) -> SuiteResult:
     ):
         raise ReplayError("replay configuration fingerprint is missing or invalid")
     config_sha256 = raw_config_sha256
+    _reject_recorded_replay_blockers(replay)
     case_data = dict(replay["case"])
     invocation_arguments = (
         case_data.get("static_args"),

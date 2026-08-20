@@ -10,6 +10,7 @@ import pyarrow as pa
 import pytest
 
 from parity.artifacts import ArtifactStore
+from parity.engine import ReplayError, replay_artifact
 from parity.models import (
     CallableSpec,
     CaseConfig,
@@ -83,11 +84,12 @@ def test_inspection_artifact_is_complete_hashed_and_not_claimed_as_replayable(
     assert "expected_runtime" not in replay
     assert "config_sha256" not in replay
     assert "command" not in replay
-    assert replay["working_directory"] == "original invocation directory"
+    assert replay["working_directory"] == "recorded project configuration directory"
     assert replay["path_base"] == "invocation_cwd"
     assert replay["inputs"] == [{"name": "input", "file": "input.arrow"}]
     assert replay["case"]["fixture"] == "input.arrow"
     assert replay["case"]["reference"] is None
+    assert replay["replay_blockers"] == {"reference": "external_workdir"}
     assert replay["case"]["static_kwargs"]["api_key"] == "<redacted>"
     assert replay["case"]["static_kwargs"]["mode"] == "strict"
     assert replay["case"]["reference_kwargs"] == {
@@ -103,6 +105,57 @@ def test_inspection_artifact_is_complete_hashed_and_not_claimed_as_replayable(
     assert "reference-secret" not in replay_text
     assert "candidate-secret" not in replay_text
     assert str(tmp_path) not in replay_text
+
+
+def test_artifact_can_use_a_stable_project_root_from_an_unrelated_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    unrelated = tmp_path / "elsewhere"
+    project.mkdir()
+    unrelated.mkdir()
+    reference_python = project / ".parity/workspace/envs/reference/bin/python"
+    candidate_python = project / ".parity/workspace/envs/candidate/bin/python"
+    for python in (reference_python, candidate_python):
+        python.parent.mkdir(parents=True)
+        python.write_text("", encoding="utf-8")
+    case = CaseConfig(
+        name="stable-root",
+        reference=CallableSpec(
+            target="migration_adapters:reference",
+            workdir=project,
+            python=reference_python,
+        ),
+        candidate=CallableSpec(
+            target="migration_adapters:candidate",
+            workdir=project,
+            python=candidate_python,
+        ),
+        fixture=project / "fixture.arrow",
+    )
+    runtime = collect_runtime_provenance()
+    monkeypatch.chdir(unrelated)
+
+    destination = ArtifactStore(
+        project / ".parity/artifacts",
+        invocation_directory=project,
+    ).write_failure(
+        case,
+        pa.table({"id": [1]}),
+        _result(),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="d" * 64,
+    )
+
+    replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
+    assert "replay_blockers" not in replay
+    assert replay["case"]["reference"]["workdir"] == "."
+    assert replay["case"]["candidate"]["workdir"] == "."
+    assert replay["case"]["reference"]["python"] == (".parity/workspace/envs/reference/bin/python")
+    assert replay["case"]["candidate"]["python"] == (".parity/workspace/envs/candidate/bin/python")
+    assert replay["command"] == ["parity", "replay", "<artifact-path>"]
+    assert str(unrelated) not in json.dumps(replay)
 
 
 def test_artifact_root_is_self_ignoring_without_replacing_user_policy(tmp_path: Path) -> None:
@@ -227,6 +280,66 @@ def test_artifact_preserves_project_virtualenv_python_entrypoint(tmp_path: Path)
     assert replay["case"]["reference"]["python"] == ".venv/bin/python"
     assert replay["case"]["candidate"]["python"] == ".venv/bin/python"
     assert replay["config_sha256"] == config_sha256
+
+
+@pytest.mark.parametrize(
+    ("field", "reason", "message"),
+    [
+        (
+            "workdir",
+            "external_workdir",
+            "reference.workdir was outside the recorded configuration directory",
+        ),
+        (
+            "python",
+            "external_python",
+            "reference.python was outside the recorded configuration directory",
+        ),
+    ],
+)
+def test_external_target_paths_record_an_actionable_replay_reason(
+    tmp_path: Path,
+    field: str,
+    reason: str,
+    message: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    reference = (
+        CallableSpec(target="project:reference", python=external / "bin" / "python")
+        if field == "python"
+        else CallableSpec(target="project:reference", workdir=external)
+    )
+    runtime = collect_runtime_provenance()
+    case = CaseConfig(
+        name=f"external-{field}",
+        reference=reference,
+        candidate=CallableSpec(target="project:candidate"),
+        fixture=project / "source.arrow",
+    )
+
+    old_directory = Path.cwd()
+    try:
+        os.chdir(project)
+        destination = ArtifactStore(project / "artifacts").write_failure(
+            case,
+            pa.table({"id": [1]}),
+            _result(),
+            runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+            config_sha256="c" * 64,
+        )
+    finally:
+        os.chdir(old_directory)
+
+    replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
+    assert replay["replay_blockers"] == {"reference": reason}
+    assert str(external) not in json.dumps(replay)
+    with pytest.raises(ReplayError, match=message) as captured:
+        replay_artifact(destination)
+    assert "rerun parity check" in str(captured.value)
+    assert "configuration directory" in str(captured.value)
 
 
 def test_artifact_rejects_malformed_config_fingerprint(tmp_path: Path) -> None:

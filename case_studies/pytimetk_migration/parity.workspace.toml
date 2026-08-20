@@ -1,6 +1,6 @@
-version = 1
-reference = "pytimetk==2.5.1"
-candidate = "../pytimetk-migration-candidate"
+version = 2
+reference_package = "pytimetk==2.5.1"
+candidate_path = "../pytimetk-migration-candidate"
 python = "3.12"
 config = "parity.workspace-config.toml"
 manifest = "migration.toml"

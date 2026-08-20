@@ -112,12 +112,30 @@ neither target runs and replay returns an error.
 Evidence without a complete runtime and configuration binding is inspectable but cannot be replayed
 automatically.
 
+For configured runs, project-relative replay paths are based on the directory containing the loaded
+`parity.toml`, not whichever directory happened to launch `parity check` or `migration run`. Launch
+replay from that configuration directory. In the default managed layout this means, for example:
+
+```bash
+(cd migrations && parity replay .parity/<case>/<finding-directory>)
+```
+
+Use module-level import targets and keep configured interpreters, workdirs and path-like command
+executables inside that configuration directory. A live callable or external/missing path still
+produces inspectable evidence, but cannot be reconstructed automatically. Replay identifies the
+affected side and explains whether to author an import target, create a configuration-local virtual
+environment, move a workdir/executable inside the configuration directory or rerun after recreating
+a missing executable.
+For managed execution, the workspace directory and its generated environments must therefore be
+contained by the configuration directory. The default layout places both TOML files in
+`migrations/` and satisfies this automatically.
+
 When a JSON suite or migration report retains several failures, verify all of its referenced
 artifacts in report order:
 
 ```bash
-parity evidence verify .parity/migration-status.json \
-  --json .parity/evidence-status.json
+(cd migrations && parity evidence verify .parity/migration-status.json \
+  --json .parity/evidence-status.json)
 ```
 
 By default, a report anywhere beneath its reported artifact directory is self-locating. Otherwise,
@@ -126,7 +144,10 @@ same directory has been restored elsewhere. Exit `0` means every finding replaye
 mismatch signature, `1` means at least one valid finding is stale (it now passes or produces a
 different mismatch shape), and `2` means report, artifact, runtime or execution evidence could not
 be verified. Terminal and JSON output include a bounded, data-safe reason code for every stale or
-errored artifact, without echoing a private path or caught exception.
+errored artifact, without echoing a private path or caught exception. When collection itself cannot
+preserve an executable replay contract, `replay.json` retains the affected side in an optional
+`replay_blockers` map using `live_callable`, `external_python`, `external_workdir`,
+`external_command` or `missing_command`.
 Parity verifies integrity and behavioural reproduction;
 the `ms3:...` mismatch classifier is not a cryptographic signature or source attestation. Replay
 executes the configured project code, so verify only artifacts and checkouts you trust.
@@ -279,23 +300,53 @@ exports, documentation, signatures, upstream tests, wrappers and exclusions. The
 
 ## Managed migration workspaces
 
-Keep migration wrappers and declarations in `migrations/`, outside the candidate package's import
-root. Start with one fixture-backed core case:
+Keep migration wrappers and declarations in `migrations/`, outside either package's import root. For
+a simple published-package upgrade, one command creates a fixture-backed case, starter ledger and
+managed workspace:
 
 ```bash
 python -m pip install "parity-check[workspace]"
-parity init migrations/parity.toml \
-  --reference your_library.api:transform \
-  --candidate your_library.api:transform \
-  --fixture tests/fixtures/input.parquet
-parity migration init --reference "$REFERENCE_PACKAGE_SPEC"
+parity migration init \
+  --reference-package 'your-library==1.2.3' \
+  --candidate-package 'your-library==2.0.0' \
+  --target migration_adapters:transform \
+  --fixture tests/fixtures/input.parquet \
+  --case-name transform
 parity migration run
 ```
 
-`migration init` writes `migrations/parity.workspace.toml`. If the configured ledger is absent, it
-also creates `migrations/migration.toml` with one `core-regression` unit mapped to every configured
-case; review that inventory before treating it as a completion gate. The exact released requirement
-supplies the reference package and the current checkout is installed as the candidate.
+`--target` supplies the same import target on both sides. Use `--reference-target` and
+`--candidate-target` when the release changes its import path or wrapper. The scaffolder also accepts
+`--reference-adapter`, `--candidate-adapter`, repeatable `--record-distribution` and repeatable
+`--row-key`. `--fixture` is interpreted from the command's current directory and stored relative to
+the generated `parity.toml`. A target names an existing importable callable; scaffolding writes its
+configuration but does not generate wrapper implementation code. Managed wrapper modules are
+imported from the workspace directory. Before publishing, the command validates target spelling,
+adapter values, fixture readability and the resulting configuration; it does not import the target.
+`migration setup` subsequently validates package resolution and editable origins, while `migration
+run` also preflights configured target imports. The starter ledger contains one `core-regression`
+unit mapped to every configured case.
+
+Treat the generated targets, adapters, fixture boundary, comparison policy and ledger as reviewed
+code. Scaffolding does not establish that they describe the whole public contract. If
+`migrations/parity.toml` already exists, omit `--target`, `--fixture` and the other case-scaffolding
+options: `migration init` loads the existing contract and refuses to overwrite it. `--force`
+replaces only `parity.workspace.toml`; it never replaces the reviewed case configuration.
+
+Each side independently accepts an exact released package or an existing local checkout:
+
+| Direction | Reference declaration | Candidate declaration |
+|---|---|---|
+| released→released | `--reference-package package==1.2.3` | `--candidate-package package==2.0.0` |
+| released→local | `--reference-package package==1.2.3` | `--candidate-path ../candidate` |
+| local→released | `--reference-path ../reference` | `--candidate-package package==2.0.0` |
+| local→local | `--reference-path ../reference` | `--candidate-path ../candidate` |
+
+The package form must be one unconditional, non-wildcard `==` requirement; extras such as
+`package[io]==2.0.0` are supported. The reference requires exactly one form. Candidate package/path
+flags are mutually exclusive; omitting both is shorthand for `--candidate-path .`. The saved
+version 2 workspace uses only `reference_package` / `reference_path` and `candidate_package` /
+`candidate_path` as source keys, with exactly one key from each pair.
 
 For main-versus-branch, worktree-versus-worktree or local-refactor regression testing, use the same
 workflow with two existing checkouts:
@@ -303,12 +354,11 @@ workflow with two existing checkouts:
 ```bash
 parity migration init \
   --reference-path ../main-worktree \
-  --candidate ../feature-worktree
+  --candidate-path ../feature-worktree
 parity migration run
 ```
 
-`reference` and `reference_path` are mutually exclusive. Parity uses both local sources in place;
-it never creates, switches, resets or edits a worktree.
+Parity uses local sources in place; it never creates, switches, resets or edits a worktree.
 
 The shared target interpreter defaults to the controller's Python. When the migration also changes
 Python, declare each side directly:
@@ -316,7 +366,7 @@ Python, declare each side directly:
 ```bash
 parity migration init \
   --reference-path ../main-worktree \
-  --candidate ../feature-worktree \
+  --candidate-path ../feature-worktree \
   --reference-python 3.8 \
   --candidate-python 3.12
 ```
@@ -327,24 +377,28 @@ needs that library on its side; declare it in the subject package or lane requir
 not already a dependency. The Parity controller remains on Python 3.11 or newer.
 
 `migration run` resolves a separate hash-pinned requirements lock for each target, creates both
-isolated targets, enforces the reference distribution contract before target import, records
-the subject distribution on both sides, runs the complete ledger and writes
+isolated targets, binds every exact released requirement to its corresponding target before import,
+records the subject distribution on both sides, runs the complete ledger and writes
 `migrations/.parity/workspace/reports/default.json`. Re-running uses the existing locks; pass
 `--refresh-locks` only for a deliberate dependency update. `parity migration setup` prepares the
-same environments without executing project callables.
+same environments without executing project callables. A case-level `required_distributions`
+constraint that excludes either workspace version is rejected instead of silently weakening the
+exact package contract.
 
-For local/local runs, setup installs each checkout editable into only its own environment and proves that
-both the installed distribution metadata and its importable modules resolve to the declared source.
-The workspace directory and `PYTHONPATH` may not expose either checkout directly. Before setup,
-after setup and around every dependency lane, Parity captures both Git HEADs, dirty flags and a
-deterministic SHA-256 digest of tracked plus non-ignored untracked worktree content. A change to
-either source invalidates all active results. Each portable target also computes this identity before
-execution. The lane report and finding replay contract retain the path-free identity, so changing a
-checkout without changing its package version makes replay return `ERROR` before invoking either
-target. A successful run writes the relocatable `source-provenance.json` beside the lane reports; it
-contains hashes and state only, never checkout paths, branch names or file names.
-Dirty checkouts are allowed and explicitly bound by that digest; both checkouts must still have a
-committed Git HEAD.
+During `migration run`, every local side is installed editable only in its own environment and its
+installed distribution metadata and importable modules must resolve to the declared source. Each
+local target reports a path-free Git HEAD, dirty flag and deterministic source digest; findings and
+replay bind that target identity. A local source must therefore be a Git worktree with a committed
+HEAD. Dirty worktrees are allowed and explicitly bound by the digest. The workspace directory and
+`PYTHONPATH` may not expose a managed checkout directly.
+
+Local/local runs add a stronger paired driver contract. Before setup, after setup and around every
+dependency lane, Parity snapshots both worktrees and invalidates all active results if either source
+changes. It checks that each target identity matches those snapshots and writes the relocatable
+`source-provenance.json` beside the lane reports. That file contains hashes and state only, never
+checkout paths, branch names or file names. Released/local and local/released runs retain the one
+local target identity in runtime/finding/replay evidence, but do not produce this paired report or
+the continuous two-worktree driver checks.
 
 The environment builder and resolver are implementation details behind `migration setup/run`.
 Users do not need to author a separate environment-runner configuration. Target environments install
@@ -353,9 +407,10 @@ supply any pandas, Polars or other adapter dependency. They do not install the f
 application or its controller dependencies.
 
 The managed path verifies that every local checkout's statically declared distribution name matches
-the subject reference. Supported declarations are `project.name`, `tool.poetry.name`, and
+the shared subject name. Supported declarations are `project.name`, `tool.poetry.name`, and
 `setup.cfg` `[metadata] name`. For dynamic `setup.py`-only metadata, provision the two target
-interpreters yourself and keep using the explicit `reference.python` and `candidate.python` fields.
+interpreters yourself and use the optional unmanaged path with explicit `reference.python` and
+`candidate.python` fields.
 
 ### Rolling A→B→C released migrations
 
@@ -364,13 +419,16 @@ For A→B, keep durable checks in a `core-regression` unit and add units or case
 transition. Once B is published and becomes the next baseline:
 
 ```bash
-parity migration advance --reference "$NEXT_REFERENCE_PACKAGE_SPEC"
+parity migration advance --reference-package "$NEXT_REFERENCE_PACKAGE_SPEC"
 # update or remove only the B→C-specific cases and manifest units
 parity migration run
 ```
 
-`advance` preserves the candidate checkout, Python, lanes, case config, ledger and report location.
+`advance` preserves the candidate declaration, Python, lanes, case config, ledger and report location.
 It atomically changes only the exact reference and invalidates the previous active lane reports.
+If the candidate is also an exact released package, update `candidate_package` separately (or
+regenerate the reviewed workspace with `migration init --force`) before running the next pair;
+Parity does not guess the next candidate release.
 The next run may retain compatible transitive pins; use `--refresh-locks` only when dependency
 selection itself should change. Old counterexample directories are inert local evidence and may be
 deleted when the previous transition is no longer needed.
@@ -398,15 +456,17 @@ cases = ["new-engine-path", "changed-default"]
 Managed targets execute from the directory containing `parity.workspace.toml`. This prevents a
 flat-layout checkout from shadowing an installed package. Put wrapper modules in `migrations/`;
 import local subjects through their editable installations, not by adding either project root to
-`PYTHONPATH`. Parity rejects a managed layout that exposes a managed checkout directly.
+`PYTHONPATH`. Parity rejects a managed layout that exposes a managed checkout directly. It also
+requires the directory containing the configured `parity.toml` to contain this workspace directory,
+which keeps automatic replay paths local; colocating both files is the default and simplest layout.
 
 Add repeatable dependency lanes when the same migration must pass under more than one constraints
 file:
 
 ```bash
 parity migration init \
-  --reference "$REFERENCE_PACKAGE_SPEC" \
-  --candidate . \
+  --reference-package "$REFERENCE_PACKAGE_SPEC" \
+  --candidate-path . \
   --lane minimum=requirements/minimum.txt \
   --lane current=requirements/current.txt
 parity migration run
@@ -745,10 +805,13 @@ parity check [--config PATH] [--case NAME]    run campaigns
              [--json PATH] [--junit PATH] [--markdown PATH]
 parity migration check --manifest PATH        gate the declared migration inventory
                        --config PATH [--json PATH]
-parity migration init (--reference PACKAGE==VERSION | --reference-path PATH)
-                      [--candidate PATH]       declare a managed workspace
+parity migration init (--reference-package PACKAGE==VERSION | --reference-path PATH)
+                      [--candidate-package PACKAGE==VERSION | --candidate-path PATH]
+                      [--target TARGET | --reference-target TARGET
+                                       --candidate-target TARGET]
+                      [--fixture FILE]         scaffold or declare a managed workspace
                       [--lane NAME[=REQUIREMENTS]]
-parity migration advance --reference PACKAGE==VERSION
+parity migration advance --reference-package PACKAGE==VERSION
                                               move the active adjacent pair
 parity migration setup [--workspace PATH]     prepare locked target environments
                        [--refresh-locks]
@@ -760,7 +823,7 @@ parity replay ARTIFACT                        reproduce a counterexample
 parity doctor [--json]                        report runtime readiness
 parity doctor --config PATH [--case NAME]     preflight configured targets
               [--json]
-parity version                                print the installed version
+parity --version | parity version             print the installed version
 ```
 
 ## Current boundaries

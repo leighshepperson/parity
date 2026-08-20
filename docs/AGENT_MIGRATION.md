@@ -73,22 +73,39 @@ An uncovered unit exits `1`. An unknown case name or invalid manifest exits `2` 
 callables execute. The gate runs the union of mapped cases once, even when several units share a
 case, and attempts every mapped case rather than honouring `fail_fast`.
 
-For a managed environment matrix, put wrappers and configuration in `migrations/`, outside the
-candidate import root. Declare the workspace after the candidate checkout and `parity.toml` exist:
+For a managed environment matrix, put wrappers and declarations in `migrations/`, outside either
+package import root. For a published-package upgrade, the agent can scaffold the first contract and
+declare both exact releases together:
 
 ```bash
 python -m pip install "parity-check[workspace]"
 parity migration init \
-  --reference "$REFERENCE_PACKAGE_SPEC" \
+  --reference-package "$REFERENCE_PACKAGE_SPEC" \
+  --candidate-package "$CANDIDATE_PACKAGE_SPEC" \
+  --target migration_adapters:transform \
+  --fixture tests/fixtures/input.parquet \
   --lane minimum=requirements/minimum.txt \
   --lane current=requirements/current.txt
 ```
 
-This writes `migrations/parity.workspace.toml` and creates a `core-regression` starter ledger from
-the configured cases when `migrations/migration.toml` is absent. Review that generated inventory;
-generation does not prove completeness. The command does not clone or select source, apply the
-migration patch, or modify the checkout. Source preparation remains a separate, reviewable agent
-action.
+When absent, this writes a minimal fixture-backed `migrations/parity.toml`,
+`migrations/parity.workspace.toml` and a `core-regression` starter ledger. Use
+`--reference-target` and `--candidate-target` instead of the shared target when the wrappers differ.
+Review all generated targets, adapters, comparison policy and inventory; generation does not prove
+completeness. If `parity.toml` already exists, omit the target/fixture scaffolding options. Parity
+refuses to overwrite that reviewed contract, and `--force` replaces only the workspace declaration.
+The fixture path is interpreted from the invocation directory and stored relative to the generated
+config. Target modules must already exist and be importable from the workspace directory; the
+command does not generate wrapper code, clone or select source, apply the migration patch, or modify
+a checkout. Initialization validates target spelling and fixture readability; `migration run`
+preflights the import after environment setup. Source preparation remains a separate, reviewable
+agent action.
+
+Either side may instead be local: combine `--reference-package` or `--reference-path` with
+`--candidate-package` or `--candidate-path`. Exact released requirements are bound on their
+corresponding target before import. The reference requires exactly one package/path flag. Candidate
+flags are mutually exclusive; omitting both is shorthand for `--candidate-path .`. The saved v2
+workspace always contains exactly one source field per side.
 
 For a pull request, local refactor or two-worktree comparison, declare both reviewed sources
 directly:
@@ -96,13 +113,16 @@ directly:
 ```bash
 parity migration init \
   --reference-path ../main-worktree \
-  --candidate ../agent-worktree
+  --candidate-path ../agent-worktree
 parity migration run
 ```
 
 Do not add either checkout to `PYTHONPATH`. Parity provisions separate editable environments,
-verifies import origins, records path-free Git/content provenance and fails closed if a source
-changes. It never creates, switches or resets a worktree for the agent.
+verifies import origins and binds each local target's path-free Git/content identity into findings
+and replay. Every local source must be a Git worktree with committed HEAD. Local/local runs add
+paired driver snapshots, fail closed if either source changes and write the two-source
+`source-provenance.json`; mixed runs retain the one local target identity but do not write that
+paired report. Parity never creates, switches or resets a worktree for the agent.
 
 ## 3. Build evidence one unit at a time
 
@@ -132,20 +152,28 @@ parity check \
   --case lags-null-date \
   --no-performance \
   --json migrations/.parity/lags-null-date.json
-parity replay migrations/.parity/lags-null-date/<finding-directory>
+(cd migrations && parity replay .parity/lags-null-date/<finding-directory>)
 ```
 
 When a suite or migration JSON report references several retained findings, batch the same check:
 
 ```bash
-parity evidence verify migrations/.parity/migration-status.json \
-  --json migrations/.parity/evidence-status.json
+(cd migrations && parity evidence verify .parity/migration-status.json \
+  --json .parity/evidence-status.json)
 ```
 
 Exit `0` means every artifact reproduced its expected mismatch shape, `1` means at least one is
 stale, and `2` means verification errored. Treat `ms3:...` as a data-free classifier, not a digital
 signature or proof of source identity. This command re-executes project code; do not run an
 unreviewed checkout or artifact outside a sandbox.
+
+Replayable target paths are relative to the directory containing the loaded `parity.toml`, which is
+why the managed examples enter `migrations/` only in a subshell. Keep the managed workspace and its
+environments inside that configuration directory, and keep wrappers in the workspace directory.
+Interpreters, workdirs and path-like command executables must remain configuration-local. If a live
+callable or external/missing path makes an artifact evidence-only, replay names the affected side
+and tells the agent which import target or configuration-local path must be fixed before collecting
+replacement evidence.
 
 Classify each mismatch as a candidate defect, reference defect, intentional contract change,
 invalid generated domain or unresolved decision. Never make a run green by widening tolerances,
@@ -168,10 +196,11 @@ With `parity.workspace.toml`, use one command for the complete matrix:
 parity migration run
 ```
 
-Parity resolves a hash-pinned requirements lock, prepares isolated reference/candidate target
-environments and writes one migration report per lane. Environment creation and resolution stay
-behind the Parity command; no separate runner configuration is required. Re-running retains the
-selected lock; use `--refresh-locks` only as an intentional dependency change. Explicit
+Parity resolves a hash-pinned requirements lock for each side and lane, prepares isolated
+reference/candidate target environments, verifies every local editable installation during the run
+and writes one migration report per lane. Environment creation and resolution stay behind the
+Parity command; no separate runner configuration is required. Re-running retains the selected
+locks; use `--refresh-locks` only as an intentional dependency change. Explicit
 `reference.python` and `candidate.python` configs remain valid when the project or CI platform
 provisions environments itself.
 
@@ -180,14 +209,15 @@ For a sequence of adjacent migrations, keep one active workspace. Preserve a per
 advance A→B to B→C without creating a history graph:
 
 ```bash
-parity migration advance --reference "$NEXT_REFERENCE_PACKAGE_SPEC"
+parity migration advance --reference-package "$NEXT_REFERENCE_PACKAGE_SPEC"
 parity migration run
 ```
 
 Advancing preserves lanes and paths, changes only the exact reference and invalidates active lane
-reports. Do not infer success from a report left by the previous pair. Historical artifacts are
-local evidence, not part of the active completion result, and can be discarded under the project's
-retention policy.
+reports. When the candidate is also an exact release, the agent must separately update the reviewed
+`candidate_package` for the next pair; `advance` never guesses it. Do not infer success from a report
+left by the previous pair. Historical artifacts are local evidence, not part of the active
+completion result, and can be discarded under the project's retention policy.
 
 ## 5. Enforce completion
 
@@ -203,7 +233,7 @@ Verify evidence only for reports containing retained failures; a passing report 
 no counterexample artifacts:
 
 ```bash
-parity evidence verify path/to/retained-failure-report.json
+(cd migrations && parity evidence verify .parity/workspace/reports/default.json)
 ```
 
 For externally managed interpreters, use `parity doctor --config`

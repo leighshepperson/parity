@@ -119,9 +119,9 @@ def _case_supports_automatic_replay(
 
 def _spec_for_replay(
     spec: CallableSpec | None, *, invocation_directory: Path
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str | None]:
     if spec is None:
-        return None
+        return None, "live_callable"
     workdir: str | None = None
     if spec.workdir is not None:
         try:
@@ -131,7 +131,7 @@ def _spec_for_replay(
             # silently turn a failure into a pass. Preserve the evidence, but
             # decline automatic replay when its import root cannot be recorded
             # without exposing an absolute host path.
-            return None
+            return None, "external_workdir"
     python: str | None = None
     if spec.python is not None:
         try:
@@ -146,7 +146,7 @@ def _spec_for_replay(
             # As with import roots, substituting the current interpreter could
             # silently change dependency semantics. External interpreters make
             # the artifact evidence-only unless the user authors a config.
-            return None
+            return None, "external_python"
     command: list[str] | None = None
     if spec.command is not None:
         command = []
@@ -177,9 +177,9 @@ def _spec_for_replay(
                 except ValueError:
                     # Never persist an external host path or substitute another
                     # executable during replay.
-                    return None
+                    return None, "external_command"
                 if not resolved_executable.is_file():
-                    return None
+                    return None, "missing_command"
                 sanitized = os.path.relpath(resolved_executable, launch_root)
                 if os.sep not in sanitized and (os.altsep is None or os.altsep not in sanitized):
                     sanitized = f".{os.sep}{sanitized}"
@@ -190,21 +190,40 @@ def _spec_for_replay(
             elif _SECRET_KEY.search(argument.lstrip("-")):
                 redact_next = True
             command.append(sanitized)
-    return {
-        "target": spec.target,
-        "command": command,
-        "canonicalizer": spec.canonicalizer,
-        "adapter": spec.adapter,
-        "pandas_input": spec.pandas_input,
-        "record_distributions": spec.record_distributions,
-        "required_distributions": spec.required_distributions,
-        "native_threads": spec.native_threads,
-        # Replays inherit environment from the caller.  Recording even innocent
-        # values makes accidental credential persistence much more likely.
-        "python": python,
-        "workdir": workdir,
-        "environment": dict.fromkeys(sorted(spec.environment), "<required-from-environment>"),
-    }
+    return (
+        {
+            "target": spec.target,
+            "command": command,
+            "canonicalizer": spec.canonicalizer,
+            "adapter": spec.adapter,
+            "pandas_input": spec.pandas_input,
+            "record_distributions": spec.record_distributions,
+            "required_distributions": spec.required_distributions,
+            "native_threads": spec.native_threads,
+            # Replays inherit environment from the caller.  Recording even innocent
+            # values makes accidental credential persistence much more likely.
+            "python": python,
+            "workdir": workdir,
+            "environment": dict.fromkeys(sorted(spec.environment), "<required-from-environment>"),
+        },
+        None,
+    )
+
+
+def _specs_for_replay(
+    reference: CallableSpec | None,
+    candidate: CallableSpec | None,
+    *,
+    invocation_directory: Path,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, str]]:
+    endpoints: dict[str, dict[str, Any] | None] = {}
+    blockers: dict[str, str] = {}
+    for side, spec in (("reference", reference), ("candidate", candidate)):
+        endpoint, blocker = _spec_for_replay(spec, invocation_directory=invocation_directory)
+        endpoints[side] = endpoint
+        if blocker is not None:
+            blockers[side] = blocker
+    return endpoints["reference"], endpoints["candidate"], blockers
 
 
 def _case_for_replay(
@@ -215,7 +234,7 @@ def _case_for_replay(
     invocation_directory: Path,
     input_files: Mapping[str, str],
     single_input: bool,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, str]]:
     if isinstance(case, CaseConfig):
         config = case.model_dump(mode="json", by_alias=True)
         generation = config.get("generation")
@@ -252,21 +271,27 @@ def _case_for_replay(
                         config["input_bundle"] = None
                         break
                     input_spec["fixture"] = filename
-        config["reference"] = _spec_for_replay(
-            case.reference, invocation_directory=invocation_directory
+        reference_config, candidate_config, blockers = _specs_for_replay(
+            case.reference,
+            case.candidate,
+            invocation_directory=invocation_directory,
         )
-        config["candidate"] = _spec_for_replay(
-            case.candidate, invocation_directory=invocation_directory
-        )
+        config["reference"] = reference_config
+        config["candidate"] = candidate_config
         config["static_kwargs"] = _sanitize_json(config.get("static_kwargs", {}))
         config["reference_kwargs"] = _sanitize_json(config.get("reference_kwargs", {}))
         config["candidate_kwargs"] = _sanitize_json(config.get("candidate_kwargs", {}))
         config["static_args"] = _sanitize_json(config.get("static_args", []))
-        return config
+        return config, blockers
+    reference_config, candidate_config, blockers = _specs_for_replay(
+        reference,
+        candidate,
+        invocation_directory=invocation_directory,
+    )
     replay_case: dict[str, Any] = {
         "name": case,
-        "reference": _spec_for_replay(reference, invocation_directory=invocation_directory),
-        "candidate": _spec_for_replay(candidate, invocation_directory=invocation_directory),
+        "reference": reference_config,
+        "candidate": candidate_config,
     }
     if single_input:
         replay_case["fixture"] = next(iter(input_files.values()))
@@ -276,7 +301,7 @@ def _case_for_replay(
             "inputs": {name: {"fixture": filename} for name, filename in input_files.items()},
             "relationships": [],
         }
-    return replay_case
+    return replay_case, blockers
 
 
 def _result_payload(result: ExampleResult | BaseModel | Observation | dict[str, Any]) -> Any:
@@ -290,8 +315,18 @@ def _result_payload(result: ExampleResult | BaseModel | Observation | dict[str, 
 class ArtifactStore:
     """Write and inspect Parity failure campaigns beneath one root."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        invocation_directory: str | Path | None = None,
+    ) -> None:
         self.root = Path(root)
+        self.invocation_directory = (
+            Path(invocation_directory).resolve()
+            if invocation_directory is not None
+            else Path.cwd().resolve()
+        )
 
     def write_failure(
         self,
@@ -378,11 +413,11 @@ class ArtifactStore:
                 and runtime_provenance.candidate is not None
                 and config_sha256 is not None
             )
-            replay_case = _case_for_replay(
+            replay_case, replay_blockers = _case_for_replay(
                 case,
                 reference,
                 candidate,
-                invocation_directory=Path.cwd(),
+                invocation_directory=self.invocation_directory,
                 input_files=input_files,
                 single_input=single_input,
             )
@@ -391,7 +426,7 @@ class ArtifactStore:
                 # named bundles. A failure without complete bindings remains
                 # useful inspection evidence, but cannot execute automatically.
                 "version": 1,
-                "working_directory": "original invocation directory",
+                "working_directory": "recorded project configuration directory",
                 "path_base": "invocation_cwd",
                 "case": replay_case,
                 "environment": "inherited; values are never stored in artifacts",
@@ -399,6 +434,11 @@ class ArtifactStore:
                     {"name": name, "file": filename} for name, filename in input_files.items()
                 ],
             }
+            if replay_blockers:
+                # Preserve only a bounded reason code, never an external path.
+                # This lets replay explain why reconstruction was declined
+                # without leaking host layout into retained evidence.
+                replay["replay_blockers"] = replay_blockers
             if runtime_provenance is not None:
                 replay["expected_runtime"] = runtime_provenance.model_dump(mode="json")
             if config_sha256 is not None:
