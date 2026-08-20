@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pyarrow as pa
@@ -86,10 +87,95 @@ def test_table_from_rows_supports_temporal_values() -> None:
     assert table.column("day").to_pylist() == [dt.date(2024, 2, 29)]
 
 
+def test_table_from_rows_preserves_both_ambiguous_timezone_instants() -> None:
+    zone = ZoneInfo("America/New_York")
+    first = dt.datetime(2024, 11, 3, 1, 30, tzinfo=zone, fold=0)
+    second = dt.datetime(2024, 11, 3, 1, 30, tzinfo=zone, fold=1)
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="at",
+                dtype="datetime",
+                nullable=False,
+                timezone="America/New_York",
+            )
+        ]
+    )
+
+    table = table_from_rows(schema, [{"at": first}, {"at": second}])
+    stored_instants = table.column("at").cast(pa.int64()).to_pylist()
+    round_tripped_instants = [value.astimezone(dt.UTC) for value in table.column("at").to_pylist()]
+
+    assert stored_instants == [1730611800000000, 1730615400000000]
+    assert round_tripped_instants == [
+        dt.datetime(2024, 11, 3, 5, 30, tzinfo=dt.UTC),
+        dt.datetime(2024, 11, 3, 6, 30, tzinfo=dt.UTC),
+    ]
+
+
 def test_table_from_rows_rejects_values_outside_declared_dtype() -> None:
     schema = FrameSchema(columns=[ColumnSchema(name="id", dtype="int64")])
     with pytest.raises(ValueError, match="declared dtype"):
         table_from_rows(schema, [{"id": "not-an-integer"}])
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        ColumnSchema(
+            name="code",
+            dtype="string",
+            regex=r"[A-Z]{2}[0-9]{2}",
+            categories=["AB12", "bad"],
+        ),
+        ColumnSchema(
+            name="code",
+            dtype="string",
+            min_length=4,
+            categories=["valid", "no"],
+        ),
+    ],
+)
+def test_schema_rejects_categories_outside_text_constraints(column: ColumnSchema) -> None:
+    with pytest.raises(ValueError, match="categorical values outside"):
+        validate_frame_schema(FrameSchema(columns=[column]))
+
+
+def test_schema_rejects_examples_outside_the_complete_column_domain() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="code",
+                dtype="string",
+                nullable=False,
+                regex=r"[A-Z]{2}[0-9]{2}",
+                min_length=4,
+                max_length=4,
+                categories=["AB12", "CD34"],
+                examples=["outside"],
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="examples outside its declared domain"):
+        validate_frame_schema(schema)
+
+
+def test_schema_accepts_iso_datetime_examples_in_the_configured_zone() -> None:
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="at",
+                dtype="datetime",
+                timezone="America/New_York",
+                minimum="2024-01-01T00:00:00",
+                maximum="2024-12-31T23:59:59",
+                examples=["2024-11-03T01:30:00-04:00"],
+            )
+        ]
+    )
+
+    validate_frame_schema(schema)
 
 
 def test_sorted_by_uses_composite_lexicographic_order_and_null_placement() -> None:
@@ -407,7 +493,7 @@ def test_equal_row_count_rejects_a_schema_with_no_representable_rows() -> None:
         EqualRowCount(inputs=["left", "right"]),
     )
 
-    with pytest.raises(ValueError, match="incompatible row ranges"):
+    with pytest.raises(ValueError, match="no values representable"):
         validate_bundle_schemas(bundle, schemas)
 
 

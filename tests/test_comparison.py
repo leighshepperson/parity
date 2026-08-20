@@ -932,11 +932,11 @@ def test_mismatch_signature_is_stable_across_values_indices_and_secondary_sympto
 
     assert mismatch_signature([first]) == mismatch_signature([another_witness])
     assert mismatch_signature([first, secondary]) == mismatch_signature([first])
-    assert mismatch_signature([first]).startswith("ms1:")
+    assert mismatch_signature([first]).startswith("ms3:")
     assert len(mismatch_signature([first])) == 68
 
 
-def test_mismatch_signature_elides_field_names_and_keeps_primary_contract_distinctions() -> None:
+def test_mismatch_signature_opaquely_separates_fields_and_keeps_contract_distinctions() -> None:
     amount = Mismatch(
         kind=MismatchKind.VALUE,
         message="values differ",
@@ -945,7 +945,7 @@ def test_mismatch_signature_elides_field_names_and_keeps_primary_contract_distin
     currency = amount.model_copy(update={"path": "$[0].currency"})
     shape = Mismatch(kind=MismatchKind.SHAPE, message="row counts differ", path="$")
 
-    assert mismatch_signature([amount]) == mismatch_signature([currency])
+    assert mismatch_signature([amount]) != mismatch_signature([currency])
     assert mismatch_signature([amount, shape]) == mismatch_signature([shape, amount])
 
 

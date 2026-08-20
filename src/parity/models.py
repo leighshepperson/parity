@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import keyword
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     BaseModel,
@@ -68,10 +70,38 @@ class ColumnSchema(StrictModel):
     maximum: JsonValue = None
     categories: list[JsonValue] | None = None
     examples: list[JsonValue] = Field(default_factory=list)
+    regex: str | None = Field(default=None, max_length=4_096)
+    min_length: int | None = Field(default=None, ge=0)
+    max_length: int | None = Field(default=None, ge=0)
     timezone: str | None = None
 
     @model_validator(mode="after")
     def validate_bounds(self) -> ColumnSchema:
+        from parity.canonical import dtype_family
+
+        family = dtype_family(self.dtype)
+        if any(
+            value is not None for value in (self.regex, self.min_length, self.max_length)
+        ) and family not in {"string", "category"}:
+            raise ValueError("regex and length bounds are only valid for text columns")
+        if (
+            self.min_length is not None
+            and self.max_length is not None
+            and self.min_length > self.max_length
+        ):
+            raise ValueError("min_length cannot be greater than max_length")
+        if self.regex is not None:
+            try:
+                re.compile(self.regex)
+            except re.error as exc:
+                raise ValueError(f"invalid regex: {exc}") from exc
+        if self.timezone is not None:
+            if family != "datetime":
+                raise ValueError("timezone is only valid for datetime columns")
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError(f"unknown IANA timezone: {self.timezone!r}") from exc
         if self.categories is not None and not self.categories:
             raise ValueError("categories must contain at least one value")
         if self.categories is not None:
@@ -382,9 +412,11 @@ class InputBundle(StrictModel):
 
 
 class CallableSpec(StrictModel):
-    """Importable implementation and the environment in which it should run."""
+    """One Python or protocol-command implementation and its environment."""
 
-    target: str
+    target: str | None = None
+    command: list[str] | None = None
+    canonicalizer: str | None = None
     adapter: AdapterName = "auto"
     pandas_input: PandasInput = "arrow"
     python: Path | None = None
@@ -396,13 +428,35 @@ class CallableSpec(StrictModel):
     required_distributions: dict[str, str] = Field(
         default_factory=dict, max_length=MAX_RECORDED_DISTRIBUTIONS
     )
+    native_threads: int | None = Field(default=None, ge=1, le=256)
 
-    @field_validator("target")
+    @field_validator("target", "canonicalizer")
     @classmethod
-    def validate_target(cls, target: str) -> str:
-        if not is_import_target(target):
-            raise ValueError("target must contain dotted Python identifiers as module:callable")
+    def validate_target(cls, target: str | None) -> str | None:
+        if target is not None and not is_import_target(target):
+            raise ValueError("Python targets must use module.path:callable.path syntax")
         return target
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, command: list[str] | None) -> list[str] | None:
+        if command is None:
+            return None
+        if not 1 <= len(command) <= 64:
+            raise ValueError("command must contain between 1 and 64 arguments")
+        if any(
+            not isinstance(argument, str)
+            or not argument
+            or len(argument) > 4_096
+            or "\x00" in argument
+            or "\n" in argument
+            or "\r" in argument
+            for argument in command
+        ):
+            raise ValueError(
+                "command arguments must be non-empty bounded strings without control lines"
+            )
+        return command
 
     @field_validator("record_distributions")
     @classmethod
@@ -422,6 +476,17 @@ class CallableSpec(StrictModel):
 
     @model_validator(mode="after")
     def bound_explicit_distributions(self) -> CallableSpec:
+        if (self.target is None) == (self.command is None):
+            raise ValueError("exactly one of target or command is required")
+        if self.command is not None:
+            if self.python is not None:
+                raise ValueError("command endpoints include their runtime and cannot set python")
+            if self.canonicalizer is not None:
+                raise ValueError(
+                    "command endpoints canonicalize through the target protocol, not canonicalizer"
+                )
+            if self.adapter != "auto" or self.pandas_input != "arrow":
+                raise ValueError("adapter and pandas_input apply only to Python target endpoints")
         explicit = set(self.record_distributions).union(self.required_distributions)
         if len(explicit) > MAX_RECORDED_DISTRIBUTIONS:
             raise ValueError(
@@ -489,8 +554,9 @@ class ComparisonPolicy(StrictModel):
 class GenerationConfig(StrictModel):
     """Deterministic and property-based exploration limits."""
 
+    generator: str | None = None
     max_examples: int = Field(default=100, ge=1, le=100_000)
-    max_findings: int = Field(default=1, ge=1, le=20)
+    max_findings: int = Field(default=10, ge=1, le=20)
     stability_repeats: int = Field(default=2, ge=1, le=10)
     search: bool = True
     seed: int | None = None
@@ -500,17 +566,32 @@ class GenerationConfig(StrictModel):
     derandomize: bool = False
     suppress_too_slow: bool = True
 
+    @field_validator("generator")
+    @classmethod
+    def validate_generator(cls, generator: str | None) -> str | None:
+        if generator is not None and not is_import_target(generator):
+            raise ValueError("generator must contain dotted Python identifiers as module:callable")
+        return generator
+
 
 class PerformanceConfig(StrictModel):
     """Benchmark policy applied after semantic verification."""
 
     enabled: bool = True
     warmups: int = Field(default=1, ge=0, le=100)
-    repeats: int = Field(default=5, ge=1, le=1_000)
+    repeats: int = Field(default=9, ge=1, le=1_000)
     max_slowdown: float | None = Field(default=1.25, ge=0)
     max_memory_ratio: float | None = Field(default=1.50, ge=0)
     min_reference_ms: float = Field(default=1.0, ge=0)
     fail_on_regression: bool = False
+    confidence_level: float = Field(default=0.95, gt=0.5, lt=1)
+    bootstrap_samples: int = Field(default=2_000, ge=100, le=100_000)
+
+    @model_validator(mode="after")
+    def require_evidence_for_enforced_regression(self) -> PerformanceConfig:
+        if self.enabled and self.fail_on_regression and self.repeats < 5:
+            raise ValueError("an enforced performance gate requires at least 5 repeats")
+        return self
 
 
 class CaseConfig(StrictModel):
@@ -535,14 +616,25 @@ class CaseConfig(StrictModel):
     tags: set[str] = Field(default_factory=set)
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True, populate_by_name=True)
+    _base_directory: Path | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def require_input_contract(self) -> CaseConfig:
         has_single_input = self.fixture is not None or self.input_schema is not None
-        if not has_single_input and self.input_bundle is None:
-            raise ValueError("a case requires either fixture or schema, or input_bundle")
+        has_custom_generator = self.generation.generator is not None
+        if not has_single_input and self.input_bundle is None and not has_custom_generator:
+            raise ValueError(
+                "a case requires either fixture or schema, input_bundle, or generation.generator"
+            )
         if has_single_input and self.input_bundle is not None:
             raise ValueError("a case cannot combine fixture or schema with input_bundle")
+        if has_custom_generator and (has_single_input or self.input_bundle is not None):
+            raise ValueError(
+                "generation.generator is a complete input contract and cannot be combined "
+                "with fixture, schema, or input_bundle"
+            )
+        if has_custom_generator and not self.generation.search:
+            raise ValueError("generation.generator requires generation.search=true")
         for side, endpoint_kwargs in (
             ("reference", self.reference_kwargs),
             ("candidate", self.candidate_kwargs),
@@ -573,6 +665,8 @@ class ParityConfig(StrictModel):
     artifact_dir: Path = Path(".parity")
     cases: list[CaseConfig] = Field(min_length=1)
     fail_fast: bool = False
+    jobs: int = Field(default=1, ge=1, le=256)
+    native_threads: int | None = Field(default=None, ge=1, le=256)
     _base_directory: Path | None = PrivateAttr(default=None)
 
     @field_validator("cases")
@@ -582,6 +676,19 @@ class ParityConfig(StrictModel):
         if len(names) != len(set(names)):
             raise ValueError("case names must be unique")
         return cases
+
+    @model_validator(mode="after")
+    def validate_parallel_fail_fast(self) -> ParityConfig:
+        if self.fail_fast and self.jobs > 1:
+            raise ValueError("fail_fast=true cannot be combined with jobs greater than 1")
+        if self.jobs > 1 and any(
+            case.performance.enabled and case.performance.fail_on_regression for case in self.cases
+        ):
+            raise ValueError(
+                "enforced performance gates require jobs=1 to avoid concurrent benchmark "
+                "contention; use jobs=1 or set performance.fail_on_regression=false"
+            )
+        return self
 
 
 class Mismatch(StrictModel):
@@ -614,7 +721,10 @@ class PerformanceResult(StrictModel):
     reference: RunMetrics
     candidate: RunMetrics
     speed_ratio: float | None = None
+    speed_ratio_ci: tuple[float, float] | None = None
     memory_ratio: float | None = None
+    memory_ratio_ci: tuple[float, float] | None = None
+    confidence_level: float = Field(default=0.95, gt=0.5, lt=1)
     regression: bool = False
     reasons: list[str] = Field(default_factory=list)
 
@@ -626,7 +736,7 @@ class ExampleResult(StrictModel):
     artifact: Path | None = None
     reference_metrics: RunMetrics | None = None
     candidate_metrics: RunMetrics | None = None
-    finding_signature: str | None = Field(default=None, pattern=r"^ms1:[0-9a-f]{64}$")
+    finding_signature: str | None = Field(default=None, pattern=r"^ms3:[0-9a-f]{64}$")
 
 
 class CaseProvenance(StrictModel):
@@ -643,6 +753,7 @@ class CaseResult(StrictModel):
     examples_run: int = Field(default=0, ge=0)
     deterministic_examples: int = Field(default=0, ge=0)
     generated_examples: int = Field(default=0, ge=0)
+    finding_limit_reached: bool = False
     failures: list[ExampleResult] = Field(default_factory=list)
     diagnoses: list[Diagnosis] = Field(default_factory=list)
     performance: PerformanceResult | None = None

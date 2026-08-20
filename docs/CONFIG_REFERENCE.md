@@ -10,6 +10,8 @@ fall back to a default. Paths are resolved relative to the configuration file.
 | `version` | integer | `1` | Configuration format; only version 1 is accepted. |
 | `artifact_dir` | path | `.parity` | Root for counterexamples and reports. |
 | `fail_fast` | boolean | `false` | Stop the suite after the first failed/error case. |
+| `jobs` | integer | `1` | Independent cases to run concurrently, 1 through 256. Values above 1 are incompatible with `fail_fast`. |
+| `native_threads` | integer/null | none | Opt-in default for common BLAS/OpenMP thread pools in each worker, 1 through 256. |
 | `cases` | array of tables | conditional | One or more uniquely named campaigns, mutually exclusive with `cases_file`. |
 | `cases_file` | relative path | conditional | Contained file holding the campaigns, mutually exclusive with inline `cases`. |
 | `case_defaults` | table | none | Bounded defaults expanded into every declared case. |
@@ -65,15 +67,15 @@ cases still resolve relative to the root `parity.toml`, not the cases file.
 
 `[case_defaults]` accepts only:
 
-- partial `reference` and `candidate` tables without `target`;
-- partial `comparison`, `generation` and `performance` tables;
+- partial `reference` and `candidate` tables without `target` or `command`;
+- partial `comparison`, `generation` without `generator`, and `performance` tables;
 - `reference_kwargs`, `candidate_kwargs` and `timeout_seconds`.
 
-Case identity, targets, fixtures/schemas, input bundles, tags, `static_args` and `static_kwargs`
-must remain visible on each case. Case fields override defaults. Nested tables merge recursively;
-scalars and lists replace the inherited value. Parity validates and fingerprints the fully expanded
-configuration, so an extracted/defaulted config has the same effective model and hash as equivalent
-inline declarations.
+Case identity, targets/commands, fixtures/schemas, input bundles, custom generators, tags,
+`static_args` and `static_kwargs` must remain visible on each case. Case fields override defaults.
+Nested tables merge recursively; scalars and lists replace the inherited value. Parity validates
+and fingerprints the fully expanded configuration, so an extracted/defaulted config has the same
+effective model and hash as equivalent inline declarations.
 
 ## Migration manifest
 
@@ -162,11 +164,18 @@ and exclusions before relying on the gate.
 
 After creating `migrations/parity.toml` (for example with the fixture-backed `parity init` flow in
 the user guide), install the optional environment support and declare the current checkout against
-one exact released reference:
+either one exact released reference or another existing checkout:
 
 ```bash
 python -m pip install "parity-check[workspace]"
 parity migration init --reference 'your-library==1.2.3'
+parity migration run
+```
+
+```bash
+parity migration init \
+  --reference-path ../main-worktree \
+  --candidate ../feature-worktree
 parity migration run
 ```
 
@@ -178,9 +187,12 @@ one `core-regression` unit and must be reviewed as an inventory. The document fi
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
 | `version` | integer | `1` | Workspace format; only version 1 is accepted. |
-| `reference` | exact requirement | required | Released `package==version` or `package[extras]==version`. |
+| `reference` | exact requirement | conditional | Released `package==version` or `package[extras]==version`. |
+| `reference_path` | path | conditional | Existing local reference checkout. Exactly one reference field is required. |
 | `candidate` | path | current directory | Local checkout with statically declared distribution metadata. |
-| `python` | `major.minor` | invoking Python | Worker Python, at least 3.11. |
+| `python` | `major.minor` | invoking Python | Shared target Python shorthand, at least 3.8. |
+| `reference_python` | `major.minor` | `python` | Reference target Python override, at least 3.8. |
+| `candidate_python` | `major.minor` | `python` | Candidate target Python override, at least 3.8. |
 | `config` | path | `parity.toml` | Parity case configuration. |
 | `manifest` | path | `migration.toml` | Migration inventory. |
 | `report_dir` | contained path | `.parity/workspace/reports` | Per-lane migration JSON reports. |
@@ -192,48 +204,70 @@ Equivalent CLI values are repeatable `--lane NAME` or `--lane NAME=REQUIREMENTS`
 workspace file. Paths inside the saved TOML are resolved beside that file. `report_dir` must remain
 inside the workspace directory.
 
-`parity migration setup` resolves one hash-pinned requirements lock per lane and prepares an
-isolated reference/candidate worker pair. `parity migration run` performs that setup and then runs
-the complete manifest in every lane. Managed execution uses the workspace directory as both worker
-working directories, supplies the two prepared interpreter paths, requires the exact workspace
-reference distribution on the reference side and records the subject distribution on both sides.
+Use `python` when both sides support the same target interpreter. For a runtime migration, pass
+`--reference-python 3.8 --candidate-python 3.12` (or set both side-specific fields); either side may
+override a shared `python`. These are target runtimes, not the Parity controller: the controller
+still requires Python 3.11 or newer.
+
+`parity migration setup` resolves separate hash-pinned requirements locks for the reference and
+candidate in every lane, then prepares an isolated worker pair. `parity migration run` performs
+that setup and runs the complete manifest in every lane. Managed execution uses the workspace
+directory as both worker working directories, supplies the two prepared interpreter paths,
+requires an exact released reference when configured and records the subject distribution on both sides.
 An explicit conflicting distribution contract is rejected. It writes
 `<report_dir>/<lane>.json`. The active lane report is removed before execution, so an interrupted
 run cannot leave an earlier green report looking current. Locks keep dependency selection
 stable on later runs; `--refresh-locks` deliberately asks the resolver to upgrade them. The command
 returns `2` if any lane errors, otherwise `1` if any lane fails, otherwise `0`.
 
-`parity migration advance --reference package==version` atomically changes only the active exact
+Local/local mode installs each checkout editable only in its own worker. Parity validates the
+normalized static distribution names before setup, then proves that installed distribution metadata
+and importable modules resolve to the declared source in every effective worker environment. It
+captures both Git HEADs, dirty flags and SHA-256 worktree-content digests before and throughout the
+run. Each target independently recomputes the same path-free identity before execution. Semantic
+lane evidence is written only when both target identities match the driver's snapshots; the
+identities are embedded in the lane report and every replayable finding. Replay recomputes them and
+returns `ERROR` before target invocation if a same-version checkout has changed. Any source change
+also invalidates all active reports. Success writes
+`<report_dir>/source-provenance.json`; this report intentionally contains no paths, branch names,
+file names or source values and remains meaningful if the report directory is relocated.
+
+`parity migration advance --reference package==version` atomically changes only an active exact
 reference. The distribution name must be unchanged. Candidate, Python, paths and lanes are
 preserved; current lane reports are invalidated. Parity intentionally stores no A→…→M history.
 Keep durable cases mapped in a permanent manifest unit and replace transition-specific units for
-each adjacent pair.
+each adjacent pair. `advance` does not move a local branch or worktree; regenerate or edit a
+local/local declaration (using `migration init --force` when replacing the workspace file) to
+choose the next reviewed `reference_path`.
 
 tox, tox-uv and uv implement this lifecycle behind the Parity commands. Generated locks,
 environments and tox configuration are private state under `.parity/workspace`; users do not need
 to author tox configuration. The `.parity` root is self-ignoring even when a consumer repository
 has no root `.gitignore`. Parity never clones a repository, selects or changes its revision,
-applies patches or edits candidate source. The candidate packaging metadata and resolved
-dependencies are executable supply-chain inputs and must be trusted. Use explicit `python` paths in
-`parity.toml` when environments are provisioned elsewhere.
+applies patches or edits either local source. Local packaging metadata and resolved
+dependencies are executable supply-chain inputs and must be trusted. Managed target environments
+contain the target package and the PyArrow transport; package metadata or lane requirements must
+supply pandas, Polars or any other selected adapter dependency. They do not install the Parity
+controller. Use explicit endpoint `python` paths in `parity.toml` when environments are provisioned
+elsewhere.
 
-Managed setup requires the candidate distribution name to match the reference name and to be
+Managed setup requires each local distribution name to match the reference name and to be
 declared statically as `project.name`, `tool.poetry.name`, or `setup.cfg` `[metadata] name`. It
-rejects dynamic `setup.py`-only names because a stale or differently named editable package could
-otherwise make the candidate import the reference implementation. Provision both worker
+rejects dynamic `setup.py`-only names because executing project code merely to discover identity
+would make validation unsafe and a stale or differently named editable could cause a false pass. Provision both worker
 interpreters explicitly for projects with dynamic distribution metadata.
 
-The workspace directory must not be the candidate checkout and neither its working directory nor
-inherited `PYTHONPATH` may expose the candidate root to the reference worker. Otherwise a flat-layout
-package could shadow the installed release while distribution metadata still reported the expected
-version. Keep workspaces and wrapper modules in `migrations/`; the editable candidate installation
-provides candidate imports without adding its source root to worker search paths.
+The workspace directory must not expose either local checkout and neither worker's configured or
+inherited `PYTHONPATH` may expose a managed source root. Otherwise a flat-layout package could shadow
+the intended editable while distribution metadata still looked correct. Keep workspaces and wrapper
+modules in a neutral `migrations/` directory; editable installations provide local imports without
+adding source roots manually.
 
 ## Retained evidence verification
 
 `parity evidence verify REPORT [--artifact-root PATH] [--json PATH]` accepts a suite JSON report
 (schema 3) or migration JSON report (schema 1 with its nested suite). Every failure entry must name
-a replayable artifact and carry an `ms1:...` mismatch signature. Duplicate report entries are
+a replayable artifact and carry an `ms3:...` mismatch signature. Duplicate report entries are
 verified once in report order.
 
 Without `--artifact-root`, a report located anywhere beneath the artifact directory named in its
@@ -255,7 +289,7 @@ non-verified entry. Reason codes distinguish an unavailable/invalid artifact, si
 mismatch, unverified provenance, replay failure/error, a finding that disappeared, and a finding
 whose mismatch shape changed; they never include caught exception text or absolute paths. The
 report does not copy counterexample values. This is behavioural and local-integrity verification,
-not trust establishment. `ms1:` is a
+not trust establishment. `ms3:` is a
 data-free mismatch-shape digest, not a digital signature, and replay executes arbitrary configured
 Python. Review the report, artifact and checkout before running it.
 
@@ -269,7 +303,7 @@ Declare cases with `[[cases]]`.
 | `reference` | table | required | Baseline implementation. |
 | `candidate` | table | required | Replacement implementation. |
 | `fixture` | path | none | Seed input; Parquet, Arrow IPC, CSV or JSON according to loader support. |
-| `schema` | table | none | Generated input contract. At least `fixture` or `schema` is required. |
+| `schema` | table | none | Built-in generated input contract. |
 | `input_bundle` | table | none | Two or three named inputs with optional relational constraints. Mutually exclusive with case-level `fixture`/`schema`. |
 | `static_args` | JSON-like array | `[]` | Positional values appended after the input frame. |
 | `static_kwargs` | JSON-like table | `{}` | Keyword arguments supplied to both implementations. |
@@ -280,6 +314,10 @@ Declare cases with `[[cases]]`.
 | `performance` | table | defaults below | Benchmark and regression policy. |
 | `timeout_seconds` | float | `30` | Per invocation timeout, greater than 0 and at most 3600. |
 | `tags` | string array | `[]` | Selection labels used by `parity check --tag`. |
+
+Every case requires exactly one input contract: `fixture`/`schema`, `input_bundle`, or
+`generation.generator`. A custom generator is therefore not mixed with the built-in schemas or
+fixtures. The exact failing Arrow input replaces generator code in replay artifacts.
 
 TOML requires case-level scalar keys such as `fixture`, `tags` and `timeout_seconds` to appear
 before child tables like `[cases.reference]`.
@@ -348,7 +386,9 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
-| `target` | string | required | Import target `package.module:function`; each dotted component must be a Python identifier. |
+| `target` | string/null | conditional | Python import target `package.module:callable.path`; each dotted component must be a Python identifier. Exactly one of `target` or `command` is required. |
+| `command` | string array/null | conditional | Protocol-speaking executable argument vector. Exactly one of `target` or `command` is required. |
+| `canonicalizer` | string/null | none | Python import target applied to a successful raw return before Arrow/JSON canonicalisation. |
 | `adapter` | enum | `auto` | `auto`, `pandas`, `polars` or `arrow`. |
 | `pandas_input` | `arrow` / `native` | `arrow` | Pandas input materialization; ignored when the resolved adapter is not pandas. |
 | `python` | path | current Python | Interpreter for isolated execution. |
@@ -356,17 +396,29 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 | `environment` | string table | `{}` | Literal environment overrides for the worker. |
 | `record_distributions` | string array | `[]` | Additional distribution versions to record inside this worker. |
 | `required_distributions` | string table | `{}` | Distribution names mapped to required PEP 440 version specifiers. |
+| `native_threads` | integer/null | none | Endpoint override for the common BLAS/OpenMP thread-pool limit. |
+
+`target`, `canonicalizer`, `adapter`, `pandas_input` and `python` apply only to Python endpoints. A
+command endpoint owns input adaptation, application invocation and output canonicalisation through
+[target protocol v1](TARGET_PROTOCOL.md); it cannot set those Python-only fields. `workdir`,
+`environment`, distribution provenance and `native_threads` apply to both endpoint kinds.
 
 Paths may be relative. A configured `python` path is anchored to the configuration directory
 without dereferencing its final virtual-environment symlink; two venv entry points that share one
 base Python therefore remain distinct execution environments. Other project paths retain their
-normal resolved semantics. Do not commit secrets in `environment`.
+normal resolved semantics. A relative command executable such as `./bin/adapter` is launched from
+the endpoint `workdir`, which defaults to the configuration directory. Commands are argument
+vectors, never shell strings: they contain 1 through 64 non-empty arguments, each at most 4,096
+characters and without NUL or newline characters. Do not commit secrets in `environment` or
+command arguments.
 
-Parity always records its own version plus Python, platform, Hypothesis, NumPy, pandas, Polars and
-PyArrow provenance. `record_distributions` adds up to 64 explicitly named Python distributions,
-using distribution names rather than import names (for example `scikit-learn`, not `sklearn`).
-Names are normalized and duplicates are errors. This field only reads installed metadata; it never
-installs or imports the named distribution.
+The controller report records its own runtime provenance. Portable Python targets independently
+report Python/platform identity plus NumPy, pandas, Polars and PyArrow when installed; they report
+`parity_version = null` because Parity is not installed in the target. Command targets report the
+generic runtime identity required by target protocol v1. `record_distributions` adds up to 64
+explicitly named distributions, using distribution names rather than import names (for example
+`scikit-learn`, not `sklearn`). Names are normalized and duplicates are errors. This field only
+reads target-reported or installed metadata; it never installs or imports the named distribution.
 
 `required_distributions` turns selected metadata into a fail-closed runtime contract:
 
@@ -384,9 +436,13 @@ Names use the same normalization and shared limit as `record_distributions`. Spe
 440, except arbitrary `===` equality is rejected; an empty specifier means any valid installed
 version. Required names are recorded automatically. Before target import or invocation, Parity
 returns a data-safe `RuntimeContractError` when metadata is missing/unavailable or the installed
-version is outside its range. The worker's Parity version must also exactly equal the controller's
-installed version; this is automatic and cannot be weakened in TOML. `parity doctor --config`
-shows each requirement and satisfaction state without importing the targets.
+version is outside its range. There is no target-side Parity-version requirement. The
+`parity doctor --config` command shows each requested requirement and satisfaction state, and
+checks both transports before importing either endpoint. If one transport fails, the deferred peer
+endpoint has status `not_checked` and error code `TargetEndpointNotChecked`. The command never
+invokes the behavioural target.
+Protocol commands must report every required distribution in their runtime response; leaving a
+required name absent fails closed.
 
 `pandas_input = "arrow"` converts the canonical input to pandas with Arrow extension dtypes. It
 preserves distinctions such as nullable integers and Arrow null versus a valid IEEE NaN, and is the
@@ -420,12 +476,37 @@ Declare a column with `[[cases.schema.columns]]`:
 | `maximum` | JSON-like scalar | none | Inclusive upper bound. |
 | `categories` | array | none | Non-empty closed value set. |
 | `examples` | array | `[]` | Values deliberately included in deterministic inputs. |
-| `timezone` | string | none | IANA timezone metadata for datetime columns. |
+| `regex` | string | none | Full-match Python regular expression for `string` and `category` values. |
+| `min_length` | integer | none | Inclusive minimum text length for `string` and `category` values. |
+| `max_length` | integer | none | Inclusive maximum text length for `string` and `category` values. |
+| `timezone` | string | none | Valid IANA zone for datetime values; generation uses that zone and probes applicable DST gaps, folds and transition boundaries. |
 
 Portable dtype families are `integer`, `float`, `decimal`, `boolean`, `string`, `category`,
 `binary`, `date`, `datetime`, `time`, `duration`, `list`, `struct` and `object`. Common concrete
 integer/float widths such as `int8`, `int64`, `uint32`, `float32` and `float64` are retained when
-materialising Arrow inputs. Bounds must be representable by the chosen type.
+materialising Arrow inputs. Bounds, categories and examples must satisfy the complete column
+domain, including text constraints. Write date and datetime values as quoted ISO strings in TOML;
+native TOML date/datetime literals are not JSON-like configuration values. A datetime without an
+explicit offset is interpreted as local wall time when `timezone` is set; an offset-aware datetime
+is converted to the configured zone.
+
+```toml
+[[cases.schema.columns]]
+name = "trade_time"
+dtype = "datetime"
+nullable = false
+minimum = "2024-01-01T00:00:00"
+maximum = "2024-12-31T23:59:59"
+timezone = "America/New_York"
+
+[[cases.schema.columns]]
+name = "symbol"
+dtype = "string"
+nullable = false
+regex = "[A-Z][A-Z0-9]{0,7}"
+min_length = 1
+max_length = 8
+```
 
 ### Frame constraints
 
@@ -510,8 +591,9 @@ useful missing or unexpected key evidence instead of a generic shape mismatch.
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
+| `generator` | import target/null | none | Trusted project factory returning a Hypothesis `SearchStrategy` or a plain iterable of inputs. |
 | `max_examples` | integer | `100` | Property examples, 1 through 100,000. |
-| `max_findings` | integer | `1` | Maximum distinct mismatch signatures, 1 through 20. Each additional search receives its own `max_examples` budget. |
+| `max_findings` | integer | `10` | Maximum distinct mismatch signatures, 1 through 20. Each additional search receives its own `max_examples` budget. |
 | `stability_repeats` | integer | `2` | Total same-input observations per implementation for deterministic passing inputs, 1 through 10. `1` disables the stability check. |
 | `search` | boolean | `true` | Run property-based search after deterministic inputs. Set this and `adversarial_examples` to `false` for an exact fixture-only contract. |
 | `seed` | integer/null | none | Stable run seed. |
@@ -522,6 +604,21 @@ useful missing or unexpected key evidence instead of a generic shape mismatch.
 | `suppress_too_slow` | boolean | `true` | Suppress Hypothesis health check for slow generation. |
 
 A seed improves repeatability but a saved replay artifact is the strongest reproduction mechanism.
+The generator factory is called without arguments in the Parity driver environment, with the
+configuration directory on its import path. It may return either:
+
+- a Hypothesis `SearchStrategy` yielding a pandas, Polars or Arrow dataframe, preserving normal
+  generation and shrinking; or
+- an iterable of those dataframes, consumed in order and stopped after `max_examples`. Plain
+  iterables do not have a general shrinking operation and are responsible for their own stable
+  order.
+
+A generated mapping of two or three valid Python names to dataframes is invoked as a keyword input
+bundle. Use small reference/candidate wrappers when old and new APIs need other bindings. Invalid,
+empty or non-dataframe generator output is an execution error, never a pass. Generator code is
+trusted project code and should not contain credentials or depend on either isolated target
+environment.
+
 With `search = false`, Parity still checks deterministic fixtures or enabled adversarial examples,
 including stability repeats, but skips property-based search beyond them. A searchless case without
 any deterministic input is rejected instead of passing without evidence. Set
@@ -532,11 +629,25 @@ nondeterminism stops the campaign as an execution error rather than creating que
 Separately, deterministic inputs that initially pass are observed `stability_repeats` times. Each
 side is compared with its own first observation under strict, zero-tolerance, reflexive canonical
 identity. User cross-side ordering/tolerance/null policies cannot label a stable output as unstable,
-while matching but equally unstable implementations still cannot produce a false pass. Repeat
-exceptions, crashes, timeouts or output drift stop the campaign as an unsigned execution error
-before generated search or benchmarking.
+while matching but equally unstable implementations still cannot produce a false pass.
+Semantically changing repeat outcomes, crashes, timeouts or output drift stop the campaign as an
+unsigned execution error before generated search or benchmarking. A stable repeated `Raise` is an
+ordinary semantic outcome, not an infrastructure failure.
 `examples_run` and `deterministic_examples` count each input once; stability observations are
 additional callable executions, not additional generated examples.
+
+## Case parallelism
+
+`parity check --jobs N` overrides top-level `jobs`. Parity schedules whole cases only: each case
+retains its own deterministic seed, serial Hypothesis search/shrinking, reference/candidate worker
+pair and case-named artifact directory. Reports are emitted in declared configuration order rather
+than completion order. `fail_fast = true` with more than one job is rejected because in-flight work
+cannot provide honest stop-after-first semantics.
+
+Native numerical libraries can create their own thread pools. Parity does not alter them by
+default. Set top-level `native_threads = 1`, pass `--native-threads 1`, or set an endpoint's
+`native_threads` when case parallelism would otherwise oversubscribe the machine. An explicit
+endpoint `environment` value such as `OMP_NUM_THREADS` takes precedence.
 
 ## Performance policy
 
@@ -546,13 +657,22 @@ additional callable executions, not additional generated examples.
 |---|---:|---:|---|
 | `enabled` | boolean | `true` | Benchmark only after semantic success. |
 | `warmups` | integer | `1` | Warm-up pairs, 0 through 100. |
-| `repeats` | integer | `5` | Measured pairs, 1 through 1,000. |
+| `repeats` | integer | `9` | Measured pairs, 1 through 1,000. Enforced gates require at least 5. |
 | `max_slowdown` | float/null | `1.25` | Candidate/reference runtime ratio limit. |
 | `max_memory_ratio` | float/null | `1.5` | Candidate/reference peak RSS ratio limit. |
 | `min_reference_ms` | float | `1` | Ignore runtime ratio below this reference duration. |
 | `fail_on_regression` | boolean | `false` | Convert a policy regression into case failure. |
+| `confidence_level` | float | `0.95` | Confidence level for paired bootstrap ratio intervals, greater than 0.5 and less than 1. |
+| `bootstrap_samples` | integer | `2000` | Deterministic bootstrap resamples, 100 through 100,000. |
 
-Runtime and memory ratios are evidence from the current host, not portable guarantees.
+Reference and candidate observations are paired under nearby host load. Parity reports their median
+ratio and a deterministic bootstrap confidence interval, and only declares a threshold regression
+when the interval's lower bound exceeds the configured limit. Runtime and memory ratios remain
+evidence from the current host, not portable guarantees. Use `jobs = 1` for measurements intended
+as retained evidence; report-only benchmarks are allowed with concurrent cases but will contend for
+the same host. An enforced performance gate already requires `jobs = 1`. When performance is
+enabled, an unavailable runner, missing validated passing input or failed benchmark invocation is
+infrastructure `ERROR`; Parity never reports a pass after silently omitting requested measurements.
 
 ## Complete generated template
 

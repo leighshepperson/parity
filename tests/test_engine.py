@@ -40,16 +40,26 @@ from parity.models import (
     PandasInput,
     ParityConfig,
     PerformanceConfig,
+    PerformanceResult,
     RunMetrics,
     SortedBy,
     Status,
 )
+from parity.performance import benchmark_observations
 from parity.provenance import collect_runtime_provenance
 from parity.reporting import render_terminal
 
 
 def identity(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.copy()
+
+
+def _portable_runtime(spec: CallableSpec):
+    with IsolatedExecutionSession(spec) as session:
+        observation = session.inspect_runtime()
+    assert observation.outcome is ExecutionOutcome.RETURNED
+    assert observation.runtime is not None
+    return observation.runtime
 
 
 def corrupt_seven(frame: pd.DataFrame) -> pd.DataFrame:
@@ -216,6 +226,219 @@ def test_live_engine_consumes_generated_strategy_when_adversarial_disabled(tmp_p
     assert len(case.failures) == 1
     assert case.failures[0].source == "generated:shrunk"
     assert case.failures[0].artifact is not None
+
+
+def test_generated_only_campaign_runs_enforced_performance_gate(tmp_path: Path) -> None:
+    measured = PerformanceResult(
+        reference=RunMetrics(duration_seconds=0.01, iterations=5),
+        candidate=RunMetrics(duration_seconds=0.02, iterations=5),
+        speed_ratio=2.0,
+        speed_ratio_ci=(1.8, 2.2),
+        regression=True,
+        reasons=["candidate speed regression"],
+    )
+    benchmark_inputs: list[pa.Table] = []
+
+    def returned(value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=value,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def benchmark(value: Any) -> PerformanceResult:
+        assert isinstance(value, pa.Table)
+        benchmark_inputs.append(value)
+        return measured
+
+    result = engine._campaign(
+        name="generated-performance",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=3,
+        ),
+        fixture=None,
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(
+            max_examples=5,
+            adversarial_examples=False,
+            stability_repeats=1,
+            derandomize=True,
+        ),
+        performance_config=PerformanceConfig(
+            enabled=True,
+            repeats=5,
+            fail_on_regression=True,
+        ),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=returned,
+        candidate_runner=returned,
+        artifact_case="generated-performance",
+        benchmark=benchmark,
+    )
+
+    assert result.status is Status.FAILED
+    assert result.generated_examples > 0
+    assert result.performance == measured
+    assert len(benchmark_inputs) == 1
+    assert 1 <= benchmark_inputs[0].num_rows <= 3
+    assert result.failures[-1].source == "performance"
+    assert result.failures[-1].status is Status.FAILED
+
+
+def test_enabled_performance_without_validated_input_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine, "find_unseen_counterexample", lambda *_args: None)
+
+    def returned(value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=value,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def unexpected_benchmark(_value: Any) -> PerformanceResult:
+        pytest.fail("benchmark must not run without a validated input")
+
+    result = engine._campaign(
+        name="missing-performance-input",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=None,
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(
+            max_examples=1,
+            adversarial_examples=False,
+            stability_repeats=1,
+        ),
+        performance_config=PerformanceConfig(enabled=True),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=returned,
+        candidate_runner=returned,
+        artifact_case="missing-performance-input",
+        benchmark=unexpected_benchmark,
+    )
+
+    assert result.status is Status.ERROR
+    assert result.performance is None
+    assert result.failures == [
+        ExampleResult(
+            source="performance",
+            status=Status.ERROR,
+            mismatches=[
+                Mismatch(
+                    kind=MismatchKind.PERFORMANCE,
+                    message="performance measurement has no validated representative input",
+                    path="$performance",
+                )
+            ],
+        )
+    ]
+
+
+def test_enabled_performance_without_benchmark_runner_is_an_error(tmp_path: Path) -> None:
+    def returned(value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=value,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    result = engine._campaign(
+        name="missing-performance-runner",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=pa.table({"x": [1]}),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(
+            search=False,
+            adversarial_examples=False,
+            stability_repeats=1,
+        ),
+        performance_config=PerformanceConfig(enabled=True),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=returned,
+        candidate_runner=returned,
+        artifact_case="missing-performance-runner",
+    )
+
+    assert result.status is Status.ERROR
+    assert result.performance is None
+    assert result.failures[0].status is Status.ERROR
+    assert result.failures[0].mismatches == [
+        Mismatch(
+            kind=MismatchKind.PERFORMANCE,
+            message="performance measurement runner is unavailable",
+            path="$performance",
+        )
+    ]
+
+
+def test_invalid_enforced_timing_evidence_is_a_case_error(tmp_path: Path) -> None:
+    fixture = pa.table({"x": [1]})
+    performance = PerformanceConfig(
+        enabled=True,
+        warmups=0,
+        repeats=5,
+        max_slowdown=1.5,
+        max_memory_ratio=None,
+        fail_on_regression=True,
+    )
+
+    def returned(value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=value,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    result = engine._campaign(
+        name="invalid-performance-timing",
+        schema=FrameSchema(
+            columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
+            min_rows=1,
+            max_rows=1,
+        ),
+        fixture=fixture,
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(
+            search=False,
+            adversarial_examples=False,
+            stability_repeats=1,
+        ),
+        performance_config=performance,
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=returned,
+        candidate_runner=returned,
+        artifact_case="invalid-performance-timing",
+        benchmark=lambda _value: benchmark_observations(
+            lambda: returned(fixture),
+            lambda: returned(fixture),
+            performance,
+        ),
+    )
+
+    assert result.status is Status.ERROR
+    assert result.performance is None
+    assert result.failures[0].status is Status.ERROR
+    assert result.failures[0].mismatches == [
+        Mismatch(
+            kind=MismatchKind.PERFORMANCE,
+            message=(
+                "enforced runtime gate requires finite positive reference timing evidence "
+                "for every run (0/5 runs observed)"
+            ),
+            path="$performance",
+        )
+    ]
 
 
 def test_live_engine_passes_equal_functions_across_both_generation_layers(tmp_path: Path) -> None:
@@ -490,7 +713,7 @@ def test_deterministic_witness_skips_redundant_property_search(tmp_path: Path) -
     result = _run(
         tmp_path,
         corrupt_everything,
-        generation=GenerationConfig(max_examples=500, seed=73),
+        generation=GenerationConfig(max_examples=500, max_findings=1, seed=73),
     )
     case = result.cases[0]
     assert result.status is Status.FAILED
@@ -516,10 +739,10 @@ def test_engine_discovers_and_orders_two_distinct_mismatch_signatures(tmp_path: 
     assert case.findings_discovered == 2
     assert len(set(signatures)) == 2
     assert signatures == sorted(signatures)  # type: ignore[arg-type]
-    assert all(signature and signature.startswith("ms1:") for signature in signatures)
+    assert all(signature and signature.startswith("ms3:") for signature in signatures)
 
 
-def test_default_finding_budget_stops_after_first_distinct_signature(tmp_path: Path) -> None:
+def test_default_finding_budget_keeps_searching_for_independent_signatures(tmp_path: Path) -> None:
     result = _run(
         tmp_path,
         corrupt_two_shapes,
@@ -530,8 +753,12 @@ def test_default_finding_budget_stops_after_first_distinct_signature(tmp_path: P
         ),
     )
 
-    assert result.cases[0].findings_discovered == 1
-    assert len(result.cases[0].failures) == 1
+    case = result.cases[0]
+    assert case.findings_discovered == 2
+    assert len(case.failures) == 2
+    assert not case.finding_limit_reached
+    terminal = render_terminal(result)
+    assert "finding limit reached" not in terminal
 
 
 def test_repeated_witnesses_with_one_signature_are_deduplicated(tmp_path: Path) -> None:
@@ -911,7 +1138,7 @@ def test_stability_probe_detects_exception_contract_drift(tmp_path: Path) -> Non
     def candidate(_value: pa.Table) -> Observation:
         nonlocal candidate_calls
         candidate_calls += 1
-        return raised(f"attempt {candidate_calls}")
+        return raised("initial rejection" if candidate_calls == 1 else "different rejection")
 
     result = engine._campaign(
         name="exception-state",
@@ -925,7 +1152,7 @@ def test_stability_probe_detects_exception_contract_drift(tmp_path: Path) -> Non
         generation=GenerationConfig(max_examples=1, stability_repeats=2),
         performance_config=PerformanceConfig(enabled=False),
         artifact_store=ArtifactStore(tmp_path),
-        reference_runner=lambda _value: raised("attempt 1"),
+        reference_runner=lambda _value: raised("initial rejection"),
         candidate_runner=candidate,
         artifact_case="exception-state",
         exact_only=True,
@@ -1555,8 +1782,8 @@ def test_matching_import_time_system_exit_is_an_error_configured(tmp_path: Path)
     assert result.status is Status.ERROR
     assert case.findings_discovered == 0
     assert [mismatch.path for mismatch in case.failures[0].mismatches] == [
-        "$reference",
-        "$candidate",
+        "$reference.endpoint",
+        "$candidate.endpoint",
     ]
     assert all(
         "private import detail" not in mismatch.message for mismatch in case.failures[0].mismatches
@@ -1834,7 +2061,7 @@ def test_configured_campaign_rejects_matching_runtime_failures_before_import(
     assert imported.exists() is False
 
 
-def test_configured_campaign_requires_worker_parity_match_before_import(
+def test_configured_campaign_does_not_require_target_side_parity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     imported = tmp_path / "parity-mismatch-target-imported.txt"
@@ -1871,12 +2098,9 @@ def test_configured_campaign_requires_worker_parity_match_before_import(
 
     result = engine.run_suite(config)
 
-    assert result.status is Status.ERROR
-    assert result.cases[0].examples_run == 0
-    assert all(
-        "parity_version" in mismatch.message for mismatch in result.cases[0].failures[0].mismatches
-    )
-    assert imported.exists() is False
+    assert result.status is Status.PASSED
+    assert result.cases[0].examples_run > 0
+    assert imported.exists() is True
 
 
 def test_artifact_replay_resolves_import_root_from_invocation_cwd(
@@ -1900,13 +2124,14 @@ def test_artifact_replay_resolves_import_root_from_invocation_cwd(
         generation=GenerationConfig(adversarial_examples=False, max_examples=1),
         performance=PerformanceConfig(enabled=False),
     )
+    runtime = _portable_runtime(case.reference)
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         case,
         pa.table({"x": [1, 2]}),
         ExampleResult(source="test", status=Status.FAILED),
         runtime_provenance=CaseProvenance(
-            reference=collect_runtime_provenance(),
-            candidate=collect_runtime_provenance(),
+            reference=runtime,
+            candidate=runtime,
         ),
         config_sha256="a" * 64,
     )
@@ -2080,7 +2305,6 @@ def test_replay_runtime_drift_blocks_both_callables_before_import(
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
-    runtime = collect_runtime_provenance()
     case = CaseConfig(
         name="runtime-drift",
         reference=CallableSpec(target="drift_transform:touch", adapter="pandas", workdir=tmp_path),
@@ -2089,6 +2313,7 @@ def test_replay_runtime_drift_blocks_both_callables_before_import(
         generation=GenerationConfig(adversarial_examples=False, max_examples=1),
         performance=PerformanceConfig(enabled=False),
     )
+    runtime = _portable_runtime(case.reference)
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         case,
         pa.table({"x": [1]}),
@@ -2130,7 +2355,6 @@ def test_replay_keeps_verified_provenance_when_callable_crashes(
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
-    runtime = collect_runtime_provenance()
     case = CaseConfig(
         name="verified-crash",
         reference=CallableSpec(
@@ -2141,6 +2365,7 @@ def test_replay_keeps_verified_provenance_when_callable_crashes(
         generation=GenerationConfig(adversarial_examples=False, max_examples=1),
         performance=PerformanceConfig(enabled=False),
     )
+    runtime = _portable_runtime(case.reference)
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         case,
         pa.table({"x": [1]}),

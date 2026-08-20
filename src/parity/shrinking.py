@@ -10,7 +10,9 @@ from typing import Any
 import pyarrow as pa
 from hypothesis import HealthCheck, Phase, find, settings
 from hypothesis.errors import NoSuchExample, Unsatisfiable
+from hypothesis.strategies import SearchStrategy
 
+from parity.custom_generation import GeneratedInput
 from parity.generation import bundle_strategy, frame_strategy
 from parity.models import FrameSchema, GenerationConfig, InputBundle
 
@@ -37,6 +39,45 @@ class InputBundleCounterexample:
     @property
     def tables(self) -> dict[str, pa.Table]:
         return dict(self.example)
+
+
+@dataclass(frozen=True, slots=True)
+class CustomCounterexample:
+    """A project-strategy witness minimized by Hypothesis."""
+
+    example: GeneratedInput
+    source: str = "generated:custom:shrunk"
+
+
+def find_unseen_custom_counterexample(
+    strategy: SearchStrategy[GeneratedInput],
+    classifier: Callable[[GeneratedInput], str | None],
+    excluded_signatures: Collection[str],
+    config: GenerationConfig | None = None,
+) -> CustomCounterexample | None:
+    """Find and shrink a project-strategy witness with a new mismatch signature."""
+
+    selected = config or GenerationConfig()
+    excluded = frozenset(excluded_signatures)
+    kwargs: dict[str, Any] = {}
+    if selected.seed is not None:
+        kwargs["random"] = random.Random(selected.seed)
+    try:
+        example = find(
+            strategy,
+            lambda value: (
+                (signature := classifier(value)) is not None and signature not in excluded
+            ),
+            settings=hypothesis_settings(selected),
+            **kwargs,
+        )
+    except NoSuchExample:
+        return None
+    except Unsatisfiable as error:
+        raise ValueError(
+            "custom generation is unsatisfiable; revise the project strategy or constraints"
+        ) from error
+    return CustomCounterexample(example=example)
 
 
 def hypothesis_settings(config: GenerationConfig | None = None) -> settings:
@@ -181,11 +222,13 @@ def minimize_counterexample(
 
 __all__ = [
     "Counterexample",
+    "CustomCounterexample",
     "InputBundleCounterexample",
     "find_bundle_counterexample",
     "find_counterexample",
     "find_unseen_bundle_counterexample",
     "find_unseen_counterexample",
+    "find_unseen_custom_counterexample",
     "hypothesis_settings",
     "minimize_counterexample",
 ]

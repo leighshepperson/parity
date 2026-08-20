@@ -79,28 +79,67 @@ class DistributionProvenance(_StrictFrozenModel):
         return self
 
 
-class RuntimeProvenance(_StrictFrozenModel):
-    """Bounded, path-free identity of one Python execution environment."""
+class RuntimeIdentity(_StrictFrozenModel):
+    """One optional path-free identity claim supplied by a target runtime."""
 
-    python_implementation: str = Field(min_length=1, max_length=64)
-    python_version: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=MAX_DISTRIBUTION_NAME_LENGTH)
+    kind: Literal["git-worktree-v1"]
+    revision: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+    dirty: bool
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("name")
+    @classmethod
+    def validate_normalized_name(cls, name: str) -> str:
+        normalized = normalize_distribution_name(name)
+        if name != normalized:
+            raise ValueError(f"runtime identity name must be normalized as {normalized!r}")
+        return name
+
+
+class RuntimeProvenance(_StrictFrozenModel):
+    """Bounded, path-free identity reported by one target executor."""
+
+    executor: Literal["parity-python", "portable-python", "command"] = "parity-python"
+    runtime_name: str | None = Field(default=None, min_length=1, max_length=64)
+    runtime_version: str | None = Field(default=None, min_length=1, max_length=64)
+    python_implementation: str | None = Field(default=None, min_length=1, max_length=64)
+    python_version: str | None = Field(default=None, min_length=1, max_length=64)
     platform_system: str = Field(min_length=1, max_length=64)
     platform_machine: str = Field(min_length=1, max_length=64)
-    parity_version: str = Field(min_length=1, max_length=128)
+    parity_version: str | None = Field(default=None, min_length=1, max_length=128)
     distributions: tuple[DistributionProvenance, ...] = ()
+    identities: tuple[RuntimeIdentity, ...] = ()
 
-    @field_validator(
-        "python_implementation",
-        "python_version",
-        "platform_system",
-        "platform_machine",
-        "parity_version",
-    )
+    @field_validator("platform_system", "platform_machine")
     @classmethod
     def validate_safe_label(cls, label: str) -> str:
         if not _SAFE_RUNTIME_LABEL.fullmatch(label):
             raise ValueError("runtime label contains unsupported characters")
         return label
+
+    @field_validator(
+        "runtime_name",
+        "runtime_version",
+        "python_implementation",
+        "python_version",
+        "parity_version",
+    )
+    @classmethod
+    def validate_optional_safe_label(cls, label: str | None) -> str | None:
+        if label is not None and not _SAFE_RUNTIME_LABEL.fullmatch(label):
+            raise ValueError("runtime label contains unsupported characters")
+        return label
+
+    @model_validator(mode="after")
+    def validate_executor_runtime(self) -> RuntimeProvenance:
+        if self.executor in {"parity-python", "portable-python"} and (
+            self.python_implementation is None or self.python_version is None
+        ):
+            raise ValueError("Python executors must report their implementation and version")
+        if (self.runtime_name is None) != (self.runtime_version is None):
+            raise ValueError("runtime_name and runtime_version must be reported together")
+        return self
 
     @field_validator("distributions")
     @classmethod
@@ -116,6 +155,22 @@ class RuntimeProvenance(_StrictFrozenModel):
         if len(names) != len(set(names)):
             raise ValueError("runtime distribution names must be unique")
         return distributions
+
+    @field_validator("identities")
+    @classmethod
+    def validate_identities(
+        cls, identities: tuple[RuntimeIdentity, ...]
+    ) -> tuple[RuntimeIdentity, ...]:
+        if len(identities) > MAX_RECORDED_DISTRIBUTIONS:
+            raise ValueError(
+                f"at most {MAX_RECORDED_DISTRIBUTIONS} runtime identities may be reported"
+            )
+        names = [identity.name for identity in identities]
+        if names != sorted(names):
+            raise ValueError("runtime identities must be sorted by name")
+        if len(names) != len(set(names)):
+            raise ValueError("runtime identity names must be unique")
+        return identities
 
 
 def normalize_distribution_name(name: str) -> str:
@@ -203,13 +258,13 @@ def distribution_satisfies_requirement(version: str | None, specifier: str) -> b
 def runtime_contract_failures(
     runtime: RuntimeProvenance,
     *,
-    expected_parity_version: str,
+    expected_parity_version: str | None,
     required_distributions: Mapping[str, str],
 ) -> tuple[str, ...]:
     """Return bounded, value-free paths for unmet worker runtime requirements."""
 
     failures: list[str] = []
-    if runtime.parity_version != expected_parity_version:
+    if expected_parity_version is not None and runtime.parity_version != expected_parity_version:
         failures.append("parity_version")
     observed = {distribution.name: distribution for distribution in runtime.distributions}
     for name, specifier in normalize_distribution_requirements(required_distributions).items():
@@ -248,12 +303,16 @@ def _collect_runtime_provenance_cached(
 ) -> RuntimeProvenance:
     names = tuple(sorted(set(CORE_DISTRIBUTIONS).union(explicit_distributions)))
     return RuntimeProvenance(
+        executor="parity-python",
+        runtime_name="python",
+        runtime_version=_safe_runtime_label(platform.python_version()),
         python_implementation=_safe_runtime_label(platform.python_implementation()),
         python_version=_safe_runtime_label(platform.python_version()),
         platform_system=_safe_runtime_label(platform.system()),
         platform_machine=_safe_runtime_label(platform.machine()),
         parity_version=_safe_runtime_label(__version__),
         distributions=tuple(_distribution_provenance(name) for name in names),
+        identities=(),
     )
 
 
@@ -276,6 +335,9 @@ def diff_runtime(expected: RuntimeProvenance, actual: RuntimeProvenance) -> tupl
 
     differences: list[str] = []
     for field in (
+        "executor",
+        "runtime_name",
+        "runtime_version",
         "python_implementation",
         "python_version",
         "platform_system",
@@ -289,6 +351,11 @@ def diff_runtime(expected: RuntimeProvenance, actual: RuntimeProvenance) -> tupl
     for name in sorted(set(expected_distributions).union(actual_distributions)):
         if expected_distributions.get(name) != actual_distributions.get(name):
             differences.append(f"distributions.{name}")
+    expected_identities = {item.name: item for item in expected.identities}
+    actual_identities = {item.name: item for item in actual.identities}
+    for name in sorted(set(expected_identities).union(actual_identities)):
+        if expected_identities.get(name) != actual_identities.get(name):
+            differences.append(f"identities.{name}")
     return tuple(differences)
 
 

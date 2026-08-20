@@ -136,8 +136,8 @@ def test_find_unseen_counterexample_excludes_known_signatures(
 
     result = find_unseen_counterexample(
         schema,
-        lambda table: f"ms1:{table.column('x')[0].as_py()}",
-        {"ms1:1"},
+        lambda table: f"ms3:{table.column('x')[0].as_py()}",
+        {"ms3:1"},
         GenerationConfig(max_examples=2),
     )
 
@@ -247,8 +247,8 @@ def test_find_unseen_bundle_counterexample_excludes_signature(
     find_unseen_bundle_counterexample(  # type: ignore[arg-type]
         object(),
         {},
-        lambda _tables: "ms1:known",
-        {"ms1:known"},
+        lambda _tables: "ms3:known",
+        {"ms3:known"},
     )
 
     assert captured == [False]

@@ -39,7 +39,7 @@ def test_isolated_environment_does_not_inject_wheel_site_packages(
     assert environment["PYTHONPATH"] == "/candidate/site-packages"
 
 
-def test_isolated_environment_injects_only_source_checkout_root(
+def test_isolated_environment_never_injects_controller_source_checkout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_root = tmp_path / "project" / "src"
@@ -55,9 +55,8 @@ def test_isolated_environment_injects_only_source_checkout_root(
 
     environment = execution_module._isolated_environment(spec)
 
-    assert environment["PYTHONPATH"] == os.pathsep.join(
-        [str(source_root), "/candidate/site-packages"]
-    )
+    assert environment["PYTHONPATH"] == "/candidate/site-packages"
+    assert str(source_root) not in environment["PYTHONPATH"]
 
 
 @pytest.fixture
@@ -520,7 +519,7 @@ def test_failed_tabular_return_canonicalization_is_an_infrastructure_error(
     )
 
     for observation in (live, current, isolated):
-        assert observation.outcome is ExecutionOutcome.RAISED
+        assert observation.outcome is ExecutionOutcome.ERROR
         assert observation.exception is not None
         assert observation.exception.module == "parity.execution"
         assert observation.exception.type == "ExecutionError"
@@ -555,12 +554,12 @@ def test_failed_polars_input_materialization_is_an_infrastructure_error(
             adapter="polars",
         ),
         input_table,
-        timeout_seconds=5,
+        timeout_seconds=15,
     )
 
     assert not invoked
     for observation in (live, current, isolated):
-        assert observation.outcome is ExecutionOutcome.RAISED
+        assert observation.outcome is ExecutionOutcome.ERROR
         assert observation.exception is not None
         assert observation.exception.module == "parity.execution"
         assert observation.exception.type == "ExecutionError"
@@ -582,7 +581,7 @@ def test_import_time_system_exit_is_a_sanitized_infrastructure_error(
         _table(),
     )
 
-    assert observation.outcome is ExecutionOutcome.RAISED
+    assert observation.outcome is ExecutionOutcome.ERROR
     assert observation.exception is not None
     assert observation.exception.module == "parity.execution"
     assert observation.exception.type == "ExecutionError"
@@ -600,7 +599,7 @@ def test_import_time_system_exit_is_a_sanitized_infrastructure_error(
 def test_json_return_rejects_non_string_mapping_keys_recursively(value: object) -> None:
     observation = execute_callable_current(lambda _frame: value, _table(), adapter="pandas")
 
-    assert observation.outcome is ExecutionOutcome.RAISED
+    assert observation.outcome is ExecutionOutcome.ERROR
     assert observation.exception is not None
     assert observation.exception.type == "TypeError"
     assert observation.return_type is not None
@@ -613,7 +612,7 @@ def test_json_return_rejects_cyclic_containers_as_unsupported() -> None:
 
     observation = execute_callable_current(lambda _frame: value, _table(), adapter="pandas")
 
-    assert observation.outcome is ExecutionOutcome.RAISED
+    assert observation.outcome is ExecutionOutcome.ERROR
     assert observation.exception is not None
     assert observation.exception.type == "TypeError"
     assert observation.return_type == "builtins.dict"
@@ -656,7 +655,7 @@ def test_required_distribution_fails_before_target_import(tmp_path: Path) -> Non
 
     observation = execute_current(spec, _table())
 
-    assert observation.outcome is ExecutionOutcome.CRASHED
+    assert observation.outcome is ExecutionOutcome.ERROR
     assert observation.exception is not None
     assert observation.exception.type == "RuntimeContractError"
     assert observation.exception.message == (
@@ -667,7 +666,7 @@ def test_required_distribution_fails_before_target_import(tmp_path: Path) -> Non
     assert imported.exists() is False
 
 
-def test_disposable_worker_parity_mismatch_fails_before_target_import(
+def test_disposable_worker_does_not_require_target_side_parity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     imported = tmp_path / "disposable-target-imported.txt"
@@ -687,11 +686,9 @@ def test_disposable_worker_parity_mismatch_fails_before_target_import(
 
     observation = execute_isolated(spec, _table(), timeout_seconds=5)
 
-    assert observation.outcome is ExecutionOutcome.CRASHED
-    assert observation.exception is not None
-    assert observation.exception.type == "RuntimeContractError"
-    assert observation.exception.message.endswith("parity_version")
-    assert imported.exists() is False
+    assert observation.outcome is ExecutionOutcome.RETURNED
+    assert observation.exception is None
+    assert imported.exists() is True
 
 
 def test_isolated_workers_apply_relative_workdir_once(
@@ -787,9 +784,10 @@ def test_isolated_session_malformed_response_fails_closed(
             return []
         return original_loads(payload)
 
-    monkeypatch.setattr("parity.execution.json.loads", malformed)
     spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
     with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        assert session.preflight_runtime().succeeded
+        monkeypatch.setattr("parity.execution.json.loads", malformed)
         malformed_response = session.execute(_table())
         unavailable = session.execute(_table())
 
@@ -809,14 +807,14 @@ def test_isolated_session_outputless_execute_response_fails_closed(
     def outputless(payload: str):
         parsed = original_loads(payload)
         if isinstance(parsed, dict) and "outcome" in parsed:
-            parsed["has_table"] = False
-            parsed["has_value"] = False
+            parsed["output"] = None
             parsed["return_type"] = None
         return parsed
 
-    monkeypatch.setattr("parity.execution.json.loads", outputless)
     spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
     with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        assert session.preflight_runtime().succeeded
+        monkeypatch.setattr("parity.execution.json.loads", outputless)
         malformed = session.execute(_table())
         unavailable = session.execute(_table())
 
@@ -852,9 +850,10 @@ def test_isolated_session_malformed_runtime_fails_closed(
             parsed["runtime"] = {"python_version": "/private/unsafe"}
         return parsed
 
-    monkeypatch.setattr("parity.execution.json.loads", malformed_runtime)
     spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
     with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        assert session.preflight_runtime().succeeded
+        monkeypatch.setattr("parity.execution.json.loads", malformed_runtime)
         malformed = session.execute(_table())
         unavailable = session.execute(_table())
 
@@ -887,9 +886,10 @@ def test_isolated_session_invalid_mutation_metadata_fails_closed(
             parsed[field] = value
         return parsed
 
-    monkeypatch.setattr("parity.execution.json.loads", invalid_mutation)
     spec = _isolated_spec(transform_module, "parity_test_transforms:scalar", adapter="pandas")
     with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
+        assert session.preflight_runtime().succeeded
+        monkeypatch.setattr("parity.execution.json.loads", invalid_mutation)
         malformed = session.execute(_table())
         unavailable = session.execute(_table())
 

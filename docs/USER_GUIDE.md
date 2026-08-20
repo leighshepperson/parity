@@ -4,17 +4,18 @@
 
 A Parity case has four parts:
 
-1. A **reference** callable whose observable behaviour is the baseline.
-2. A **candidate** callable that should preserve that behaviour.
+1. A **reference** target whose observable behaviour is the baseline.
+2. A **candidate** target that should preserve that behaviour.
 3. An **input domain**, supplied by a fixture/schema or a named two- or three-frame bundle.
 4. An explicit **comparison policy** defining what “the same” means.
 
-Parity converts canonical Arrow input(s) into each callable's requested adapter, observes both
-executions, canonicalises the outcomes and compares them. It first runs deterministic adversarial
-cases, then a property-based search. A discovered difference is written as a counterexample
-artifact; automatic replay is available when the callable environment can be reconstructed.
-Generated differences are minimized when shrinking is enabled and succeeds. If semantic checks
-pass, Parity can benchmark both implementations.
+Targets may be Python callables in unrelated environments or arbitrary protocol-speaking commands.
+Parity sends each one the same canonical Arrow input(s), observes semantic Return/Raise outcomes,
+canonicalises successful values and compares them. It first runs deterministic adversarial cases,
+then a property-based search. A discovered difference is classified and written as a
+counterexample artifact; automatic replay is available when the target contract can be
+reconstructed. Generated differences are minimized when shrinking is enabled and succeeds. If
+semantic checks pass, Parity can benchmark both implementations.
 
 For joins and lookups, an input bundle generates all frames from one joint strategy. Key overlap,
 foreign-key, cardinality and equal-row-count relationships therefore remain true while Hypothesis
@@ -24,14 +25,25 @@ Arrow IPC input atomically.
 The reference is not declared *correct* by Parity. It is the contract you have chosen to preserve.
 Review reference defects before turning a historical accident into a permanent requirement.
 
+For the common path, initialize once and let the default command run the complete configured suite:
+
+```bash
+parity init
+parity check
+```
+
+The remaining sections explain how to make that contract accurate; they are not required setup
+steps for every case.
+
 ## Recommended migration workflow
 
 ### 1. Establish the public boundary
 
-Verify transformations at boundaries meaningful to their users. Good boundaries accept a frame
-and return a frame, series or JSON-like value without reading hidden global state. Wrap functions
-that currently fetch data, inspect the clock or write files so those effects are explicit static
-arguments or test fixtures.
+Verify behaviour at boundaries meaningful to users. A good boundary accepts canonical data and
+returns a frame or JSON-like value without hidden global state. A small adapter may unpack that data
+into an old function signature, construct new domain objects, or canonicalise a new return type;
+reference and candidate APIs do not need to match. Project effects such as clock, file or service
+inputs into explicit fixtures where practical.
 
 Start with transformations whose wrong answers have a clear cost: billing, allocation, risk,
 entitlements, experimentation metrics or published aggregates. Do not begin with every helper in
@@ -78,7 +90,7 @@ point to the differing cell instead of an unmatched whole row.
 ### 4. Run locally and replay
 
 ```bash
-parity doctor
+parity doctor --config parity.toml
 parity check --case orders --no-performance
 ```
 
@@ -88,9 +100,15 @@ On failure, read the mismatch and diagnosis, then replay the preserved input:
 parity replay .parity/orders/<timestamp>-<hash>
 ```
 
-Replayable artifacts record the effective configuration and runtime observed inside each worker.
-Replay first probes both workers without importing the configured targets. If Python, Parity,
-platform or a recorded distribution drifted, neither callable runs and replay returns an error.
+A reproduced incompatibility remains `FAILED`, so `parity replay` exits `1` when it successfully
+recreates the saved mismatch. This preserves the ordinary `PASSED`/`FAILED`/`ERROR` CLI contract.
+Use `parity evidence verify` when successful reproduction itself should exit `0`.
+
+Replayable artifacts record the effective configuration and runtime observed inside each target.
+Replay first probes both transports/runtimes and declared requirements without importing configured
+targets. Only when both succeed does it probe endpoint imports/configuration, still without invoking
+application behaviour. If a bound runtime, platform, distribution or source identity drifted,
+neither target runs and replay returns an error.
 Evidence without a complete runtime and configuration binding is inspectable but cannot be replayed
 automatically.
 
@@ -110,7 +128,7 @@ different mismatch shape), and `2` means report, artifact, runtime or execution 
 be verified. Terminal and JSON output include a bounded, data-safe reason code for every stale or
 errored artifact, without echoing a private path or caught exception.
 Parity verifies integrity and behavioural reproduction;
-the `ms1:...` mismatch classifier is not a cryptographic signature or source attestation. Replay
+the `ms3:...` mismatch classifier is not a cryptographic signature or source attestation. Replay
 executes the configured project code, so verify only artifacts and checkouts you trust.
 
 The saved Arrow input is the authority. A Parquet convenience copy is also written when its
@@ -120,13 +138,17 @@ unit-test corpus before fixing the candidate.
 
 ### 5. Separate correctness from speed
 
-Enable performance only after the semantic campaign passes. Benchmarking interleaves reference and
-candidate invocations and reports median elapsed time and process peak RSS. Shared CI runners are
-noisy; gate only large, repeatable regressions there. Use a controlled runner and representative
-fixture for serious performance decisions.
+Enable performance only after the semantic campaign passes. Benchmarking interleaves paired
+reference and candidate invocations, reports median elapsed time and process peak RSS, and computes
+a deterministic bootstrap confidence interval for each ratio. A threshold is exceeded only when
+the interval's lower bound is beyond it, so one noisy timing cannot fail a gate. Shared CI runners
+are still noisy; gate only large, repeatable regressions there. Use a controlled runner and a
+representative fixture for serious performance decisions. If performance is enabled but Parity has
+no validated passing input, the benchmark runner is unavailable, or an invocation cannot complete,
+the case is `ERROR`; requested performance evidence is never silently omitted from a pass.
 
 `fail_on_regression = false` records evidence without failing a migration. Turn it on only after a
-stable baseline exists.
+stable baseline exists; an enforced gate requires at least five measured pairs and defaults to nine.
 
 ### 6. Gate pull requests
 
@@ -147,6 +169,56 @@ outputs stop discovery as an error.
 
 Keep seeds in version control for reproducibility, but retain shrinking. Store artifacts with
 restricted access because a counterexample derived from a fixture may contain fixture values.
+
+For domain objects that do not fit the compact schema vocabulary, point a case at project-owned
+generation code instead of expanding `parity.toml` into another schema language:
+
+```toml
+[[cases]]
+name = "portfolio"
+
+[cases.reference]
+target = "migration_adapters:legacy_portfolio"
+
+[cases.candidate]
+target = "migration_adapters:new_portfolio"
+
+[cases.generation]
+generator = "tests.generators:portfolios"
+max_examples = 500
+seed = 20260820
+```
+
+```python
+from hypothesis import strategies as st
+import pandas as pd
+
+
+def portfolios():
+    return st.lists(
+        st.tuples(st.integers(1, 20), st.floats(-1_000, 1_000)),
+        max_size=20,
+    ).map(lambda rows: pd.DataFrame(rows, columns=["asset_id", "value"]))
+```
+
+The factory runs in the Parity driver and returns the strategy; reference and candidate still run
+in their separate environments. Hypothesis shrinking is retained. A factory may instead return a
+plain iterable, which is useful for an existing domain corpus but is only bounded/replayed—not
+automatically shrunk.
+
+Run independent cases concurrently once the suite contains enough work to benefit:
+
+```bash
+parity check --jobs 8 --native-threads 1
+```
+
+Results stay in case declaration order. Search and shrinking inside each case remain serial.
+`--native-threads` is opt-in; use it for NumPy/BLAS/OpenMP-heavy targets to avoid multiplying case
+processes by native thread pools. Concurrent jobs cannot be combined with `fail_fast = true` or an
+enforced performance gate: competing target cases would make stop order or benchmark evidence
+scheduler-dependent.
+Report-only performance measurements are permitted with concurrent jobs, but the cases still
+contend for one host. Use `jobs = 1` for performance evidence you intend to compare or retain.
 
 ### 7. Gate the declared migration surface
 
@@ -216,7 +288,7 @@ parity init migrations/parity.toml \
   --reference your_library.api:transform \
   --candidate your_library.api:transform \
   --fixture tests/fixtures/input.parquet
-parity migration init --reference 'your-library==1.2.3'
+parity migration init --reference "$REFERENCE_PACKAGE_SPEC"
 parity migration run
 ```
 
@@ -225,31 +297,74 @@ also creates `migrations/migration.toml` with one `core-regression` unit mapped 
 case; review that inventory before treating it as a completion gate. The exact released requirement
 supplies the reference package and the current checkout is installed as the candidate.
 
-`migration run` resolves a hash-pinned requirements lock, creates both isolated workers, enforces
-the exact reference distribution before target import, records the subject distribution on both
-sides, runs the complete ledger and writes
-`migrations/.parity/workspace/reports/default.json`. Re-running uses the existing lock; pass
+For main-versus-branch, worktree-versus-worktree or local-refactor regression testing, use the same
+workflow with two existing checkouts:
+
+```bash
+parity migration init \
+  --reference-path ../main-worktree \
+  --candidate ../feature-worktree
+parity migration run
+```
+
+`reference` and `reference_path` are mutually exclusive. Parity uses both local sources in place;
+it never creates, switches, resets or edits a worktree.
+
+The shared target interpreter defaults to the controller's Python. When the migration also changes
+Python, declare each side directly:
+
+```bash
+parity migration init \
+  --reference-path ../main-worktree \
+  --candidate ../feature-worktree \
+  --reference-python 3.8 \
+  --candidate-python 3.12
+```
+
+Managed target interpreters may be Python 3.8 or newer and receive the target package plus the
+PyArrow protocol transport, not the full Parity installation. A pandas or Polars adapter also
+needs that library on its side; declare it in the subject package or lane requirements when it is
+not already a dependency. The Parity controller remains on Python 3.11 or newer.
+
+`migration run` resolves a separate hash-pinned requirements lock for each target, creates both
+isolated targets, enforces the reference distribution contract before target import, records
+the subject distribution on both sides, runs the complete ledger and writes
+`migrations/.parity/workspace/reports/default.json`. Re-running uses the existing locks; pass
 `--refresh-locks` only for a deliberate dependency update. `parity migration setup` prepares the
-same workers without executing project callables.
+same environments without executing project callables.
 
-tox owns the environment lifecycle, tox-uv supplies uv-backed environments, and uv resolves the
-locks. These are implementation details behind the Parity commands. Parity does not clone a
-repository, choose a source revision, apply a patch or change candidate source. Prepare and review
-the checkout before running it.
+For local/local runs, setup installs each checkout editable into only its own environment and proves that
+both the installed distribution metadata and its importable modules resolve to the declared source.
+The workspace directory and `PYTHONPATH` may not expose either checkout directly. Before setup,
+after setup and around every dependency lane, Parity captures both Git HEADs, dirty flags and a
+deterministic SHA-256 digest of tracked plus non-ignored untracked worktree content. A change to
+either source invalidates all active results. Each portable target also computes this identity before
+execution. The lane report and finding replay contract retain the path-free identity, so changing a
+checkout without changing its package version makes replay return `ERROR` before invoking either
+target. A successful run writes the relocatable `source-provenance.json` beside the lane reports; it
+contains hashes and state only, never checkout paths, branch names or file names.
+Dirty checkouts are allowed and explicitly bound by that digest; both checkouts must still have a
+committed Git HEAD.
 
-The managed path also verifies that the candidate's statically declared distribution name matches
-the exact reference requirement. Supported declarations are `project.name`, `tool.poetry.name`,
-and `setup.cfg` `[metadata] name`. For dynamic `setup.py`-only metadata, provision the two worker
+The environment builder and resolver are implementation details behind `migration setup/run`.
+Users do not need to author a separate environment-runner configuration. Target environments install
+the application and PyArrow for the portable protocol worker; package metadata and lane requirements
+supply any pandas, Polars or other adapter dependency. They do not install the full Parity
+application or its controller dependencies.
+
+The managed path verifies that every local checkout's statically declared distribution name matches
+the subject reference. Supported declarations are `project.name`, `tool.poetry.name`, and
+`setup.cfg` `[metadata] name`. For dynamic `setup.py`-only metadata, provision the two target
 interpreters yourself and keep using the explicit `reference.python` and `candidate.python` fields.
 
-### Rolling A→B→C migrations
+### Rolling A→B→C released migrations
 
 The workspace represents exactly one active adjacent pair. It is not a migration-history database.
 For A→B, keep durable checks in a `core-regression` unit and add units or cases specific to that
 transition. Once B is published and becomes the next baseline:
 
 ```bash
-parity migration advance --reference 'your-library==B_VERSION'
+parity migration advance --reference "$NEXT_REFERENCE_PACKAGE_SPEC"
 # update or remove only the B→C-specific cases and manifest units
 parity migration run
 ```
@@ -259,6 +374,10 @@ It atomically changes only the exact reference and invalidates the previous acti
 The next run may retain compatible transitive pins; use `--refresh-locks` only when dependency
 selection itself should change. Old counterexample directories are inert local evidence and may be
 deleted when the previous transition is no longer needed.
+
+`migration advance` is intentionally limited to exact released references. For a local/local pair,
+edit the workspace or regenerate it with `migration init --force` and the next reviewed
+`reference_path`; Parity never chooses or moves a branch for you.
 
 Only cases mapped by `migration.toml` contribute to completion. Keeping a case in `parity.toml`
 without retaining its manifest mapping does not run or certify it. A typical rolling ledger keeps
@@ -276,27 +395,26 @@ id = "b-to-c-transition"
 cases = ["new-engine-path", "changed-default"]
 ```
 
-Managed workers execute from the directory containing `parity.workspace.toml`. This prevents a
-flat-layout candidate checkout from shadowing the installed reference package. Put wrapper modules
-in `migrations/`; import the candidate through its editable installation, not by adding the project
-root to `PYTHONPATH`. Parity rejects a managed layout that exposes the candidate checkout to the
-reference worker.
+Managed targets execute from the directory containing `parity.workspace.toml`. This prevents a
+flat-layout checkout from shadowing an installed package. Put wrapper modules in `migrations/`;
+import local subjects through their editable installations, not by adding either project root to
+`PYTHONPATH`. Parity rejects a managed layout that exposes a managed checkout directly.
 
 Add repeatable dependency lanes when the same migration must pass under more than one constraints
 file:
 
 ```bash
 parity migration init \
-  --reference 'your-library==1.2.3' \
+  --reference "$REFERENCE_PACKAGE_SPEC" \
   --candidate . \
   --lane minimum=requirements/minimum.txt \
   --lane current=requirements/current.txt
 parity migration run
 ```
 
-Each lane receives its own lock, reference/candidate workers and JSON report. Lane requirement
-files are resolver inputs and may use ordinary compatible ranges; the generated lock records the
-exact transitive result with hashes. The configured reference and candidate targets, input domain,
+Each lane receives separate reference and candidate locks, two target environments and one JSON result. Lane
+requirement files are resolver inputs and may use ordinary compatible ranges; each generated lock
+records the exact side-specific transitive result with hashes. The configured targets, input domain,
 comparison policy and migration inventory stay identical across lanes.
 
 The workspace is optional. Set `reference.python` and `candidate.python` explicitly for externally
@@ -327,11 +445,48 @@ nested tables merge while lists replace. Defaults deliberately cannot hide names
 tags or shared invocation arguments. Paths still resolve beside the root `parity.toml`, and the
 expanded configuration is what Parity validates and fingerprints.
 
-## Callables and environments
+## Targets, adapters and environments
 
-Targets use `package.module:function` syntax. The callable receives the input frame as its first
-positional argument, followed by `static_args`. Both sides receive `static_kwargs`; the reference
+Python targets use `package.module:callable.path` syntax. A single-input callable receives its
+adapted frame first, followed by `static_args`. Both sides receive `static_kwargs`; the reference
 also receives `reference_kwargs` and the candidate receives `candidate_kwargs`.
+
+The two callables do not need the same signature or architecture. Keep a canonical input contract
+and translate it in small, reviewed project adapters:
+
+```python
+def reference_calculation(frame):
+    from legacy import calculate
+
+    row = frame.iloc[0]
+    return calculate(row.x, row.y, row.currency)
+
+
+def candidate_calculation(frame):
+    from rewritten import Data, Engine
+
+    row = frame.iloc[0]
+    return Engine(row.currency).calculate(Data(row.x, row.y))
+```
+
+In dependency-isolated runs, do not import both implementations at the top of one shared wrapper
+module: each target environment may intentionally contain only its own implementation. Keep the
+imports inside the side-specific functions as above, or use separate wrapper modules. Preflight
+imports the configured module but never invokes either function.
+
+If the raw return types also differ, configure an importable output canonicalizer on either side:
+
+```toml
+[cases.candidate]
+target = "migration_adapters:candidate_calculation"
+canonicalizer = "migration_adapters:calculation_to_contract"
+adapter = "pandas"
+```
+
+The canonicalizer runs in that target environment after a successful call and returns a supported
+Arrow/frame or JSON-like value. It never intercepts a target exception. Target exceptions are
+semantic Raise outcomes; adapter import, invocation or output-canonicalisation failures are
+infrastructure `ERROR`.
 
 `parity init` can write a minimal fixture-backed case directly. The
 three project inputs are all-or-none, and the command validates the target syntax, adapters and
@@ -356,39 +511,39 @@ options, `parity init` retains the editable starter behaviour and creates `parit
 ### Explicit environment setup
 
 The managed workspace is the recommended setup for a declared library migration. The same import
-target can also run in two environments prepared by another tool. For example, this compares one
-Polars wrapper under two releases while keeping the interpreter paths explicit:
+target can also run in two environments prepared by any environment manager. Each environment
+needs PyArrow, the application/wrappers under test and any dependency required by its selected
+adapter—not `parity-check` or the controller's Pydantic/Hypothesis/CLI dependencies:
 
 ```bash
-python -m venv .venv-polars-reference
-python -m venv .venv-polars-candidate
-PARITY_RELEASE="$(parity version)"
-.venv-polars-reference/bin/python -m pip install "parity-check==$PARITY_RELEASE" polars==1.0.0
-.venv-polars-candidate/bin/python -m pip install "parity-check==$PARITY_RELEASE" polars==1.41.1
+python -m venv .venv-reference
+python -m venv .venv-candidate
+.venv-reference/bin/python -m pip install pyarrow -r requirements/reference.txt
+.venv-candidate/bin/python -m pip install pyarrow -r requirements/candidate.txt
 
 parity init parity.toml \
-  --reference project.polars_transform:run \
-  --candidate project.polars_transform:run \
+  --reference migration_adapters:reference_transform \
+  --candidate migration_adapters:candidate_transform \
   --fixture tests/fixtures/input.parquet \
-  --reference-adapter polars --candidate-adapter polars \
-  --reference-python .venv-polars-reference/bin/python \
-  --candidate-python .venv-polars-candidate/bin/python \
-  --record-distribution polars
+  --reference-adapter pandas --candidate-adapter polars \
+  --reference-python .venv-reference/bin/python \
+  --candidate-python .venv-candidate/bin/python \
+  --record-distribution project-under-test
 
 parity doctor --config parity.toml
 parity check --config parity.toml
 ```
 
-Reading `PARITY_RELEASE` from the installed controller keeps the guide current while ensuring both
-isolated workers install the exact same Parity release. Each configured worker must carry its own
-installation; `parity doctor --config parity.toml` verifies the observed versions before execution.
-
-`doctor --config` asks each worker only for bounded runtime provenance; it does not import or invoke
-the configured target. “Ready” therefore means the worker runtime contract is ready, not that a
-target import has succeeded. Its terminal and JSON output place reference and candidate Python, Parity
-and explicitly requested distribution versions side by side without executable paths, working
-directories or environment values. A worker failure or missing requested distribution returns exit
-code 2. Use `--case NAME` to inspect one case in a multi-case file.
+The controller launches its dependency-light portable worker by file path. `doctor --config`
+performs two preflight phases: it first checks Arrow transport, runtime provenance and declared
+requirements on both sides without importing user code. Only when both transports succeed does it
+check target, canonicalizer and adapter imports, without invoking the target. If one transport
+fails, doctor JSON records `status = "not_checked"` and
+`error_code = "TargetEndpointNotChecked"` for the deferred peer; terminal output says that the
+endpoint was not checked. Its output places bounded reference and candidate
+runtime/distribution evidence side by side without executable paths, working directories or
+environment values. A transport, import, adapter or requirement failure returns exit code 2. Use
+`--case NAME` to inspect one case in a multi-case file.
 
 ```toml
 [[cases]]
@@ -406,7 +561,7 @@ pandas_input = "native"
 python = ".venv-reference/bin/python"
 workdir = "."
 record_distributions = ["orders-lib", "scikit-learn"]
-required_distributions = { orders-lib = "==1.2.*", pandas = ">=2,<3" }
+required_distributions = { orders-lib = "==1.*" }
 
 [cases.candidate]
 target = "orders.candidate:transform"
@@ -414,7 +569,7 @@ adapter = "polars"
 python = ".venv-candidate/bin/python"
 workdir = "."
 record_distributions = ["orders-lib", "scikit-learn"]
-required_distributions = { orders-lib = ">=2,<3", polars = ">=1,<2" }
+required_distributions = { orders-lib = "==2.*" }
 ```
 
 For a keyword-bound input bundle, each logical name is passed as a frame keyword and cannot collide
@@ -436,11 +591,28 @@ paths, hostnames or a broad `pip freeze` inventory.
 
 Use `required_distributions` when a version is a prerequisite rather than provenance alone. It maps
 normalized distribution names to PEP 440 specifiers. Before importing or invoking the target,
-Parity probes the worker and returns a `RuntimeContractError` if a named distribution is missing,
-unavailable or outside its range. Required names are recorded automatically. Every configured
-worker must also run the exact Parity version used by the controller; that requirement is automatic
-and does not need a config entry. `parity doctor --config parity.toml` reports both the requested
-range and whether the observed version satisfies it.
+Parity probes the target runtime and returns a `RuntimeContractError` if a named distribution is
+missing, unavailable or outside its range. Required names are recorded automatically. There is no
+target-side Parity-version requirement because the portable worker does not import Parity.
+`parity doctor --config parity.toml` reports both the requested range and whether the observed
+version satisfies it.
+
+An arbitrary local executable can replace a Python target:
+
+```toml
+[cases.reference]
+command = ["./bin/legacy-contract-adapter"]
+
+[cases.candidate]
+command = ["./bin/new-contract-adapter", "--compat"]
+```
+
+`command` and `target` are mutually exclusive. A command endpoint owns its runtime, input adapter
+and output canonicalisation, so it cannot also set `python`, `adapter`, `pandas_input` or
+`canonicalizer`. It receives private Arrow/JSON requests through target protocol v1 and returns
+strict Return/Raise/Error observations plus generic runtime identity. This is the first-class path
+for Fortran, C/C++, Rust, Java, legacy CLIs and other runtimes; see the
+[external target protocol](TARGET_PROTOCOL.md).
 
 Pandas callables receive Arrow-backed pandas dtypes by default because that preserves the canonical
 input's nullable integers and its distinction between null and IEEE NaN. Set
@@ -481,7 +653,7 @@ be re-imported by a later process; use a configured case when automatic replay i
 
 Live verification runs sequentially in the caller's interpreter; replay and configured campaigns
 isolate each side in a separate process. Before accepting a configured finding, or a live finding
-whose two callables have stable import paths, Parity re-observes the witness in newly started worker
+whose two callables have stable import paths, Parity re-observes the witness in newly started target
 processes. A stateful result that disappears in clean execution is reported as an error, never
 accepted as a semantic finding. Non-importable live callables are repeated only in the caller's
 process, must be pure functions of their arguments, and produce evidence that cannot be replayed
@@ -490,7 +662,7 @@ interpreter and import paths are deliberately omitted rather than replaced with 
 environment, so those artifacts remain inspectable evidence but require an explicit configuration
 to re-run.
 
-A configured case uses one persistent reference worker and one persistent candidate worker for the
+A configured case uses one persistent reference target session and one persistent candidate session for the
 whole semantic campaign and its benchmark. The two sides never share a process, and every call
 receives a freshly deserialized input. Python module globals and other process state do persist
 between examples on each side. Avoid call counters, mutable caches with observable behaviour,
@@ -516,6 +688,9 @@ Use both when possible:
 - A schema makes allowed values, nullability, bounds and constraints explicit.
 - Column `examples` force useful domain values into deterministic probes.
 - `categories` restrict generation to an enumeration.
+- `minimum`/`maximum` bound numerical and date/datetime ranges.
+- `regex`, `min_length` and `max_length` define reviewable string domains.
+- `timezone` uses an IANA zone and adds applicable DST transition boundaries.
 - `unique` and `unique_together` prevent impossible duplicates.
 - `sorted_by` keeps complete frames in a declared lexicographic order for as-of joins and windows.
 - `row_comparison` expresses per-row valid domains such as `start <= end` without wrapper-side
@@ -532,15 +707,24 @@ rejected rather than reported as a pass.
 
 ## Interpreting outcomes
 
-`passed` means every observed reference/candidate outcome satisfied the selected policy. `failed`
-means Parity found a semantic mismatch or an enforced performance regression. `error` means the
-campaign itself could not produce reliable evidence, for example because of invalid configuration,
-import failure, timeout or corrupt artifact.
+`PASSED` means every observed reference/candidate outcome satisfied the selected policy. `FAILED`
+means Parity found a semantic mismatch or an enforced performance regression. `ERROR` means the
+campaign itself could not produce reliable comparison evidence, for example because of invalid
+configuration, transport/import/canonicalisation failure, process timeout/crash or corrupt artifact.
 
 When both implementations raise exceptions, `check_exceptions` controls whether equivalent
 failure behaviour is required. An exception match is evidence only for that input; it is not a
-successful business result. Input mutation is checked separately because two equal return values
-can leave materially different downstream state.
+successful business result. Parity compares normalized exception type/message semantics rather
+than raw text: paths, addresses, timestamps, random IDs, dependency versions and witness literals
+are ignored, while stable API subjects and structured validation reason codes remain distinct.
+FAILED exception findings report data-safe reference/candidate outcomes, well-known qualified
+exception types, and allow-listed Pydantic error codes, location shapes and NumPy API tokens when
+available. Custom identifier-shaped metadata remains opaque. Raw exception messages and witness
+values are never copied into reports; terminal output includes the complete `ms3:` replay
+signature.
+Target-raised exceptions are semantic outcomes and therefore produce `FAILED`, not `ERROR`, when
+they differ. Input mutation is checked separately because two equal return values can leave
+materially different downstream state.
 
 ## Useful commands
 
@@ -556,16 +740,17 @@ parity check [--config PATH] [--case NAME]    run campaigns
              [--tag TAG] [--max-examples N]
              [--max-findings N]
              [--stability-repeats N]
+             [--jobs N] [--native-threads N]
              [--performance|--no-performance]
              [--json PATH] [--junit PATH] [--markdown PATH]
 parity migration check --manifest PATH        gate the declared migration inventory
                        --config PATH [--json PATH]
-parity migration init --reference PACKAGE==VERSION
+parity migration init (--reference PACKAGE==VERSION | --reference-path PATH)
                       [--candidate PATH]       declare a managed workspace
                       [--lane NAME[=REQUIREMENTS]]
 parity migration advance --reference PACKAGE==VERSION
                                               move the active adjacent pair
-parity migration setup [--workspace PATH]     prepare locked worker environments
+parity migration setup [--workspace PATH]     prepare locked target environments
                        [--refresh-locks]
 parity migration run [--workspace PATH]       prepare and run every dependency lane
                      [--refresh-locks]
@@ -573,15 +758,18 @@ parity evidence verify REPORT                 replay report-referenced findings
                        [--artifact-root PATH] [--json PATH]
 parity replay ARTIFACT                        reproduce a counterexample
 parity doctor [--json]                        report runtime readiness
-parity doctor --config PATH [--case NAME]     inspect configured workers
+parity doctor --config PATH [--case NAME]     preflight configured targets
               [--json]
 parity version                                print the installed version
 ```
 
 ## Current boundaries
 
-Parity currently supports pandas, Polars and Arrow frames and Python callables. It is designed to
-add engines through adapters, but SQL warehouses, Spark clusters, distributed schedulers, GPU
-engines and arbitrary side-effect comparison are not present yet. Worker processes isolate
-failures; they do not securely sandbox hostile code. See the [roadmap](ROADMAP.md),
+Parity currently supports canonical Arrow/frame inputs, Python callables through built-in adapters,
+and arbitrary local executables through the target protocol. Canonical returns, raises, input
+mutation and process performance are first-class observations. A reviewed adapter can project a
+CLI, file or database result into that return contract, but Parity does not yet isolate and compare
+side effects such as filesystem changes, transactions, network calls or subprocesses itself.
+Target processes isolate failures; they do not securely sandbox hostile code. See
+[use cases and boundaries](USE_CASES.md), the [roadmap](ROADMAP.md),
 [architecture](ARCHITECTURE.md) and [threat model](THREAT_MODEL.md).

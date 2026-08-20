@@ -69,8 +69,8 @@ class EvidenceArtifactResult(StrictModel):
     case: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_.-]+$")
     artifact: str = Field(min_length=1)
     status: EvidenceArtifactStatus
-    expected_signature: str = Field(pattern=r"^ms1:[0-9a-f]{64}$")
-    actual_signature: str | None = Field(default=None, pattern=r"^ms1:[0-9a-f]{64}$")
+    expected_signature: str = Field(pattern=r"^ms3:[0-9a-f]{64}$")
+    actual_signature: str | None = Field(default=None, pattern=r"^ms3:[0-9a-f]{64}$")
     reason_code: EvidenceArtifactReason | None = None
 
     @field_validator("artifact")

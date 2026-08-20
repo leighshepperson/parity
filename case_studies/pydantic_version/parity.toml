@@ -1,0 +1,86 @@
+version = 1
+artifact_dir = ".parity-pydantic-versions"
+fail_fast = false
+
+[case_defaults.reference]
+adapter = "arrow"
+python = "environments/reference/.venv/bin/python"
+record_distributions = ["pydantic"]
+required_distributions = { pydantic = "<2" }
+
+[case_defaults.candidate]
+adapter = "arrow"
+python = "environments/candidate/.venv/bin/python"
+record_distributions = ["pydantic"]
+required_distributions = { pydantic = ">=2" }
+
+[case_defaults.generation]
+stability_repeats = 2
+seed = 20260820
+derandomize = true
+
+[case_defaults.performance]
+enabled = false
+
+[[cases]]
+name = "stable-model-validation"
+tags = ["control", "cross-version", "pydantic"]
+
+[cases.reference]
+target = "pydantic_version_parity:stable"
+
+[cases.candidate]
+target = "pydantic_version_parity:stable"
+
+[cases.schema]
+min_rows = 1
+max_rows = 3
+
+[[cases.schema.columns]]
+name = "value"
+dtype = "int64"
+nullable = false
+minimum = -100
+maximum = 100
+examples = [-100, 0, 100]
+
+[cases.generation]
+max_examples = 50
+max_findings = 1
+
+[[cases]]
+name = "pydantic-v1-to-v2-semantics"
+tags = ["cross-version", "finding", "pydantic", "version-drift"]
+
+[cases.reference]
+target = "pydantic_version_parity:migration_surface"
+
+[cases.candidate]
+target = "pydantic_version_parity:migration_surface"
+
+[cases.schema]
+min_rows = 1
+max_rows = 3
+
+[[cases.schema.columns]]
+name = "operation"
+dtype = "string"
+nullable = false
+categories = [
+  "integer-to-string",
+  "fractional-to-integer",
+  "optional-default",
+  "model-dict-equality",
+]
+
+[[cases.schema.columns]]
+name = "value"
+dtype = "float64"
+nullable = false
+minimum = -10.0
+maximum = 10.0
+examples = [-1.5, 0.0, 1.5]
+
+[cases.generation]
+max_examples = 250
+max_findings = 4

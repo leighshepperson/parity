@@ -20,6 +20,8 @@ from parity.canonical import (
     CanonicalFrame,
     CanonicalSeries,
     ExceptionInfo,
+    Raise,
+    Return,
     canonicalize,
     is_nan,
     is_null,
@@ -42,7 +44,7 @@ class ComparisonResult:
         return not self.mismatches
 
 
-_SIGNATURE_VERSION = "ms1"
+_SIGNATURE_VERSION = "ms3"
 _SIGNATURE_KIND_PRIORITY = {
     # Prefer contract-level symptoms over downstream cell differences. A
     # single execution can emit several mismatches; selecting one conservative
@@ -100,25 +102,57 @@ _INDEXED_PATH = re.compile(r"\[(?:-?\d+|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")\
 
 
 def _normalized_signature_path(path: str | None) -> str:
-    """Retain structural path shape without persisting user-defined names."""
+    """Retain opaque structural identity without persisting user-defined names."""
 
     if not path:
         return "$"
     normalized = _INDEXED_PATH.sub("[*]", path)
     if normalized.startswith("$inputs/"):
-        return "$inputs/<input>"
-    prefix, separator, _field = normalized.partition(".")
+        input_path, separator, field_path = normalized.partition(".")
+        input_digest = hashlib.sha256(input_path[8:].encode("utf-8")).hexdigest()[:16]
+        normalized = f"$inputs/<input:{input_digest}>"
+        if separator:
+            field_digest = hashlib.sha256(field_path.encode("utf-8")).hexdigest()[:16]
+            normalized += f".<field:{field_digest}>"
+        return normalized
+    prefix, separator, field_path = normalized.partition(".")
     if separator:
-        return f"{prefix}.<field>"
+        field_digest = hashlib.sha256(field_path.encode("utf-8")).hexdigest()[:16]
+        return f"{prefix}.<field:{field_digest}>"
     return normalized
 
 
-def _signature_component(mismatch: Mismatch) -> tuple[int, str, str, str]:
+def _exception_signature_identity(mismatch: Mismatch) -> str:
+    """Bind exception findings to semantic outcomes without private message text."""
+
+    allowed = {
+        key: mismatch.details.get(key)
+        for key in (
+            "reference_outcome",
+            "candidate_outcome",
+            "reference_type",
+            "candidate_type",
+            "reference_exception_fingerprint",
+            "candidate_exception_fingerprint",
+        )
+        if key in mismatch.details
+    }
+    encoded = json.dumps(
+        allowed,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _signature_component(mismatch: Mismatch) -> tuple[int, str, str, str, str]:
     return (
         _SIGNATURE_KIND_PRIORITY[mismatch.kind],
         mismatch.kind.value,
         _SIGNATURE_MESSAGE_CODES.get(mismatch.message, f"{mismatch.kind.value}-other"),
         _normalized_signature_path(mismatch.path),
+        _exception_signature_identity(mismatch) if mismatch.kind is MismatchKind.EXCEPTION else "",
     )
 
 
@@ -141,9 +175,10 @@ def mismatch_signature(mismatches: Sequence[Mismatch]) -> str:
     """Return a stable, data-free signature for an observable mismatch shape.
 
     A signature identifies one conservative primary symptom, not a root cause
-    or a claim that two signatures are two separate bugs. Compared values,
-    verbose details, exception text and witness-dependent row indices are never
-    included. The prefix versions the canonicalization contract.
+    or a cryptographic identity. Compared values, raw exception text and
+    witness-dependent row indices are never included. Exception findings bind
+    only normalized, privacy-safe outcome fingerprints. The prefix versions the
+    canonicalization contract.
     """
 
     if not mismatches:
@@ -434,6 +469,15 @@ def _value_mismatches(
     reference = canonicalize(reference)
     candidate = canonicalize(candidate)
 
+    if isinstance(reference, (Return, Raise)) or isinstance(candidate, (Return, Raise)):
+        return _outcome_mismatches(
+            reference,
+            candidate,
+            policy,
+            path,
+            max_mismatches=max_mismatches,
+        )
+
     reference_null = is_null(reference)
     candidate_null = is_null(candidate)
     reference_nan = is_nan(reference)
@@ -680,20 +724,42 @@ def _exception_mismatches(
     path: str,
 ) -> list[Mismatch]:
     if not isinstance(reference, ExceptionInfo) or not isinstance(candidate, ExceptionInfo):
+        reference_raised = isinstance(reference, ExceptionInfo)
+        candidate_raised = isinstance(candidate, ExceptionInfo)
         return [
             _mismatch(
                 MismatchKind.EXCEPTION,
                 "one implementation raised and the other returned",
                 path,
-                reference,
-                candidate,
+                reference if reference_raised else {"outcome": "return"},
+                candidate if candidate_raised else {"outcome": "return"},
+                reference_outcome="raise" if reference_raised else "return",
+                candidate_outcome="raise" if candidate_raised else "return",
+                reference_type=(
+                    ".".join(part for part in (reference.module, reference.type_name) if part)
+                    if reference_raised
+                    else None
+                ),
+                candidate_type=(
+                    ".".join(part for part in (candidate.module, candidate.type_name) if part)
+                    if candidate_raised
+                    else None
+                ),
+                reference_exception_fingerprint=(
+                    reference.fingerprint if reference_raised else None
+                ),
+                candidate_exception_fingerprint=(
+                    candidate.fingerprint if candidate_raised else None
+                ),
+                reference_exception_details=(dict(reference.details) if reference_raised else None),
+                candidate_exception_details=(dict(candidate.details) if candidate_raised else None),
             )
         ]
     if not policy.check_exceptions:
         return []
     reference_type = (reference.module, reference.type_name)
     candidate_type = (candidate.module, candidate.type_name)
-    if reference_type != candidate_type or reference.message != candidate.message:
+    if reference.fingerprint != candidate.fingerprint:
         return [
             _mismatch(
                 MismatchKind.EXCEPTION,
@@ -703,9 +769,82 @@ def _exception_mismatches(
                 candidate,
                 reference_type=".".join(part for part in reference_type if part),
                 candidate_type=".".join(part for part in candidate_type if part),
+                reference_outcome="raise",
+                candidate_outcome="raise",
+                reference_exception_fingerprint=reference.fingerprint,
+                candidate_exception_fingerprint=candidate.fingerprint,
+                reference_exception_details=dict(reference.details),
+                candidate_exception_details=dict(candidate.details),
             )
         ]
     return []
+
+
+def _outcome_mismatches(
+    reference: Any,
+    candidate: Any,
+    policy: ComparisonPolicy,
+    path: str,
+    *,
+    max_mismatches: int,
+) -> list[Mismatch]:
+    """Compare explicit Return/Raise semantic outcomes."""
+
+    if not isinstance(reference, (Return, Raise)) or not isinstance(candidate, (Return, Raise)):
+        raise TypeError("semantic outcomes must be compared on both sides")
+    if isinstance(reference, Return) and isinstance(candidate, Return):
+        return _value_mismatches(
+            reference.value,
+            candidate.value,
+            policy,
+            path,
+            max_mismatches=max_mismatches,
+        )
+    if isinstance(reference, Raise) and isinstance(candidate, Raise):
+        return _exception_mismatches(reference.exception, candidate.exception, policy, path)
+    reference_exception = reference.exception if isinstance(reference, Raise) else None
+    candidate_exception = candidate.exception if isinstance(candidate, Raise) else None
+    return [
+        _mismatch(
+            MismatchKind.EXCEPTION,
+            "one implementation raised and the other returned",
+            path,
+            reference,
+            candidate,
+            reference_outcome="raise" if reference_exception is not None else "return",
+            candidate_outcome="raise" if candidate_exception is not None else "return",
+            reference_type=(
+                ".".join(
+                    part
+                    for part in (reference_exception.module, reference_exception.type_name)
+                    if part
+                )
+                if reference_exception is not None
+                else None
+            ),
+            candidate_type=(
+                ".".join(
+                    part
+                    for part in (candidate_exception.module, candidate_exception.type_name)
+                    if part
+                )
+                if candidate_exception is not None
+                else None
+            ),
+            reference_exception_fingerprint=(
+                reference_exception.fingerprint if reference_exception is not None else None
+            ),
+            candidate_exception_fingerprint=(
+                candidate_exception.fingerprint if candidate_exception is not None else None
+            ),
+            reference_exception_details=(
+                dict(reference_exception.details) if reference_exception is not None else None
+            ),
+            candidate_exception_details=(
+                dict(candidate_exception.details) if candidate_exception is not None else None
+            ),
+        )
+    ]
 
 
 def _dtype_mismatch(
@@ -1258,23 +1397,27 @@ def _frame_mismatches(
     return mismatches[:max_mismatches]
 
 
-def _observation_value(observation: Observation) -> Any:
-    """Extract the comparable value from an execution observation."""
+def _observation_outcome(observation: Observation) -> Return | Raise:
+    """Convert execution machinery into a first-class semantic outcome."""
 
     if observation.succeeded:
         if observation.table is not None:
-            return observation.table
+            return Return(observation.table)
         if observation.has_value:
-            return observation.value
-        return None
+            return Return(observation.value)
+        return Return(None)
     if observation.exception is not None:
-        return ExceptionInfo(
-            type_name=observation.exception.type,
-            message=observation.exception.message,
-            module=observation.exception.module,
+        return Raise(
+            ExceptionInfo(
+                type_name=observation.exception.type,
+                message=observation.exception.message,
+                module=observation.exception.module,
+                message_fingerprint=observation.exception.message_fingerprint,
+                details=observation.exception.details,
+            )
         )
     label = observation.outcome.value
-    return ExceptionInfo(type_name=label, message=label, module="parity.execution")
+    return Raise(ExceptionInfo(type_name=label, message=label, module="parity.execution"))
 
 
 def compare_observations(
@@ -1308,8 +1451,8 @@ def compare_observations(
     if len(mismatches) < max_mismatches:
         mismatches.extend(
             compare(
-                _observation_value(reference),
-                _observation_value(candidate),
+                _observation_outcome(reference),
+                _observation_outcome(candidate),
                 selected,
                 max_mismatches=max_mismatches - len(mismatches),
             )

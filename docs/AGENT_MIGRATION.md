@@ -1,9 +1,10 @@
 # Agent migration protocol
 
-This protocol gives a coding agent a closed, reviewable workflow for a library migration. Parity
-finds behavioural differences; the migration manifest records which declared units have evidence.
-Neither mechanism discovers the complete public API automatically. A person must review the initial
-inventory and every exclusion before treating the gate as meaningful.
+This protocol shows how a coding agent can consume Parity's deterministic evidence during a library
+migration. Parity itself is a general verification engine: it does not plan, generate or repair the
+migration. The manifest records which declared units have evidence, but neither mechanism discovers
+the complete public API automatically. A person must review the initial inventory and every
+exclusion before treating the gate as meaningful.
 
 ## Completion contract
 
@@ -26,9 +27,9 @@ manifest and wrappers as code, not as generated paperwork.
 Keep the reference implementation available until the migration is accepted. Record its release or
 commit and prepare separate, pinned reference and candidate environments where their dependencies
 differ. Put accepted PEP 440 ranges in each callable's `required_distributions`; use
-`record_distributions` for additional provenance that should be observed but not enforced. Parity
-also requires each configured worker to carry the exact controller version before it imports the
-target.
+`record_distributions` for additional provenance that should be observed but not enforced. Target
+environments need PyArrow, their selected adapter dependency and the application, not the full
+Parity controller dependency tree.
 
 Define observable boundaries rather than internal helpers. A unit can be a public function, method,
 stateful lifecycle, dispatch form or serialization contract. Wrap stateful operations such as
@@ -78,7 +79,7 @@ candidate import root. Declare the workspace after the candidate checkout and `p
 ```bash
 python -m pip install "parity-check[workspace]"
 parity migration init \
-  --reference 'your-library==1.2.3' \
+  --reference "$REFERENCE_PACKAGE_SPEC" \
   --lane minimum=requirements/minimum.txt \
   --lane current=requirements/current.txt
 ```
@@ -88,6 +89,20 @@ the configured cases when `migrations/migration.toml` is absent. Review that gen
 generation does not prove completeness. The command does not clone or select source, apply the
 migration patch, or modify the checkout. Source preparation remains a separate, reviewable agent
 action.
+
+For a pull request, local refactor or two-worktree comparison, declare both reviewed sources
+directly:
+
+```bash
+parity migration init \
+  --reference-path ../main-worktree \
+  --candidate ../agent-worktree
+parity migration run
+```
+
+Do not add either checkout to `PYTHONPATH`. Parity provisions separate editable environments,
+verifies import origins, records path-free Git/content provenance and fails closed if a source
+changes. It never creates, switches or resets a worktree for the agent.
 
 ## 3. Build evidence one unit at a time
 
@@ -102,6 +117,11 @@ For each unit:
 6. Run the focused cases, replay every finding and promote a sanitized witness into the project's
    regression tests.
 7. Add case names to the unit only when the cases exist and exercise that unit.
+
+When the two target environments contain conflicting or renamed dependencies, keep side-specific
+imports inside their wrapper functions or in separate modules. A shared module that imports both
+implementations at module load time cannot preflight in an environment that intentionally contains
+only one side.
 
 Use ordinary Parity commands during the inner loop:
 
@@ -123,7 +143,7 @@ parity evidence verify migrations/.parity/migration-status.json \
 ```
 
 Exit `0` means every artifact reproduced its expected mismatch shape, `1` means at least one is
-stale, and `2` means verification errored. Treat `ms1:...` as a data-free classifier, not a digital
+stale, and `2` means verification errored. Treat `ms3:...` as a data-free classifier, not a digital
 signature or proof of source identity. This command re-executes project code; do not run an
 unreviewed checkout or artifact outside a sandbox.
 
@@ -148,18 +168,19 @@ With `parity.workspace.toml`, use one command for the complete matrix:
 parity migration run
 ```
 
-Parity resolves a hash-pinned requirements lock, prepares isolated reference/candidate workers and
-writes one migration report per lane. tox, tox-uv and uv are hidden lifecycle/resolver details.
-Re-running retains the selected lock; use `--refresh-locks` only as an intentional dependency
-change. Explicit `reference.python` and `candidate.python` configs remain valid when the project or
-CI platform provisions environments itself.
+Parity resolves a hash-pinned requirements lock, prepares isolated reference/candidate target
+environments and writes one migration report per lane. Environment creation and resolution stay
+behind the Parity command; no separate runner configuration is required. Re-running retains the
+selected lock; use `--refresh-locks` only as an intentional dependency change. Explicit
+`reference.python` and `candidate.python` configs remain valid when the project or CI platform
+provisions environments itself.
 
 For a sequence of adjacent migrations, keep one active workspace. Preserve a permanent
 `core-regression` manifest unit and replace only hop-specific units. After candidate B is released,
 advance A→B to B→C without creating a history graph:
 
 ```bash
-parity migration advance --reference 'your-library==1.3.0'
+parity migration advance --reference "$NEXT_REFERENCE_PACKAGE_SPEC"
 parity migration run
 ```
 
@@ -214,9 +235,9 @@ contain fixture-derived or generated input data and require restricted storage.
 - Do not weaken an equivalence policy solely because it reports a difference.
 - Do not treat matching exceptions as proof of a successful business result.
 - Do not publish raw counterexamples or production-shaped fixtures.
-- Do not let environment tooling clone, patch or otherwise obscure the reviewed candidate source.
-- Do not add the candidate checkout to a managed reference worker's working directory or
-  `PYTHONPATH`; the reference must import the installed released distribution.
-- Do not accept `ms1:` mismatch classifiers as cryptographic signatures or attestations.
+- Do not let environment tooling clone, patch or otherwise obscure reviewed local sources.
+- Do not add either managed checkout to a target environment's working directory or `PYTHONPATH`; local
+  subjects must resolve through their verified editable installations.
+- Do not accept `ms3:` mismatch classifiers as cryptographic signatures or attestations.
 - Do not declare completion while any unit is failed, errored or uncovered.
 - State the inventory limitation when reporting completion: all **declared** in-scope units passed.

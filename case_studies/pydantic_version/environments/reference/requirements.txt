@@ -1,0 +1,2 @@
+pyarrow==25.0.1
+pydantic==1.10.22

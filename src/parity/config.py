@@ -28,6 +28,7 @@ class _StrictDocumentModel(BaseModel):
 class _CallableDefaults(_StrictDocumentModel):
     """Reusable non-target fields for one side of a configured case."""
 
+    canonicalizer: str | None = None
     adapter: Literal["auto", "pandas", "polars", "arrow"] | None = None
     pandas_input: Literal["arrow", "native"] | None = None
     python: Path | None = None
@@ -35,6 +36,7 @@ class _CallableDefaults(_StrictDocumentModel):
     environment: dict[str, str] | None = None
     record_distributions: list[str] | None = None
     required_distributions: dict[str, str] | None = None
+    native_threads: int | None = Field(default=None, ge=1, le=256)
 
 
 class _ComparisonDefaults(_StrictDocumentModel):
@@ -82,6 +84,8 @@ class _PerformanceDefaults(_StrictDocumentModel):
     max_memory_ratio: float | None = None
     min_reference_ms: float | None = None
     fail_on_regression: bool | None = None
+    confidence_level: float | None = Field(default=None, gt=0.5, lt=1)
+    bootstrap_samples: int | None = Field(default=None, ge=100, le=100_000)
 
 
 class _CaseDefaults(_StrictDocumentModel):
@@ -106,6 +110,8 @@ class _ConfigDocument(_StrictDocumentModel):
     cases_file: Path | None = None
     case_defaults: _CaseDefaults | None = None
     fail_fast: bool = False
+    jobs: int = Field(default=1, ge=1, le=256)
+    native_threads: int | None = Field(default=None, ge=1, le=256)
 
     @model_validator(mode="after")
     def require_one_case_source(self) -> _ConfigDocument:
@@ -125,6 +131,7 @@ def _resolve_paths(config: ParityConfig, base: Path) -> ParityConfig:
     config._base_directory = base.resolve()
     config.artifact_dir = (base / config.artifact_dir).resolve()
     for case in config.cases:
+        case._base_directory = base.resolve()
         if case.fixture is not None:
             case.fixture = (base / case.fixture).resolve()
         if case.input_bundle is not None:
@@ -225,6 +232,8 @@ def _expand_document(document: _ConfigDocument, config_path: Path) -> dict[str, 
         "version": document.version,
         "artifact_dir": document.artifact_dir,
         "fail_fast": document.fail_fast,
+        "jobs": document.jobs,
+        "native_threads": document.native_threads,
         "cases": [
             _merge_mappings(defaults, _canonicalize_required_distributions(case)) for case in cases
         ],

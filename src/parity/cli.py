@@ -244,6 +244,19 @@ def check(
             help="Override same-input observations per implementation",
         ),
     ] = None,
+    jobs: Annotated[
+        int | None,
+        typer.Option("--jobs", "-j", min=1, max=256, help="Run independent cases concurrently"),
+    ] = None,
+    native_threads: Annotated[
+        int | None,
+        typer.Option(
+            "--native-threads",
+            min=1,
+            max=256,
+            help="Limit common BLAS/OpenMP thread pools in each worker",
+        ),
+    ] = None,
     performance: Annotated[
         bool, typer.Option("--performance/--no-performance", help="Run performance checks")
     ] = True,
@@ -284,6 +297,14 @@ def check(
             item.generation.stability_repeats = stability_repeats
         if not performance:
             item.performance.enabled = False
+
+    try:
+        if jobs is not None:
+            config.jobs = jobs
+        if native_threads is not None:
+            config.native_threads = native_threads
+    except ValueError as exc:
+        _fail(str(exc))
 
     result = run_suite(config, selected_cases=selected or None)
     written: list[Path] = []
@@ -370,12 +391,19 @@ def _render_migration_result(result: MigrationResult) -> None:
 @migration_app.command("init")
 def migration_init(
     reference: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--reference",
             help="Exact released requirement, for example package==1.2.3",
         ),
-    ],
+    ] = None,
+    reference_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--reference-path",
+            help="Existing local reference checkout (mutually exclusive with --reference)",
+        ),
+    ] = None,
     workspace_path: Annotated[
         Path,
         typer.Option("--workspace", "-w", help="Workspace file to create"),
@@ -386,7 +414,24 @@ def migration_init(
     ] = Path("."),
     python_version: Annotated[
         str | None,
-        typer.Option("--python", help="Worker Python major.minor; defaults to this Python"),
+        typer.Option(
+            "--python",
+            help="Shared target Python major.minor; defaults to this Python",
+        ),
+    ] = None,
+    reference_python_version: Annotated[
+        str | None,
+        typer.Option(
+            "--reference-python",
+            help="Reference target Python major.minor; overrides --python",
+        ),
+    ] = None,
+    candidate_python_version: Annotated[
+        str | None,
+        typer.Option(
+            "--candidate-python",
+            help="Candidate target Python major.minor; overrides --python",
+        ),
     ] = None,
     config_path: Annotated[
         Path,
@@ -412,7 +457,7 @@ def migration_init(
         typer.Option("--force", help="Replace an existing workspace file"),
     ] = False,
 ) -> None:
-    """Declare one active released-reference to local-candidate migration."""
+    """Declare one active released/local-reference to local-candidate migration."""
 
     from parity.migration import (
         MigrationConfigError,
@@ -429,6 +474,8 @@ def migration_init(
     )
 
     invocation = Path.cwd()
+    if (reference is None) == (reference_path is None):
+        _fail("set exactly one of --reference or --reference-path")
     absolute_workspace = (
         workspace_path if workspace_path.is_absolute() else invocation / workspace_path
     )
@@ -469,8 +516,11 @@ def migration_init(
         created = write_workspace(
             workspace_path,
             reference=reference,
+            reference_path=reference_path,
             candidate=candidate,
             python_version=python_version,
+            reference_python_version=reference_python_version,
+            candidate_python_version=candidate_python_version,
             config=config_path,
             manifest=manifest_path,
             report_dir=effective_report_dir,
@@ -493,9 +543,14 @@ def migration_init(
     _print_path_status("created", created)
     if generated_manifest:
         _print_path_status("created starter ledger; review", absolute_manifest)
-    console.print(
-        "active pair declared; setup will validate candidate packaging without modifying it"
-    )
+    if reference_path is None:
+        console.print(
+            "active pair declared; setup will validate candidate packaging without modifying it"
+        )
+    else:
+        console.print(
+            "local pair declared; setup will verify both editable installs and source revisions"
+        )
     console.print(f"next: parity migration run --workspace {created}", markup=False)
 
 
@@ -598,6 +653,8 @@ def migration_run(
         console.print(Text(f"dependency lane: {lane_result.name}", style="bold"))
         _render_migration_result(lane_result.result)
         _print_path_status("report", Path(lane_result.report.name))
+    if completed.source_provenance is not None:
+        _print_path_status("source provenance", Path(completed.source_provenance.name))
     if any(lane.result.status is Status.ERROR for lane in completed.lanes):
         raise typer.Exit(2)
     if any(lane.result.status is Status.FAILED for lane in completed.lanes):
@@ -740,14 +797,14 @@ def doctor(
     as_json: Annotated[bool, typer.Option("--json", help="Emit machine-readable output")] = False,
     config_path: Annotated[
         Path | None,
-        typer.Option("--config", "-c", help="Inspect workers from this parity.toml"),
+        typer.Option("--config", "-c", help="Inspect targets from this parity.toml"),
     ] = None,
     case: Annotated[
         str | None,
         typer.Option("--case", help="Inspect only one configured case"),
     ] = None,
 ) -> None:
-    """Check local dependencies or configured worker environments."""
+    """Check local dependencies or configured target environments."""
 
     if case is not None and config_path is None:
         _fail("--case requires --config")
@@ -785,10 +842,18 @@ def doctor(
 
 def _runtime_label(worker: WorkerRuntimeReport, field: str) -> str:
     if worker.status != "ready":
-        return worker.status.replace("_", " ")
+        status = worker.status.replace("_", " ")
+        return f"{status} ({worker.error_code})" if worker.error_code else status
     if field == "python":
         return f"{worker.python_implementation} {worker.python_version}"
     if field == "parity":
+        if worker.executor != "parity-python":
+            protocol = (
+                "portable protocol v1"
+                if worker.executor == "portable-python"
+                else "target protocol v1"
+            )
+            return f"not required ({protocol})"
         version = worker.parity_version or "unavailable"
         return version if worker.parity_satisfied is not False else f"{version} (incompatible)"
     distributions = {item.name: item for item in worker.distributions}
@@ -827,9 +892,9 @@ def _render_config_doctor(report: ConfigDoctorReport) -> None:
             )
     console.print(table)
     if report.healthy:
-        console.print("[green]worker runtimes ready[/green]; targets were not imported")
+        console.print("[green]target runtimes and imports ready[/green]; targets were not invoked")
     else:
-        console.print("[red]configured workers not ready[/red]")
+        console.print("[red]configured targets not ready[/red]; reason codes identify the phase")
 
 
 if __name__ == "__main__":  # pragma: no cover

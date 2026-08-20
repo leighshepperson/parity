@@ -6,7 +6,8 @@ import importlib
 import importlib.metadata
 import platform
 import sys
-from dataclasses import asdict, dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -14,7 +15,8 @@ from parity._version import __version__
 from parity.provenance import distribution_satisfies_requirement
 
 if TYPE_CHECKING:
-    from parity.models import CallableSpec, ParityConfig
+    from parity.execution import Observation
+    from parity.models import CallableSpec, CaseConfig, ParityConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +73,11 @@ class RecordedDistributionStatus:
 class WorkerRuntimeReport:
     """Data-safe readiness evidence collected inside one configured worker."""
 
-    status: Literal["ready", "crashed", "timed_out", "invalid_response"]
+    status: Literal["ready", "not_checked", "error", "crashed", "timed_out", "invalid_response"]
+    error_code: str | None = None
+    executor: Literal["parity-python", "portable-python", "command"] | None = None
+    runtime_name: str | None = None
+    runtime_version: str | None = None
     python_implementation: str | None = None
     python_version: str | None = None
     parity_version: str | None = None
@@ -82,7 +88,7 @@ class WorkerRuntimeReport:
     def healthy(self) -> bool:
         return (
             self.status == "ready"
-            and self.parity_satisfied is True
+            and self.parity_satisfied is not False
             and all(item.healthy for item in self.distributions)
         )
 
@@ -90,6 +96,13 @@ class WorkerRuntimeReport:
         return {
             "status": self.status,
             "healthy": self.healthy,
+            "error_code": self.error_code,
+            "executor": self.executor,
+            "runtime": (
+                {"name": self.runtime_name, "version": self.runtime_version}
+                if self.runtime_name is not None and self.runtime_version is not None
+                else None
+            ),
             "python": (
                 {
                     "implementation": self.python_implementation,
@@ -127,7 +140,7 @@ class CaseRuntimeReport:
 
 @dataclass(frozen=True, slots=True)
 class ConfigDoctorReport:
-    """Configured worker readiness without callable import or invocation."""
+    """Configured transport and endpoint readiness without target invocation."""
 
     cases: tuple[CaseRuntimeReport, ...]
 
@@ -177,13 +190,11 @@ def diagnose() -> DoctorReport:
     )
 
 
-def _inspect_worker(spec: CallableSpec, *, timeout_seconds: float) -> WorkerRuntimeReport:
-    """Inspect one worker using only the provenance protocol operation."""
+def _worker_report(spec: CallableSpec, observation: Observation) -> WorkerRuntimeReport:
+    """Convert one data-safe preflight observation into a readiness report."""
 
-    from parity.execution import ExecutionOutcome, IsolatedExecutionSession
+    from parity.execution import ExecutionOutcome
 
-    with IsolatedExecutionSession(spec, timeout_seconds=timeout_seconds) as session:
-        observation = session.inspect_runtime()
     runtime = observation.runtime
     unavailable = tuple(
         RecordedDistributionStatus(
@@ -195,13 +206,21 @@ def _inspect_worker(spec: CallableSpec, *, timeout_seconds: float) -> WorkerRunt
         )
         for name in spec.provenance_distributions
     )
-    if observation.outcome is not ExecutionOutcome.RETURNED:
-        status: Literal["crashed", "timed_out"] = (
-            "timed_out" if observation.outcome is ExecutionOutcome.TIMED_OUT else "crashed"
-        )
-        return WorkerRuntimeReport(status=status, distributions=unavailable)
     if runtime is None:
-        return WorkerRuntimeReport(status="invalid_response", distributions=unavailable)
+        if observation.outcome in {ExecutionOutcome.CRASHED, ExecutionOutcome.TIMED_OUT}:
+            status: Literal["crashed", "timed_out"] = (
+                "timed_out" if observation.outcome is ExecutionOutcome.TIMED_OUT else "crashed"
+            )
+            return WorkerRuntimeReport(
+                status=status,
+                error_code=(observation.exception.type if observation.exception else None),
+                distributions=unavailable,
+            )
+        return WorkerRuntimeReport(
+            status="invalid_response",
+            error_code=(observation.exception.type if observation.exception else None),
+            distributions=unavailable,
+        )
 
     by_name = {distribution.name: distribution for distribution in runtime.distributions}
     distributions: list[RecordedDistributionStatus] = []
@@ -233,31 +252,92 @@ def _inspect_worker(spec: CallableSpec, *, timeout_seconds: float) -> WorkerRunt
                     ),
                 )
             )
+    worker_status: Literal["ready", "error", "crashed", "timed_out", "invalid_response"]
+    if observation.outcome is ExecutionOutcome.RETURNED:
+        worker_status = "ready"
+    elif observation.outcome is ExecutionOutcome.CRASHED:
+        worker_status = "crashed"
+    elif observation.outcome is ExecutionOutcome.TIMED_OUT:
+        worker_status = "timed_out"
+    else:
+        worker_status = "error"
     return WorkerRuntimeReport(
-        status="ready",
+        status=worker_status,
+        error_code=(
+            observation.exception.type
+            if observation.outcome is not ExecutionOutcome.RETURNED
+            and observation.exception is not None
+            else None
+        ),
+        executor=runtime.executor,
+        runtime_name=runtime.runtime_name,
+        runtime_version=runtime.runtime_version,
         python_implementation=runtime.python_implementation,
         python_version=runtime.python_version,
         parity_version=runtime.parity_version,
-        parity_satisfied=runtime.parity_version == __version__,
+        parity_satisfied=(
+            runtime.parity_version == __version__ if runtime.executor == "parity-python" else None
+        ),
         distributions=tuple(distributions),
     )
 
 
+def _inspect_case(case: CaseConfig) -> CaseRuntimeReport:
+    """Preflight both transports before either endpoint can be imported."""
+
+    from parity.execution import ExecutionOutcome, IsolatedExecutionSession
+
+    timeout_seconds = case.timeout_seconds
+    with (
+        IsolatedExecutionSession(case.reference, timeout_seconds=timeout_seconds) as reference,
+        IsolatedExecutionSession(case.candidate, timeout_seconds=timeout_seconds) as candidate,
+        ThreadPoolExecutor(max_workers=2, thread_name_prefix="parity-doctor") as pool,
+    ):
+        reference_future = pool.submit(reference.preflight_transport)
+        candidate_future = pool.submit(candidate.preflight_transport)
+        reference_probe = reference_future.result()
+        candidate_probe = candidate_future.result()
+
+        reference_ready = reference_probe.outcome is ExecutionOutcome.RETURNED
+        candidate_ready = candidate_probe.outcome is ExecutionOutcome.RETURNED
+        if reference_ready and candidate_ready:
+            reference_future = pool.submit(reference.preflight_endpoint)
+            candidate_future = pool.submit(candidate.preflight_endpoint)
+            reference_probe = reference_future.result()
+            candidate_probe = candidate_future.result()
+            return CaseRuntimeReport(
+                name=case.name,
+                reference=_worker_report(case.reference, reference_probe),
+                candidate=_worker_report(case.candidate, candidate_probe),
+            )
+
+        reference_report = _worker_report(case.reference, reference_probe)
+        candidate_report = _worker_report(case.candidate, candidate_probe)
+        if reference_ready:
+            reference_report = replace(
+                reference_report,
+                status="not_checked",
+                error_code="TargetEndpointNotChecked",
+            )
+        if candidate_ready:
+            candidate_report = replace(
+                candidate_report,
+                status="not_checked",
+                error_code="TargetEndpointNotChecked",
+            )
+        return CaseRuntimeReport(
+            name=case.name,
+            reference=reference_report,
+            candidate=candidate_report,
+        )
+
+
 def diagnose_config(config: ParityConfig, *, case_name: str | None = None) -> ConfigDoctorReport:
-    """Inspect selected configured workers without importing their targets."""
+    """Preflight selected target runtimes and imports without invoking targets."""
 
     cases = config.cases
     if case_name is not None:
         cases = [case for case in cases if case.name == case_name]
         if not cases:
             raise ValueError(f"unknown case: {case_name}")
-    return ConfigDoctorReport(
-        cases=tuple(
-            CaseRuntimeReport(
-                name=case.name,
-                reference=_inspect_worker(case.reference, timeout_seconds=case.timeout_seconds),
-                candidate=_inspect_worker(case.candidate, timeout_seconds=case.timeout_seconds),
-            )
-            for case in cases
-        )
-    )
+    return ConfigDoctorReport(cases=tuple(_inspect_case(case) for case in cases))

@@ -183,8 +183,7 @@ def test_current_user_guides_do_not_pin_parity_patch_versions() -> None:
         encoding="utf-8"
     )
     user_guide = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
-    assert 'PARITY_RELEASE="$(parity version)"' in user_guide
-    assert user_guide.count('"parity-check==$PARITY_RELEASE"') == 2
+    assert "parity-check==" not in user_guide
 
 
 def test_action_always_installs_its_own_revision() -> None:

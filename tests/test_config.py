@@ -42,6 +42,38 @@ def test_load_config_resolves_paths_from_config_directory(tmp_path: Path) -> Non
     assert config.cases[0].candidate.pandas_input == "arrow"
 
 
+def test_load_config_accepts_custom_generation_and_parallel_limits(tmp_path: Path) -> None:
+    path = tmp_path / "parity.toml"
+    path.write_text(
+        """
+version = 1
+jobs = 4
+native_threads = 1
+
+[[cases]]
+name = "portfolio"
+
+[cases.reference]
+target = "project:legacy"
+
+[cases.candidate]
+target = "project:replacement"
+
+[cases.generation]
+generator = "generators:portfolio"
+seed = 81
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.jobs == 4
+    assert config.native_threads == 1
+    assert config.cases[0].generation.generator == "generators:portfolio"
+    assert config.cases[0]._base_directory == tmp_path
+
+
 def test_load_config_reports_toml_error(tmp_path: Path) -> None:
     path = tmp_path / "parity.toml"
     path.write_text("[[", encoding="utf-8")
@@ -231,6 +263,8 @@ search = false
 [case_defaults.performance]
 enabled = false
 repeats = 3
+confidence_level = 0.9
+bootstrap_samples = 500
 """,
         encoding="utf-8",
     )
@@ -254,6 +288,8 @@ repeats = 3
     assert not case.generation.search
     assert not case.performance.enabled
     assert case.performance.repeats == 3
+    assert case.performance.confidence_level == 0.9
+    assert case.performance.bootstrap_samples == 500
     assert "cases_file" not in config.model_dump()
     assert "case_defaults" not in config.model_dump()
 
