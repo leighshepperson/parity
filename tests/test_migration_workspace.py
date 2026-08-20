@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -55,6 +56,11 @@ from parity.models import (
 from parity.templates import write_starter
 
 runner = CliRunner()
+_ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _normalized_cli_stderr(stderr: str) -> str:
+    return " ".join(_ANSI_ESCAPE.sub("", stderr).split())
 
 
 def _project(tmp_path: Path, *, lanes: tuple[WorkspaceLane, ...] = ()) -> Path:
@@ -2358,7 +2364,7 @@ def test_migration_init_cli_rejects_legacy_source_flags(
     )
 
     assert result.exit_code == 2
-    assert f"No such option: {legacy_flag}" in result.stderr
+    assert f"No such option: {legacy_flag}" in _normalized_cli_stderr(result.stderr)
     assert not (tmp_path / "migrations").exists()
 
 
@@ -2369,7 +2375,7 @@ def test_migration_advance_cli_rejects_legacy_reference_flag() -> None:
     )
 
     assert result.exit_code == 2
-    assert "No such option: --reference" in result.stderr
+    assert "No such option: --reference" in _normalized_cli_stderr(result.stderr)
 
 
 def test_default_cli_flow_creates_nested_active_pair_and_advances_it(
