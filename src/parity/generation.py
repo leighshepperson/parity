@@ -306,13 +306,16 @@ def _timezone_transition_values(
             break
 
     selected: list[dt.datetime] = []
-    seen: set[tuple[dt.datetime, dt.timedelta | None, int]] = set()
+    seen_instants: set[dt.datetime] = set()
     for value in values:
         wall_time = value.replace(tzinfo=None)
-        witness_marker = (wall_time, value.utcoffset(), value.fold)
-        if minimum <= wall_time <= maximum and witness_marker not in seen:
+        # Arrow timezone-aware timestamps retain an absolute instant plus the
+        # zone name, not Python's representation-specific PEP 495 ``fold``
+        # flag.  Deduplicate on the identity that survives materialisation.
+        instant = value.astimezone(dt.UTC)
+        if minimum <= wall_time <= maximum and instant not in seen_instants:
             selected.append(value)
-            seen.add(witness_marker)
+            seen_instants.add(instant)
     return tuple(selected)
 
 

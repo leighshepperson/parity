@@ -509,7 +509,16 @@ def test_adversarial_cases_include_real_timezone_transition_boundaries() -> None
         dt.timedelta(hours=-5),
         dt.timedelta(hours=-4),
     }
-    assert any(value.fold == 1 for value in values)
+    repeated_wall_time = dt.datetime(2024, 11, 3, 1, 30)
+    repeated_instants = {
+        value.astimezone(dt.UTC).replace(tzinfo=None)
+        for value in values
+        if value.replace(tzinfo=None) == repeated_wall_time
+    }
+    assert repeated_instants == {
+        dt.datetime(2024, 11, 3, 5, 30),
+        dt.datetime(2024, 11, 3, 6, 30),
+    }
 
 
 @given(frame_strategy(rich_schema()))

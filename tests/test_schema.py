@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pyarrow as pa
@@ -84,6 +85,32 @@ def test_table_from_rows_supports_temporal_values() -> None:
     schema = FrameSchema(columns=[ColumnSchema(name="day", dtype="date")])
     table = table_from_rows(schema, [{"day": dt.date(2024, 2, 29)}])
     assert table.column("day").to_pylist() == [dt.date(2024, 2, 29)]
+
+
+def test_table_from_rows_preserves_both_ambiguous_timezone_instants() -> None:
+    zone = ZoneInfo("America/New_York")
+    first = dt.datetime(2024, 11, 3, 1, 30, tzinfo=zone, fold=0)
+    second = dt.datetime(2024, 11, 3, 1, 30, tzinfo=zone, fold=1)
+    schema = FrameSchema(
+        columns=[
+            ColumnSchema(
+                name="at",
+                dtype="datetime",
+                nullable=False,
+                timezone="America/New_York",
+            )
+        ]
+    )
+
+    table = table_from_rows(schema, [{"at": first}, {"at": second}])
+    stored_instants = table.column("at").cast(pa.int64()).to_pylist()
+    round_tripped_instants = [value.astimezone(dt.UTC) for value in table.column("at").to_pylist()]
+
+    assert stored_instants == [1730611800000000, 1730615400000000]
+    assert round_tripped_instants == [
+        dt.datetime(2024, 11, 3, 5, 30, tzinfo=dt.UTC),
+        dt.datetime(2024, 11, 3, 6, 30, tzinfo=dt.UTC),
+    ]
 
 
 def test_table_from_rows_rejects_values_outside_declared_dtype() -> None:

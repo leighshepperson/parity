@@ -1241,6 +1241,26 @@ def arrow_schema(schema: FrameSchema) -> pa.Schema:
     )
 
 
+def _arrow_materialization_value(value: Any, target: pa.DataType) -> Any:
+    """Project aware datetimes to the instant Arrow timestamps actually store.
+
+    Arrow's timezone timestamp is an epoch value annotated with a zone name;
+    it has no separate PEP 495 ``fold`` field.  Supplying UTC makes ambiguous
+    local instants portable even when an older PyArrow delegates Python
+    materialisation to pytz, whose datetime objects always expose ``fold=0``.
+    """
+
+    if (
+        isinstance(value, dt.datetime)
+        and pa.types.is_timestamp(target)
+        and target.tz is not None
+        and value.tzinfo is not None
+        and value.utcoffset() is not None
+    ):
+        return value.astimezone(dt.UTC)
+    return value
+
+
 def table_from_rows(schema: FrameSchema, rows: Iterable[dict[str, Any]]) -> pa.Table:
     """Build an Arrow table from generated rows while retaining empty dtypes."""
 
@@ -1248,7 +1268,9 @@ def table_from_rows(schema: FrameSchema, rows: Iterable[dict[str, Any]]) -> pa.T
     target = arrow_schema(schema)
     arrays = []
     for field in target:
-        values = [row.get(field.name) for row in materialized]
+        values = [
+            _arrow_materialization_value(row.get(field.name), field.type) for row in materialized
+        ]
         try:
             # ``from_pandas=False`` is semantically important: Arrow must retain
             # IEEE NaN as a value distinct from database null.
