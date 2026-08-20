@@ -148,8 +148,9 @@ metadata, or inside the hardened environment described below.
 Configured runs and artifact replay execute the selected Python interpreter or command path. A
 configuration-local virtual-environment entry point may be a symlink to a host Python binary; Parity
 preserves that entry point because its surrounding environment determines installed packages.
-Configured replay paths are relative to the directory containing `parity.toml` and replay must be
-launched from that directory. Paths must stay lexically within that configuration base, but this is
+Configured replay paths are relative to the directory containing `parity.toml`; replay v2 derives
+that base from the artifact's bounded ancestor declaration and never trusts the process current
+directory. Paths must stay lexically within that configuration base, but this is
 provenance hygiene, not a sandbox or trust boundary. External or missing paths leave bounded blocker
 codes instead of host locations. A managed workspace, its generated environments and path-like
 executables must remain inside the configured `parity.toml` directory for automatic replay;

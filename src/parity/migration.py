@@ -414,7 +414,7 @@ def migration_summary(result: MigrationResult) -> dict[str, int]:
 def migration_report_payload(result: MigrationResult) -> dict[str, Any]:
     """Return the stable, data-eliding migration JSON report contract."""
 
-    return {
+    payload = {
         "schema_version": 1,
         "status": result.status.value,
         "summary": migration_summary(result),
@@ -442,6 +442,11 @@ def migration_report_payload(result: MigrationResult) -> dict[str, Any]:
         # those values and retains the selected effective-config fingerprint.
         "parity": report_payload(result.suite),
     }
+    from parity.json_contracts import MigrationReportContract
+
+    return MigrationReportContract.model_validate(payload).model_dump(
+        mode="json", by_alias=True, exclude_unset=True
+    )
 
 
 def render_migration_json(result: MigrationResult, *, pretty: bool = True) -> str:

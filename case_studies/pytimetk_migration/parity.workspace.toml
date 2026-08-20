@@ -1,4 +1,4 @@
-version = 2
+version = 3
 reference_package = "pytimetk==2.5.1"
 candidate_path = "../pytimetk-migration-candidate"
 python = "3.12"

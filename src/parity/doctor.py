@@ -159,8 +159,6 @@ REQUIRED_DEPENDENCIES = (
     "hypothesis",
     "numpy",
     "packaging",
-    "pandas",
-    "polars",
     "psutil",
     "pyarrow",
     "pydantic",

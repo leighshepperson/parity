@@ -35,6 +35,10 @@ parity init
 parity check
 ```
 
+The base install uses Arrow and does not install pandas or Polars. Install
+`parity-check[pandas]`, `parity-check[polars]`, or both extras when those adapters are part of the
+contract. Managed released-package environments use `parity-check[workspace]`.
+
 `parity init` creates a runnable `parity.toml` and example module. Replace the example functions
 with small reference and candidate adapters around the behaviour you care about, then run
 `parity check`. Parity handles process isolation, generation, shrinking, artifacts and reporting.
@@ -245,13 +249,12 @@ parity evidence verify .parity/report.json --json .parity/evidence-status.json
 incompatibility is still `FAILED` and exits `1`. Use `parity evidence verify` when the question is
 whether report-referenced findings reproduced; that command exits `0` when every one did.
 
-Configured artifacts express interpreter, workdir and path-like command locations relative to the
-directory containing the loaded `parity.toml`. Run replay from that same directory; with the
-default managed layout, for example, use `cd migrations` before replaying `.parity/...`. A
-module-level import target and configuration-local runtime paths make automatic replay portable
-within the checkout. If a live callable, external interpreter/workdir/command or missing local
-executable prevents reconstruction, the artifact remains inspectable and replay reports the affected
-side and the concrete configuration change needed to create new replayable evidence.
+Replay v2 binds interpreter, workdir and path-like command locations to an ancestor of the artifact
+itself, so the same artifact command works from the project root, a sibling directory or an
+unrelated current directory. Moving the complete project preserves that relationship; moving an
+artifact by itself fails closed. If a live callable, external artifact root/interpreter/workdir/
+command or missing local executable prevents reconstruction, the artifact remains inspectable and
+replay reports the bounded reason and the concrete change needed to collect replayable evidence.
 
 Each finding explains what class of behaviour changed and carries an `ms3:` mismatch-shape
 fingerprint. It is a deterministic deduplication/replay key, not a cryptographic signature, source
@@ -292,19 +295,20 @@ python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference-package 'your-library==1.2.3' \
   --candidate-package 'your-library==2.0.0' \
-  --target your_library.api:transform \
-  --fixture tests/fixtures/input.parquet
-parity migration run
+  --scaffold \
+  --json
+# Review migration_adapters.py, fixtures/input.json, parity.toml and migration.toml,
+# then mark the four checklist decisions resolved.
+parity migration validate --json
+parity migration run --json
 ```
 
-Use `--reference-target` and `--candidate-target` instead of `--target` when the public import names
-differ. If `migrations/parity.toml` already exists, omit all scaffolding options: initialization
-loads that reviewed contract and never overwrites it. `--force` replaces only an existing workspace
-file. `--fixture` is interpreted from the command's current directory and stored relative to the
-generated `parity.toml`. A target names an existing importable callable; initialization writes the
-contract but does not generate wrapper implementation code. Initialization validates the target
-spelling and fixture, while `migration run` preflights the import after environment setup. Managed
-wrappers are imported from the workspace directory.
+`--scaffold` creates a deliberately incomplete Arrow adapter, tiny fixture, starter ledger and
+four-item `migration.checklist.json`; it never overwrites any of them. `migration validate` loads
+the workspace/config/ledger/fixtures without creating environments or invoking targets, exits `1`
+while review decisions remain, and exits `0` only when the authored contract is structurally ready.
+For an existing wrapper and fixture, use `--target` (or side-specific targets) plus `--fixture`
+instead. Existing reviewed contracts are never overwritten; `--force` replaces only the workspace.
 
 For a branch or worktree comparison, point both sides at existing checkouts (and either scaffold as
 above or reuse an existing contract):
@@ -337,6 +341,13 @@ directory and its managed environments must be contained by the directory holdin
 managed initialization rejects other layouts, and the default `migrations/` layout colocates them.
 See the
 [user guide](docs/USER_GUIDE.md#managed-migration-workspaces).
+
+`migration init`, `migration validate`, `migration run` and `replay` accept boolean `--json` and
+emit exactly one versioned, data-safe document to stdout while preserving exit codes `0`/`1`/`2`.
+Suggested commands are argv arrays, not shell strings. Discover every authored/output contract with
+`parity schema list` and print one Draft 2020-12 schema with, for example,
+`parity schema workspace`, `parity schema finding` or `parity schema agent-result`. Published schema
+bytes are frozen with their contract version and do not depend on the installed Pydantic release.
 
 Migrations are one active adjacent pair. Keep reusable controls/core cases, replace
 transition-specific cases, and advance after promoting the candidate:

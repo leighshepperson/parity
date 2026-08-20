@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "ChecklistItemId": {
+      "enum": [
+        "adapter_semantics",
+        "fixture_domain",
+        "migration_surface",
+        "comparison_policy"
+      ],
+      "title": "ChecklistItemId",
+      "type": "string"
+    },
+    "ChecklistStatus": {
+      "enum": [
+        "unresolved",
+        "resolved"
+      ],
+      "title": "ChecklistStatus",
+      "type": "string"
+    },
+    "ContractChecklistItem": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "items": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Files",
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/ChecklistItemId"
+        },
+        "instruction": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "title": "Instruction",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ChecklistStatus",
+          "default": "unresolved"
+        }
+      },
+      "required": [
+        "id",
+        "instruction",
+        "files"
+      ],
+      "title": "ContractChecklistItem",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/checklist/v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Four explicit review decisions required by a generated migration contract.",
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/ContractChecklistItem"
+      },
+      "maxItems": 4,
+      "minItems": 4,
+      "title": "Items",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "status": {
+      "$ref": "#/$defs/ChecklistStatus",
+      "default": "unresolved"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "ContractChecklist",
+  "type": "object",
+  "x-parity-contract": "checklist",
+  "x-parity-contract-version": 1
+}

@@ -32,6 +32,11 @@ parity init
 parity check
 ```
 
+The base controller and generated starter are Arrow-only. Install `parity-check[pandas]` or
+`parity-check[polars]` only when a controller-side case selects that adapter; missing optional
+adapters produce an exact install hint. Managed target environments still receive their adapter
+dependencies from the subject package or lane requirements.
+
 The remaining sections explain how to make that contract accurate; they are not required setup
 steps for every case.
 
@@ -112,12 +117,12 @@ neither target runs and replay returns an error.
 Evidence without a complete runtime and configuration binding is inspectable but cannot be replayed
 automatically.
 
-For configured runs, project-relative replay paths are based on the directory containing the loaded
-`parity.toml`, not whichever directory happened to launch `parity check` or `migration run`. Launch
-replay from that configuration directory. In the default managed layout this means, for example:
+Replay v2 records a bounded ancestor from the artifact back to the directory containing the loaded
+`parity.toml`. Resolution begins at the artifact and never consults the shell's current directory,
+so an absolute artifact path can be replayed from anywhere. For example:
 
 ```bash
-(cd migrations && parity replay .parity/<case>/<finding-directory>)
+parity replay /path/to/project/migrations/.parity/<case>/<finding-directory>
 ```
 
 Use module-level import targets and keep configured interpreters, workdirs and path-like command
@@ -309,18 +314,26 @@ python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference-package 'your-library==1.2.3' \
   --candidate-package 'your-library==2.0.0' \
-  --target migration_adapters:transform \
-  --fixture tests/fixtures/input.parquet \
-  --case-name transform
-parity migration run
+  --scaffold \
+  --json
+parity migration validate --json
+parity migration run --json
 ```
 
-`--target` supplies the same import target on both sides. Use `--reference-target` and
+`--scaffold` writes a deliberately incomplete Arrow wrapper, tiny JSON fixture, config, starter
+ledger and four-item review checklist. It refuses to overwrite any authored file, even with
+`--force`. Review the wrapper, fixture, ledger and comparison policy, then mark every checklist item
+and its top-level status `resolved`. `migration validate` loads workspace v3, config, ledger and
+fixtures without creating `.parity` state or invoking either package. It exits `1` for unresolved
+review work and `2` for an invalid contract.
+
+For an existing callable and fixture, `--target` supplies the same import target on both sides. Use
+`--reference-target` and
 `--candidate-target` when the release changes its import path or wrapper. The scaffolder also accepts
 `--reference-adapter`, `--candidate-adapter`, repeatable `--record-distribution` and repeatable
 `--row-key`. `--fixture` is interpreted from the command's current directory and stored relative to
-the generated `parity.toml`. A target names an existing importable callable; scaffolding writes its
-configuration but does not generate wrapper implementation code. Managed wrapper modules are
+the generated `parity.toml`. In this explicit-target mode, a target names an existing importable
+callable and initialization does not generate its implementation. Managed wrapper modules are
 imported from the workspace directory. Before publishing, the command validates target spelling,
 adapter values, fixture readability and the resulting configuration; it does not import the target.
 `migration setup` subsequently validates package resolution and editable origins, while `migration
@@ -345,7 +358,7 @@ Each side independently accepts an exact released package or an existing local c
 The package form must be one unconditional, non-wildcard `==` requirement; extras such as
 `package[io]==2.0.0` are supported. The reference requires exactly one form. Candidate package/path
 flags are mutually exclusive; omitting both is shorthand for `--candidate-path .`. The saved
-version 2 workspace uses only `reference_package` / `reference_path` and `candidate_package` /
+version 3 workspace uses only `reference_package` / `reference_path` and `candidate_package` /
 `candidate_path` as source keys, with exactly one key from each pair.
 
 For main-versus-branch, worktree-versus-worktree or local-refactor regression testing, use the same
@@ -807,19 +820,24 @@ parity migration check --manifest PATH        gate the declared migration invent
                        --config PATH [--json PATH]
 parity migration init (--reference-package PACKAGE==VERSION | --reference-path PATH)
                       [--candidate-package PACKAGE==VERSION | --candidate-path PATH]
+                      [--scaffold] [--json]
                       [--target TARGET | --reference-target TARGET
                                        --candidate-target TARGET]
                       [--fixture FILE]         scaffold or declare a managed workspace
                       [--lane NAME[=REQUIREMENTS]]
+parity migration validate [--workspace PATH] [--json]
+                                              preflight authored contracts only
 parity migration advance --reference-package PACKAGE==VERSION
                                               move the active adjacent pair
 parity migration setup [--workspace PATH]     prepare locked target environments
                        [--refresh-locks]
 parity migration run [--workspace PATH]       prepare and run every dependency lane
-                     [--refresh-locks]
+                     [--refresh-locks] [--json]
 parity evidence verify REPORT                 replay report-referenced findings
                        [--artifact-root PATH] [--json PATH]
-parity replay ARTIFACT                        reproduce a counterexample
+parity replay ARTIFACT [--json]               reproduce a counterexample from any cwd
+parity schema list                            list published machine contracts
+parity schema NAME [--output PATH]            emit one versioned JSON Schema
 parity doctor [--json]                        report runtime readiness
 parity doctor --config PATH [--case NAME]     preflight configured targets
               [--json]

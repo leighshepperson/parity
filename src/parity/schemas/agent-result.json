@@ -1,0 +1,425 @@
+{
+  "$defs": {
+    "ArtifactReference": {
+      "additionalProperties": false,
+      "properties": {
+        "case": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Case"
+        },
+        "finding_signature": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finding Signature"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "replay_command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NextCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "ArtifactReference",
+      "type": "object"
+    },
+    "CheckStatus": {
+      "enum": [
+        "passed",
+        "failed",
+        "deferred"
+      ],
+      "title": "CheckStatus",
+      "type": "string"
+    },
+    "CommandCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "case": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Case"
+        },
+        "code": {
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)*$",
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "side": {
+          "anyOf": [
+            {
+              "enum": [
+                "reference",
+                "candidate"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Side"
+        },
+        "status": {
+          "$ref": "#/$defs/CheckStatus"
+        }
+      },
+      "required": [
+        "code",
+        "status",
+        "message"
+      ],
+      "title": "CommandCheck",
+      "type": "object"
+    },
+    "CommandCwd": {
+      "description": "Named directory from which a suggested command must be run.",
+      "enum": [
+        "invocation",
+        "config",
+        "workspace",
+        "artifact"
+      ],
+      "title": "CommandCwd",
+      "type": "string"
+    },
+    "CommandIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "case": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Case"
+        },
+        "code": {
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)*$",
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 8192,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "severity": {
+          "$ref": "#/$defs/IssueSeverity"
+        },
+        "side": {
+          "anyOf": [
+            {
+              "enum": [
+                "reference",
+                "candidate"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Side"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "message"
+      ],
+      "title": "CommandIssue",
+      "type": "object"
+    },
+    "CommandName": {
+      "description": "Commands with a stable machine-readable stdout contract.",
+      "enum": [
+        "migration.init",
+        "migration.validate",
+        "migration.run",
+        "replay"
+      ],
+      "title": "CommandName",
+      "type": "string"
+    },
+    "CommandStatus": {
+      "description": "Bounded top-level outcomes shared by agent-facing commands.",
+      "enum": [
+        "ready_for_review",
+        "ready",
+        "needs_review",
+        "passed",
+        "failed",
+        "error"
+      ],
+      "title": "CommandStatus",
+      "type": "string"
+    },
+    "CreatedFile": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/CreatedFileKind"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "path"
+      ],
+      "title": "CreatedFile",
+      "type": "object"
+    },
+    "CreatedFileKind": {
+      "enum": [
+        "workspace",
+        "config",
+        "manifest",
+        "adapter",
+        "fixture",
+        "checklist"
+      ],
+      "title": "CreatedFileKind",
+      "type": "string"
+    },
+    "IssueSeverity": {
+      "enum": [
+        "review",
+        "warning",
+        "error"
+      ],
+      "title": "IssueSeverity",
+      "type": "string"
+    },
+    "JsonValue": {},
+    "NextCommand": {
+      "additionalProperties": false,
+      "description": "One directly executable argv and its semantic working directory.",
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "cwd": {
+          "$ref": "#/$defs/CommandCwd",
+          "default": "invocation"
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "title": "NextCommand",
+      "type": "object"
+    },
+    "ReportKind": {
+      "enum": [
+        "migration",
+        "suite",
+        "source_provenance",
+        "replay"
+      ],
+      "title": "ReportKind",
+      "type": "string"
+    },
+    "ReportReference": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ReportKind"
+        },
+        "lane": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lane"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "path"
+      ],
+      "title": "ReportReference",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/agent-result/v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One complete JSON document emitted by an agent-facing command.",
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactReference"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/CommandCheck"
+      },
+      "title": "Checks",
+      "type": "array"
+    },
+    "command": {
+      "$ref": "#/$defs/CommandName"
+    },
+    "created_files": {
+      "items": {
+        "$ref": "#/$defs/CreatedFile"
+      },
+      "title": "Created Files",
+      "type": "array"
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/CommandIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "next_commands": {
+      "items": {
+        "$ref": "#/$defs/NextCommand"
+      },
+      "title": "Next Commands",
+      "type": "array"
+    },
+    "reports": {
+      "items": {
+        "$ref": "#/$defs/ReportReference"
+      },
+      "title": "Reports",
+      "type": "array"
+    },
+    "result": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "status": {
+      "$ref": "#/$defs/CommandStatus"
+    }
+  },
+  "required": [
+    "command",
+    "status"
+  ],
+  "title": "AgentCommandOutput",
+  "type": "object",
+  "x-parity-contract": "agent-result",
+  "x-parity-contract-version": 1
+}

@@ -6,6 +6,7 @@ import dataclasses
 import datetime as dt
 import decimal
 import enum
+import importlib
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -13,8 +14,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
-import polars as pl
 import pyarrow as pa
 
 from parity.adapters import detect_adapter
@@ -220,8 +219,41 @@ def _canonical_frame(value: Any) -> CanonicalFrame:
     return CanonicalFrame(columns)
 
 
-def _canonical_series(value: pd.Series | pl.Series) -> CanonicalSeries:
-    if isinstance(value, pd.Series):
+def _optional_dataframe_module(value: Any) -> tuple[str | None, Any]:
+    """Import an optional dataframe engine only for one of its native values."""
+
+    name = next(
+        (
+            candidate
+            for value_type in type(value).__mro__
+            if (candidate := value_type.__module__.partition(".")[0]) in {"pandas", "polars"}
+        ),
+        None,
+    )
+    if name is None:
+        return None, None
+    try:
+        return name, importlib.import_module(name)
+    except (ImportError, ModuleNotFoundError):
+        # A native value cannot normally outlive its defining module. Treat a
+        # broken optional installation as unsupported and let adapter lookup
+        # produce its bounded, actionable error.
+        return name, None
+
+
+def _series_engine(value: Any) -> tuple[str | None, Any]:
+    name, module = _optional_dataframe_module(value)
+    if module is None:
+        return None, None
+    if name == "pandas" and isinstance(value, module.Series):
+        return name, module
+    if name == "polars" and isinstance(value, module.Series):
+        return name, module
+    return None, None
+
+
+def _canonical_series(value: Any, engine: str) -> CanonicalSeries:
+    if engine == "pandas":
         arrow = pa.array(value)
         name = None if value.name is None else str(value.name)
     else:
@@ -244,8 +276,9 @@ def canonicalize(value: Any) -> Any:
         return value
     if isinstance(value, BaseException):
         return ExceptionInfo.from_exception(value)
-    if isinstance(value, (pd.Series, pl.Series)):
-        return _canonical_series(value)
+    series_engine, _module = _series_engine(value)
+    if series_engine is not None:
+        return _canonical_series(value, series_engine)
     try:
         detect_adapter(value)
     except TypeError:
@@ -270,7 +303,12 @@ def normalize_scalar(value: Any) -> Any:
 
     if isinstance(value, pa.Scalar):
         return normalize_scalar(value.as_py())
-    if value is pd.NA or value is pd.NaT:
+    pandas_name, pandas = _optional_dataframe_module(value)
+    if (
+        pandas_name == "pandas"
+        and pandas is not None
+        and (value is pandas.NA or value is pandas.NaT)
+    ):
         return None
     if isinstance(value, np.generic):
         unboxed = value.item()
@@ -293,15 +331,22 @@ def normalize_scalar(value: Any) -> Any:
 def is_null(value: Any) -> bool:
     """Return whether a scalar is a database-style null (not IEEE NaN)."""
 
-    if value is None or value is pd.NA or value is pd.NaT:
+    if value is None:
         return True
+    pandas_name, pandas = _optional_dataframe_module(value)
+    if pandas_name == "pandas" and pandas is not None:
+        if value is pandas.NA or value is pandas.NaT:
+            return True
+        try:
+            result = pandas.isna(value)
+        except (TypeError, ValueError):
+            return False
+        return bool(result) if isinstance(result, (bool, np.bool_)) and not is_nan(value) else False
     if isinstance(value, (dt.datetime, dt.date, dt.time, dt.timedelta)):
         return False
-    try:
-        result = pd.isna(value)
-    except (TypeError, ValueError):
-        return False
-    return bool(result) if isinstance(result, (bool, np.bool_)) and not is_nan(value) else False
+    if isinstance(value, (np.datetime64, np.timedelta64)):
+        return bool(np.isnat(value))
+    return False
 
 
 def is_nan(value: Any) -> bool:

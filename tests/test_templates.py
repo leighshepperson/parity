@@ -31,7 +31,8 @@ def test_generated_config_parses_and_validates(tmp_path: Path) -> None:
     assert raw["version"] == 1
     assert raw["cases"][0]["schema"]["columns"][0]["name"] == "quantity"
     assert raw["cases"][0]["reference"]["record_distributions"] == []
-    assert raw["cases"][0]["candidate"]["pandas_input"] == "arrow"
+    assert raw["cases"][0]["reference"]["adapter"] == "arrow"
+    assert raw["cases"][0]["candidate"]["adapter"] == "arrow"
     assert raw["cases"][0]["schema"]["constraints"] == []
     assert raw["cases"][0]["comparison"]["row_keys"] == []
     assert raw["cases"][0]["generation"]["stability_repeats"] == 2

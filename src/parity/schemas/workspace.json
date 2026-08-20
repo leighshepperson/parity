@@ -1,0 +1,245 @@
+{
+  "$defs": {
+    "WorkspaceLane": {
+      "additionalProperties": false,
+      "description": "One shared dependency lane used by a reference/candidate pair.",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Name",
+          "type": "string"
+        },
+        "requirements": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requirements"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "WorkspaceLane",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/workspace/v3.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "reference_path"
+            ]
+          },
+          "required": [
+            "reference_package"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "reference_package"
+            ]
+          },
+          "required": [
+            "reference_path"
+          ]
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "candidate_path"
+            ]
+          },
+          "required": [
+            "candidate_package"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "candidate_package"
+            ]
+          },
+          "required": [
+            "candidate_path"
+          ]
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "required": [
+            "python"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "python"
+            ]
+          },
+          "required": [
+            "reference_python",
+            "candidate_python"
+          ]
+        }
+      ]
+    }
+  ],
+  "description": "Human-authored, versioned migration workspace document.",
+  "properties": {
+    "candidate_package": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Package"
+    },
+    "candidate_path": {
+      "anyOf": [
+        {
+          "format": "path",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Path"
+    },
+    "candidate_python": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate Python"
+    },
+    "checklist": {
+      "anyOf": [
+        {
+          "format": "path",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Checklist"
+    },
+    "config": {
+      "default": "parity.toml",
+      "format": "path",
+      "title": "Config",
+      "type": "string"
+    },
+    "lanes": {
+      "items": {
+        "$ref": "#/$defs/WorkspaceLane"
+      },
+      "minItems": 1,
+      "title": "Lanes",
+      "type": "array"
+    },
+    "manifest": {
+      "default": "migration.toml",
+      "format": "path",
+      "title": "Manifest",
+      "type": "string"
+    },
+    "python": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Python"
+    },
+    "reference_package": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reference Package"
+    },
+    "reference_path": {
+      "anyOf": [
+        {
+          "format": "path",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reference Path"
+    },
+    "reference_python": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reference Python"
+    },
+    "report_dir": {
+      "default": ".parity/workspace/reports",
+      "format": "path",
+      "title": "Report Dir",
+      "type": "string"
+    },
+    "version": {
+      "const": 3,
+      "default": 3,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "title": "MigrationWorkspace",
+  "type": "object",
+  "x-parity-contract": "workspace",
+  "x-parity-contract-version": 3
+}

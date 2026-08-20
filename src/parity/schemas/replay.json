@@ -1,0 +1,146 @@
+{
+  "$defs": {
+    "JsonValue": {},
+    "ReplayInputContract": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "minLength": 1,
+          "title": "File",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "file"
+      ],
+      "title": "ReplayInputContract",
+      "type": "object"
+    },
+    "ReplayPathBaseContract": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "artifact_ancestor",
+          "title": "Kind",
+          "type": "string"
+        },
+        "levels": {
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Levels",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "levels"
+      ],
+      "title": "ReplayPathBaseContract",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/replay/v2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Path-free replay document stored inside a finding artifact.",
+  "properties": {
+    "case": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Case",
+      "type": "object"
+    },
+    "command": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Command"
+    },
+    "config_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Config Sha256"
+    },
+    "environment": {
+      "title": "Environment",
+      "type": "string"
+    },
+    "expected_runtime": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/ReplayInputContract"
+      },
+      "minItems": 1,
+      "title": "Inputs",
+      "type": "array"
+    },
+    "path_base": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReplayPathBaseContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "replay_blockers": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replay Blockers"
+    },
+    "version": {
+      "const": 2,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "version",
+    "case",
+    "environment",
+    "inputs"
+  ],
+  "title": "ReplayContract",
+  "type": "object",
+  "x-parity-contract": "replay",
+  "x-parity-contract-version": 2
+}

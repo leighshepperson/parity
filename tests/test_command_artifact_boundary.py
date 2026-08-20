@@ -300,3 +300,22 @@ def test_replay_rejects_command_path_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ReplayError, match="command paths"):
         engine._resolve_replay_paths(case_data, project)
+
+
+def test_replay_rejects_command_symlink_escape(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside-target"
+    outside.write_text("external command\n", encoding="utf-8")
+    linked = project / "linked-target"
+    try:
+        linked.symlink_to(outside)
+    except OSError:
+        pytest.skip("filesystem does not permit symlink creation")
+    case_data = {
+        "reference": {"workdir": ".", "command": ["./linked-target"]},
+        "candidate": {"workdir": ".", "command": ["safe-on-path"]},
+    }
+
+    with pytest.raises(ReplayError, match="command paths"):
+        engine._resolve_replay_paths(case_data, project)

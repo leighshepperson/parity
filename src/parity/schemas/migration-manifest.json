@@ -1,0 +1,69 @@
+{
+  "$defs": {
+    "MigrationUnit": {
+      "additionalProperties": false,
+      "description": "One public behavior and the configured Parity cases covering it.",
+      "properties": {
+        "cases": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "type": "string"
+          },
+          "title": "Cases",
+          "type": "array"
+        },
+        "excluded_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excluded Reason"
+        },
+        "id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "MigrationUnit",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/migration-manifest/v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned migration-ledger document.",
+  "properties": {
+    "units": {
+      "items": {
+        "$ref": "#/$defs/MigrationUnit"
+      },
+      "minItems": 1,
+      "title": "Units",
+      "type": "array"
+    },
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "units"
+  ],
+  "title": "MigrationManifest",
+  "type": "object",
+  "x-parity-contract": "migration-manifest",
+  "x-parity-contract-version": 1
+}

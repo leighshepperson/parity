@@ -1568,7 +1568,7 @@ def _verify_manifest(root: Path) -> dict[str, Any]:
         manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise ReplayError("artifact manifest is missing or invalid") from error
-    if type(manifest.get("version")) is not int or manifest.get("version") != 1:
+    if type(manifest.get("version")) is not int or manifest.get("version") != 2:
         raise ReplayError("unsupported artifact manifest")
     if not isinstance(manifest.get("files"), dict):
         raise ReplayError("unsupported artifact manifest")
@@ -1670,6 +1670,14 @@ _REPLAY_BLOCKER_MESSAGES = {
     ),
 }
 
+_ARTIFACT_REPLAY_BLOCKER_MESSAGES = {
+    "external_artifact_root": (
+        "the artifact directory was outside the recorded configuration directory. Move the "
+        "artifact directory under the directory containing parity.toml, rerun parity check, and "
+        "replay the new artifact."
+    ),
+}
+
 
 def _reject_recorded_replay_blockers(replay: dict[str, Any]) -> None:
     raw = replay.get("replay_blockers")
@@ -1678,18 +1686,26 @@ def _reject_recorded_replay_blockers(replay: dict[str, Any]) -> None:
     if (
         not isinstance(raw, dict)
         or not raw
-        or any(side not in {"reference", "candidate"} for side in raw)
+        or any(side not in {"artifact", "reference", "candidate"} for side in raw)
         or any(
-            not isinstance(reason, str) or reason not in _REPLAY_BLOCKER_MESSAGES
-            for reason in raw.values()
+            not isinstance(reason, str)
+            or (
+                reason not in _ARTIFACT_REPLAY_BLOCKER_MESSAGES
+                if side == "artifact"
+                else reason not in _REPLAY_BLOCKER_MESSAGES
+            )
+            for side, reason in raw.items()
         )
     ):
         raise ReplayError("artifact contains an invalid replay blocker declaration")
-    details = [
+    details: list[str] = []
+    if "artifact" in raw:
+        details.append(_ARTIFACT_REPLAY_BLOCKER_MESSAGES[raw["artifact"]])
+    details.extend(
         _REPLAY_BLOCKER_MESSAGES[raw[side]].format(side=side)
         for side in ("reference", "candidate")
         if side in raw
-    ]
+    )
     raise ReplayError("automatic replay is unavailable: " + " ".join(details))
 
 
@@ -1727,10 +1743,33 @@ def _contains_redaction(value: Any) -> bool:
     return False
 
 
-def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> None:
-    """Resolve sanitized paths from the recorded configuration directory."""
+def _replay_execution_root(replay: dict[str, Any], artifact_root: Path) -> Path:
+    """Resolve the recorded project root without consulting process cwd."""
 
-    base = invocation_cwd.resolve()
+    path_base = replay.get("path_base")
+    if not isinstance(path_base, dict) or set(path_base) != {"kind", "levels"}:
+        raise ReplayError("replay path base is missing or invalid")
+    levels = path_base.get("levels")
+    if path_base.get("kind") != "artifact_ancestor" or type(levels) is not int:
+        raise ReplayError("unsupported replay path base")
+    if not 1 <= levels <= 64:
+        raise ReplayError("replay path base ancestor count is invalid")
+
+    base = artifact_root.resolve()
+    for _ in range(levels):
+        parent = base.parent
+        if parent == base:
+            raise ReplayError("replay path base escapes the artifact filesystem")
+        base = parent
+    if not base.is_dir():  # pragma: no cover - every resolved ancestor is a directory
+        raise ReplayError("replay path base is missing or invalid")
+    return base
+
+
+def _resolve_replay_paths(case_data: dict[str, Any], execution_root: Path) -> None:
+    """Resolve sanitized paths from the artifact-bound configuration directory."""
+
+    base = execution_root.resolve()
     for side in ("reference", "candidate"):
         spec = case_data.get(side)
         if not isinstance(spec, dict):
@@ -1803,7 +1842,18 @@ def _resolve_replay_paths(case_data: dict[str, Any], invocation_cwd: Path) -> No
                 if not isinstance(launch_root, Path):
                     launch_root = base
                 executable = Path(os.path.abspath(launch_root / raw_executable))
-                if not executable.is_relative_to(base) or not executable.is_file():
+                try:
+                    resolved_executable = executable.resolve(strict=True)
+                except OSError as error:
+                    raise ReplayError(
+                        "replay command paths must be existing files inside the recorded "
+                        "configuration directory"
+                    ) from error
+                if (
+                    not executable.is_relative_to(base)
+                    or not resolved_executable.is_relative_to(base)
+                    or not resolved_executable.is_file()
+                ):
                     raise ReplayError(
                         "replay command paths must be existing files inside the recorded "
                         "configuration directory"
@@ -1824,12 +1874,10 @@ def replay_artifact(path: str | Path) -> SuiteResult:
     replay_version = replay.get("version")
     if (
         type(replay_version) is not int
-        or replay_version != 1
+        or replay_version != 2
         or not isinstance(replay.get("case"), dict)
     ):
         raise ReplayError("unsupported replay contract")
-    if replay.get("path_base") != "invocation_cwd":
-        raise ReplayError("unsupported replay path base")
     replay_inputs = _replay_inputs(replay, manifest, root)
     try:
         expected_provenance = CaseProvenance.model_validate(replay.get("expected_runtime"))
@@ -1844,6 +1892,7 @@ def replay_artifact(path: str | Path) -> SuiteResult:
         raise ReplayError("replay configuration fingerprint is missing or invalid")
     config_sha256 = raw_config_sha256
     _reject_recorded_replay_blockers(replay)
+    execution_root = _replay_execution_root(replay, root)
     case_data = dict(replay["case"])
     invocation_arguments = (
         case_data.get("static_args"),
@@ -1856,7 +1905,7 @@ def replay_artifact(path: str | Path) -> SuiteResult:
     if any(_contains_redaction(case_data.get(side)) for side in ("reference", "candidate")):
         raise ReplayError("redacted target configuration cannot be replayed automatically")
     _restore_environment(case_data)
-    _resolve_replay_paths(case_data, Path.cwd().resolve())
+    _resolve_replay_paths(case_data, execution_root)
     raw_bundle = case_data.get("input_bundle")
     if raw_bundle is None:
         if set(replay_inputs) != {"input"}:

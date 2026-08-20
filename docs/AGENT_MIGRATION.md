@@ -82,21 +82,27 @@ python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference-package "$REFERENCE_PACKAGE_SPEC" \
   --candidate-package "$CANDIDATE_PACKAGE_SPEC" \
-  --target migration_adapters:transform \
-  --fixture tests/fixtures/input.parquet \
+  --scaffold \
+  --json \
   --lane minimum=requirements/minimum.txt \
   --lane current=requirements/current.txt
+parity migration validate --json
 ```
 
-When absent, this writes a minimal fixture-backed `migrations/parity.toml`,
-`migrations/parity.workspace.toml` and a `core-regression` starter ledger. Use
+When absent, this writes a deliberately incomplete Arrow adapter, small JSON fixture,
+`migrations/parity.toml`, workspace v3, `core-regression` starter ledger and a four-item review
+checklist. The agent must implement/review the adapter, fixture domain, migration surface and
+comparison policy, then mark every checklist item and its top-level status `resolved`.
+`migration validate` performs a no-execution structural preflight and returns `1` while review
+remains; it never creates target environments. For an already-authored contract, use
+`--target` and `--fixture`. Use
 `--reference-target` and `--candidate-target` instead of the shared target when the wrappers differ.
 Review all generated targets, adapters, comparison policy and inventory; generation does not prove
 completeness. If `parity.toml` already exists, omit the target/fixture scaffolding options. Parity
 refuses to overwrite that reviewed contract, and `--force` replaces only the workspace declaration.
-The fixture path is interpreted from the invocation directory and stored relative to the generated
-config. Target modules must already exist and be importable from the workspace directory; the
-command does not generate wrapper code, clone or select source, apply the migration patch, or modify
+In explicit-target mode, the fixture path is interpreted from the invocation directory and stored
+relative to the generated config. Target modules must already exist and be importable from the
+workspace directory. Neither mode clones or selects source, applies the migration patch or modifies
 a checkout. Initialization validates target spelling and fixture readability; `migration run`
 preflights the import after environment setup. Source preparation remains a separate, reviewable
 agent action.
@@ -104,7 +110,7 @@ agent action.
 Either side may instead be local: combine `--reference-package` or `--reference-path` with
 `--candidate-package` or `--candidate-path`. Exact released requirements are bound on their
 corresponding target before import. The reference requires exactly one package/path flag. Candidate
-flags are mutually exclusive; omitting both is shorthand for `--candidate-path .`. The saved v2
+flags are mutually exclusive; omitting both is shorthand for `--candidate-path .`. The saved v3
 workspace always contains exactly one source field per side.
 
 For a pull request, local refactor or two-worktree comparison, declare both reviewed sources
@@ -152,7 +158,7 @@ parity check \
   --case lags-null-date \
   --no-performance \
   --json migrations/.parity/lags-null-date.json
-(cd migrations && parity replay .parity/lags-null-date/<finding-directory>)
+parity replay /path/to/project/migrations/.parity/lags-null-date/<finding-directory> --json
 ```
 
 When a suite or migration JSON report references several retained findings, batch the same check:
@@ -167,9 +173,9 @@ stale, and `2` means verification errored. Treat `ms3:...` as a data-free classi
 signature or proof of source identity. This command re-executes project code; do not run an
 unreviewed checkout or artifact outside a sandbox.
 
-Replayable target paths are relative to the directory containing the loaded `parity.toml`, which is
-why the managed examples enter `migrations/` only in a subshell. Keep the managed workspace and its
-environments inside that configuration directory, and keep wrappers in the workspace directory.
+Replay v2 locates the directory containing `parity.toml` from a bounded ancestor of the artifact,
+never from the agent process's current directory. Keep the managed workspace and its environments
+inside that configuration directory, and keep wrappers in the workspace directory.
 Interpreters, workdirs and path-like command executables must remain configuration-local. If a live
 callable or external/missing path makes an artifact evidence-only, replay names the affected side
 and tells the agent which import target or configuration-local path must be fixed before collecting

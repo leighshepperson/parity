@@ -80,12 +80,11 @@ def test_inspection_artifact_is_complete_hashed_and_not_claimed_as_replayable(
         assert len(content) == metadata["bytes"]
     replay_text = (destination / "replay.json").read_text(encoding="utf-8")
     replay = json.loads(replay_text)
-    assert replay["version"] == 1
+    assert replay["version"] == 2
     assert "expected_runtime" not in replay
     assert "config_sha256" not in replay
     assert "command" not in replay
-    assert replay["working_directory"] == "recorded project configuration directory"
-    assert replay["path_base"] == "invocation_cwd"
+    assert "path_base" not in replay
     assert replay["inputs"] == [{"name": "input", "file": "input.arrow"}]
     assert replay["case"]["fixture"] == "input.arrow"
     assert replay["case"]["reference"] is None
@@ -150,12 +149,48 @@ def test_artifact_can_use_a_stable_project_root_from_an_unrelated_cwd(
 
     replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
     assert "replay_blockers" not in replay
+    assert replay["path_base"] == {"kind": "artifact_ancestor", "levels": 4}
     assert replay["case"]["reference"]["workdir"] == "."
     assert replay["case"]["candidate"]["workdir"] == "."
     assert replay["case"]["reference"]["python"] == (".parity/workspace/envs/reference/bin/python")
     assert replay["case"]["candidate"]["python"] == (".parity/workspace/envs/candidate/bin/python")
     assert replay["command"] == ["parity", "replay", "<artifact-path>"]
     assert str(unrelated) not in json.dumps(replay)
+
+
+def test_replayable_artifact_outside_project_root_records_bounded_blocker(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    artifact_root = tmp_path / "external-artifacts"
+    project.mkdir()
+    runtime = collect_runtime_provenance()
+    case = CaseConfig(
+        name="external-artifact",
+        reference=CallableSpec(target="project:reference"),
+        candidate=CallableSpec(target="project:candidate"),
+        fixture=project / "fixture.arrow",
+    )
+
+    destination = ArtifactStore(
+        artifact_root,
+        invocation_directory=project,
+    ).write_failure(
+        case,
+        pa.table({"id": [1]}),
+        _result(),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="e" * 64,
+    )
+
+    replay_text = (destination / "replay.json").read_text(encoding="utf-8")
+    replay = json.loads(replay_text)
+    assert replay["replay_blockers"] == {"artifact": "external_artifact_root"}
+    assert "path_base" not in replay
+    assert "command" not in replay
+    assert str(tmp_path) not in replay_text
+    with pytest.raises(ReplayError, match="outside the recorded configuration directory"):
+        replay_artifact(destination)
 
 
 def test_artifact_root_is_self_ignoring_without_replacing_user_policy(tmp_path: Path) -> None:
@@ -187,7 +222,9 @@ def test_artifact_records_complete_runtime_and_config_bindings(
         fixture=tmp_path / "source.arrow",
         comparison=ComparisonPolicy(row_order="keyed", row_keys=["account", "sequence"]),
     )
-    destination = ArtifactStore(tmp_path / "artifacts").write_failure(
+    destination = ArtifactStore(
+        tmp_path / "artifacts", invocation_directory=tmp_path
+    ).write_failure(
         case,
         pa.table({"account": ["A"], "sequence": [1], "value": [10]}),
         _result(),
@@ -196,7 +233,8 @@ def test_artifact_records_complete_runtime_and_config_bindings(
     )
 
     replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 1
+    assert replay["version"] == 2
+    assert replay["path_base"] == {"kind": "artifact_ancestor", "levels": 3}
     assert replay["command"] == ["parity", "replay", "<artifact-path>"]
     assert replay["config_sha256"] == "a" * 64
     assert replay["expected_runtime"]["reference"]["python_version"]
@@ -214,7 +252,9 @@ def test_artifact_preserves_partial_runtime_for_inspection_without_replay_comman
     tmp_path: Path,
 ) -> None:
     runtime = collect_runtime_provenance()
-    destination = ArtifactStore(tmp_path / "artifacts").write_failure(
+    destination = ArtifactStore(
+        tmp_path / "artifacts", invocation_directory=tmp_path
+    ).write_failure(
         "partial-runtime",
         pa.table({"x": [1]}),
         _result(),
@@ -382,7 +422,9 @@ def test_artifact_keeps_lossless_arrow_when_parquet_cannot_represent_schema(
 
 
 def test_artifact_persists_named_input_bundle_atomically(tmp_path: Path) -> None:
-    destination = ArtifactStore(tmp_path / "artifacts").write_failure(
+    destination = ArtifactStore(
+        tmp_path / "artifacts", invocation_directory=tmp_path
+    ).write_failure(
         "orders-join",
         {
             "orders": pa.table({"customer_id": [1, 2], "amount": [10, 20]}),
@@ -403,7 +445,8 @@ def test_artifact_persists_named_input_bundle_atomically(tmp_path: Path) -> None
         "result.json",
     }
     replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 1
+    assert replay["version"] == 2
+    assert replay["path_base"] == {"kind": "artifact_ancestor", "levels": 3}
     assert replay["inputs"] == [
         {"name": "orders", "file": "input-000.arrow"},
         {"name": "customers", "file": "input-001.arrow"},
@@ -413,7 +456,7 @@ def test_artifact_persists_named_input_bundle_atomically(tmp_path: Path) -> None
         "customers": {"fixture": "input-001.arrow"},
     }
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == 1
+    assert manifest["version"] == 2
     assert set(manifest["files"]) == names - {"manifest.json"}
     for name, metadata in manifest["files"].items():
         content = (destination / name).read_bytes()

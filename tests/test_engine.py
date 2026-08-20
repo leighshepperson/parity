@@ -62,6 +62,25 @@ def _portable_runtime(spec: CallableSpec):
     return observation.runtime
 
 
+def _rewrite_replay_contract(artifact: Path, replay: dict[str, Any]) -> None:
+    replay_path = artifact / "replay.json"
+    replay_path.write_text(
+        json.dumps(replay, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    replay_content = replay_path.read_bytes()
+    manifest_path = artifact / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["replay.json"] = {
+        "sha256": hashlib.sha256(replay_content).hexdigest(),
+        "bytes": len(replay_content),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def corrupt_seven(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     result.loc[result["x"] == 7, "x"] = 8
@@ -640,7 +659,7 @@ def test_live_arrow_fixture_chunk_layout_matches_replay(tmp_path: Path) -> None:
     assert result.status is Status.PASSED
 
 
-def test_live_importable_failure_preserves_contract_for_replay(tmp_path: Path) -> None:
+def test_live_importable_failure_outside_project_is_inspection_only(tmp_path: Path) -> None:
     result = run_live(
         identity,
         corrupt_everything,
@@ -660,7 +679,7 @@ def test_live_importable_failure_preserves_contract_for_replay(tmp_path: Path) -
     assert artifact is not None
     replay_payload = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     replay_contract = replay_payload["case"]
-    assert replay_payload["version"] == 1
+    assert replay_payload["version"] == 2
     assert replay_payload["expected_runtime"]["reference"]["python_version"]
     assert len(replay_payload["config_sha256"]) == 64
     assert replay_contract["reference"]["adapter"] == "pandas"
@@ -668,10 +687,10 @@ def test_live_importable_failure_preserves_contract_for_replay(tmp_path: Path) -
     assert replay_contract["reference"]["pandas_input"] == "arrow"
     assert replay_contract["candidate"]["pandas_input"] == "native"
     assert replay_contract["comparison"]["dtype"] == "strict"
-    replayed = replay_artifact(artifact)
-    assert replayed.status is Status.FAILED
-    assert replayed.cases[0].provenance is not None
-    assert replayed.cases[0].provenance.verification == "verified"
+    assert replay_payload["replay_blockers"] == {"artifact": "external_artifact_root"}
+    assert "path_base" not in replay_payload
+    with pytest.raises(engine.ReplayError, match="outside the recorded configuration directory"):
+        replay_artifact(artifact)
 
 
 def test_live_bound_instance_method_is_not_claimed_as_replayable(tmp_path: Path) -> None:
@@ -693,7 +712,10 @@ def test_live_bound_instance_method_is_not_claimed_as_replayable(tmp_path: Path)
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     replay_contract = replay["case"]
     assert replay_contract["candidate"] is None
-    assert replay["replay_blockers"] == {"candidate": "live_callable"}
+    assert replay["replay_blockers"] == {
+        "artifact": "external_artifact_root",
+        "candidate": "live_callable",
+    }
     assert "command" not in replay
     with pytest.raises(engine.ReplayError, match="candidate live-callable") as captured:
         replay_artifact(artifact)
@@ -2106,7 +2128,7 @@ def test_configured_campaign_does_not_require_target_side_parity(
     assert imported.exists() is True
 
 
-def test_artifact_replay_resolves_import_root_from_invocation_cwd(
+def test_artifact_replay_resolves_import_root_from_artifact_bound_base(
     tmp_path: Path, monkeypatch
 ) -> None:
     transform_root = tmp_path / "transforms"
@@ -2138,6 +2160,15 @@ def test_artifact_replay_resolves_import_root_from_invocation_cwd(
         ),
         config_sha256="a" * 64,
     )
+    replay_contract = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    assert replay_contract["path_base"] == {
+        "kind": "artifact_ancestor",
+        "levels": 3,
+    }
+
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
 
     result = replay_artifact(artifact)
 
@@ -2193,7 +2224,7 @@ def test_configured_named_bundle_failure_replays_atomically(
     assert result.status is Status.FAILED
     assert artifact is not None
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 1
+    assert replay["version"] == 2
     assert [item["name"] for item in replay["inputs"]] == ["left", "right"]
 
     replayed = replay_artifact(artifact)
@@ -2259,7 +2290,7 @@ def test_positional_bundle_replay_restores_hash_bound_input_order(
         generation=GenerationConfig(adversarial_examples=False, max_examples=1),
         performance=PerformanceConfig(enabled=False),
     )
-    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+    artifact = ArtifactStore(tmp_path / ".parity", invocation_directory=tmp_path).write_failure(
         case,
         {
             "zebra": pa.table({"x": [1]}),
@@ -2696,7 +2727,7 @@ def test_replay_manifest_must_bind_every_consumed_file(tmp_path: Path) -> None:
     [
         ("version", True, "unsupported replay contract"),
         ("version", 1.0, "unsupported replay contract"),
-        ("version", 2, "unsupported replay contract"),
+        ("version", 1, "unsupported replay contract"),
         ("expected_runtime", None, "runtime provenance is missing or invalid"),
         ("config_sha256", None, "configuration fingerprint is missing or invalid"),
     ],
@@ -2731,6 +2762,73 @@ def test_replay_contract_is_current_and_fail_closed(
         replay_artifact(artifact)
 
 
+@pytest.mark.parametrize(
+    ("path_base", "message"),
+    [
+        (None, "path base is missing or invalid"),
+        ("artifact_ancestor", "path base is missing or invalid"),
+        ({"kind": "artifact_ancestor"}, "path base is missing or invalid"),
+        (
+            {"kind": "artifact_ancestor", "levels": 3, "extra": True},
+            "path base is missing or invalid",
+        ),
+        ({"kind": "invocation_cwd", "levels": 3}, "unsupported replay path base"),
+        ({"kind": "artifact_ancestor", "levels": True}, "unsupported replay path base"),
+        ({"kind": "artifact_ancestor", "levels": 0}, "ancestor count is invalid"),
+        ({"kind": "artifact_ancestor", "levels": -1}, "ancestor count is invalid"),
+        ({"kind": "artifact_ancestor", "levels": 65}, "ancestor count is invalid"),
+    ],
+)
+def test_replay_rejects_invalid_artifact_ancestor_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_base: object,
+    message: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    runtime = collect_runtime_provenance()
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        "invalid-anchor",
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+        reference=CallableSpec(target="test_engine:identity", adapter="pandas"),
+        candidate=CallableSpec(target="test_engine:identity", adapter="pandas"),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="d" * 64,
+    )
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    replay["path_base"] = path_base
+    _rewrite_replay_contract(artifact, replay)
+
+    with pytest.raises(engine.ReplayError, match=message):
+        replay_artifact(artifact)
+
+
+def test_replay_rejects_artifact_ancestor_that_walks_past_filesystem_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    runtime = collect_runtime_provenance()
+    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+        "escaping-anchor",
+        pa.table({"x": [1]}),
+        ExampleResult(source="test", status=Status.FAILED),
+        reference=CallableSpec(target="test_engine:identity", adapter="pandas"),
+        candidate=CallableSpec(target="test_engine:identity", adapter="pandas"),
+        runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+        config_sha256="d" * 64,
+    )
+    replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
+    replay["path_base"] = {
+        "kind": "artifact_ancestor",
+        "levels": len(artifact.resolve().parents) + 1,
+    }
+    _rewrite_replay_contract(artifact, replay)
+
+    with pytest.raises(engine.ReplayError, match="escapes the artifact filesystem"):
+        replay_artifact(artifact)
+
+
 def test_inspection_only_artifact_cannot_execute_automatically(tmp_path: Path) -> None:
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "inspection-only",
@@ -2744,7 +2842,7 @@ def test_inspection_only_artifact_cannot_execute_automatically(tmp_path: Path) -
         replay_artifact(artifact)
 
 
-@pytest.mark.parametrize("unsupported_version", [True, 1.0, 2])
+@pytest.mark.parametrize("unsupported_version", [True, 1.0, 1])
 def test_replay_rejects_unsupported_manifest_version(
     tmp_path: Path, unsupported_version: object
 ) -> None:
@@ -2805,7 +2903,7 @@ def test_replay_rejects_sanitized_static_arguments(
         generation=GenerationConfig(adversarial_examples=False, max_examples=1),
         performance=PerformanceConfig(enabled=False),
     )
-    artifact = ArtifactStore(tmp_path / ".parity").write_failure(
+    artifact = ArtifactStore(tmp_path / ".parity", invocation_directory=tmp_path).write_failure(
         monkey_case,
         pa.table({"x": [1]}),
         ExampleResult(source="test", status=Status.FAILED),
