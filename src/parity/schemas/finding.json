@@ -1,0 +1,456 @@
+{
+  "$defs": {
+    "MismatchCountsContract": {
+      "additionalProperties": false,
+      "description": "Counts for the finite public mismatch taxonomy.",
+      "properties": {
+        "column": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column"
+        },
+        "dtype": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dtype"
+        },
+        "exception": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exception"
+        },
+        "mutation": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mutation"
+        },
+        "performance": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Performance"
+        },
+        "row": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row"
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema"
+        },
+        "shape": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shape"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "title": "MismatchCountsContract",
+      "type": "object"
+    },
+    "MismatchKind": {
+      "enum": [
+        "column",
+        "dtype",
+        "exception",
+        "mutation",
+        "performance",
+        "row",
+        "schema",
+        "shape",
+        "value"
+      ],
+      "title": "MismatchKind",
+      "type": "string"
+    },
+    "MismatchSummaryContract": {
+      "additionalProperties": false,
+      "description": "Data-safe structural evidence for one mismatch in a finding.",
+      "properties": {
+        "candidate": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "raise": "#/$defs/RaiseOutcomeContract",
+                  "return": "#/$defs/ReturnOutcomeContract"
+                },
+                "propertyName": "outcome"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ReturnOutcomeContract"
+                },
+                {
+                  "$ref": "#/$defs/RaiseOutcomeContract"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate"
+        },
+        "kind": {
+          "$ref": "#/$defs/MismatchKind"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "raise": "#/$defs/RaiseOutcomeContract",
+                  "return": "#/$defs/ReturnOutcomeContract"
+                },
+                "propertyName": "outcome"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ReturnOutcomeContract"
+                },
+                {
+                  "$ref": "#/$defs/RaiseOutcomeContract"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "summary",
+        "path"
+      ],
+      "title": "MismatchSummaryContract",
+      "type": "object"
+    },
+    "RaiseOutcomeContract": {
+      "additionalProperties": false,
+      "description": "A public exception-comparison side that raised.",
+      "properties": {
+        "api_tokens": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Tokens"
+        },
+        "errno": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Errno"
+        },
+        "error_codes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Codes"
+        },
+        "exception_type": {
+          "minLength": 1,
+          "title": "Exception Type",
+          "type": "string"
+        },
+        "location_shapes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Location Shapes"
+        },
+        "member_types": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Types"
+        },
+        "outcome": {
+          "const": "raise",
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "exception_type"
+      ],
+      "title": "RaiseOutcomeContract",
+      "type": "object"
+    },
+    "ReturnOutcomeContract": {
+      "additionalProperties": false,
+      "description": "A public exception-comparison side that returned normally.",
+      "properties": {
+        "outcome": {
+          "const": "return",
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "title": "ReturnOutcomeContract",
+      "type": "object"
+    },
+    "RunMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_seconds": {
+          "minimum": 0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "iterations": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Iterations",
+          "type": "integer"
+        },
+        "peak_rss_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Rss Bytes"
+        }
+      },
+      "required": [
+        "duration_seconds"
+      ],
+      "title": "RunMetrics",
+      "type": "object"
+    },
+    "Status": {
+      "enum": [
+        "passed",
+        "failed",
+        "error",
+        "skipped"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/finding/v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One data-safe finding or operational error embedded in a suite report.",
+  "properties": {
+    "artifact": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Artifact"
+    },
+    "candidate_metrics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunMetrics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "finding_signature": {
+      "anyOf": [
+        {
+          "pattern": "^ms3:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Finding Signature"
+    },
+    "mismatch_counts": {
+      "$ref": "#/$defs/MismatchCountsContract"
+    },
+    "mismatches": {
+      "items": {
+        "$ref": "#/$defs/MismatchSummaryContract"
+      },
+      "title": "Mismatches",
+      "type": "array"
+    },
+    "reference_metrics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunMetrics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "source": {
+      "title": "Source",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/Status"
+    }
+  },
+  "required": [
+    "source",
+    "status",
+    "mismatch_counts",
+    "mismatches"
+  ],
+  "title": "FindingContract",
+  "type": "object",
+  "x-parity-contract": "finding",
+  "x-parity-contract-version": 1
+}

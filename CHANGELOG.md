@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.14.0
+
+### Agent-first migration workflow
+
+- Add `migration init --scaffold --json`, which creates a deliberately incomplete Arrow adapter,
+  fixture, config, ledger, workspace and four-item review checklist without overwriting authored
+  files. Add the no-execution `migration validate` gate; unresolved review exits `1`, invalid
+  contracts exit `2`, and validation never creates managed environments or invokes target code.
+- Add one-document JSON stdout contracts to `migration init`, `migration validate`, `migration run`
+  and `replay`, including typed checks/issues, report/artifact references, safe result projections
+  and next commands as argv arrays. Add discoverable Draft 2020-12 schemas through
+  `parity schema list` and `parity schema NAME`. The versioned schemas are frozen package resources,
+  so their bytes do not change with the installed Pydantic version, and fully describe config cases,
+  suite cases/findings and migration units.
+- Replace workspace v2 with breaking workspace v3, which can bind the generated checklist. Older
+  workspace documents are intentionally rejected rather than upgraded implicitly.
+
+### Portable replay and lean installation
+
+- Replace manifest/replay v1 with breaking v2 contracts. Artifacts store a bounded ancestor anchor
+  to their project base; replay resolves exclusively from the artifact and works independently of
+  the caller's current directory. Invalid, excessive and escaping anchors fail closed, and v1 is
+  intentionally rejected.
+- Remove pandas and Polars from core dependencies, load their adapters lazily, and provide explicit
+  `parity-check[pandas]` / `parity-check[polars]` install guidance. The zero-option starter is now
+  Arrow-only, while test/development extras retain both engines.
+- Run tox and uv through the controller interpreter instead of resolving console scripts from
+  `PATH`, keeping managed setup deterministic from absolute virtual-environment entry points.
+
 ## 0.13.0
 
 ### Managed migration workflow

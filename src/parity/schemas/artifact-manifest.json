@@ -1,0 +1,98 @@
+{
+  "$defs": {
+    "ArtifactFileContract": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "bytes"
+      ],
+      "title": "ArtifactFileContract",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/artifact-manifest/v2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
+    },
+    "case": {
+      "minLength": 1,
+      "title": "Case",
+      "type": "string"
+    },
+    "contains_input_data": {
+      "const": true,
+      "title": "Contains Input Data",
+      "type": "boolean"
+    },
+    "created_at": {
+      "minLength": 1,
+      "title": "Created At",
+      "type": "string"
+    },
+    "files": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ArtifactFileContract"
+      },
+      "title": "Files",
+      "type": "object"
+    },
+    "seed": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Seed"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source"
+    },
+    "version": {
+      "const": 2,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "version",
+    "campaign_id",
+    "case",
+    "created_at",
+    "contains_input_data",
+    "files"
+  ],
+  "title": "ArtifactManifestContract",
+  "type": "object",
+  "x-parity-contract": "artifact-manifest",
+  "x-parity-contract-version": 2
+}

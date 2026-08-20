@@ -155,6 +155,18 @@ and exclusion reasons pass through report redaction. No report contains compared
 values, but counterexample artifacts referenced by the nested report may contain fixture-derived or
 generated inputs.
 
+`migration init`, `migration validate`, `migration run` and `replay` use boolean `--json` for an
+agent-result schema v1 document on stdout; unlike `migration check --json PATH`, no output path
+follows the flag. The envelope contains bounded status/check/issue records, report and artifact
+references, argv-array next commands and only data-safe report projections. Exit status remains
+`0`, `1` or `2`.
+
+Run `parity schema list` to enumerate public contracts and `parity schema NAME` to emit a
+self-describing Draft 2020-12 schema. Published names include `config`, `workspace`,
+`migration-manifest`, `suite-report`, `finding`, `migration-report`, `replay`, `artifact-manifest`,
+`checklist` and `agent-result`. These are frozen package resources: a contract version's schema
+bytes do not vary with the installed Pydantic release.
+
 This manifest is a reviewed declaration, not an API-discovery mechanism. Parity cannot detect a
 public API omitted from `units` or prove that a mapped case exercises the behaviour its unit ID
 claims. Split partially excluded behaviour into separate units and review the inventory, wrappers
@@ -171,9 +183,10 @@ python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference-package 'your-library==1.2.3' \
   --candidate-package 'your-library==2.0.0' \
-  --target migration_adapters:transform \
-  --fixture tests/fixtures/input.parquet
-parity migration run
+  --scaffold \
+  --json
+parity migration validate --json
+parity migration run --json
 ```
 
 ```bash
@@ -195,10 +208,11 @@ name importable callables; scaffolding does not create wrapper modules. Managed 
 imported from the workspace directory. Initialization validates import-target spelling and fixture
 readability, but the target import itself is preflighted by `migration run` after environment setup.
 
-By default `migration init` writes a strict `migrations/parity.workspace.toml`, uses the current
+By default `migration init` writes a strict workspace v3 at
+`migrations/parity.workspace.toml`, uses the current
 checkout as the candidate when neither candidate flag is present, and creates
 `migrations/migration.toml` when that ledger is absent. The starter maps every configured case to
-one `core-regression` unit and must be reviewed as an inventory. Workspace format 2 is a breaking
+one `core-regression` unit and must be reviewed as an inventory. Workspace format 3 is a breaking
 schema; its source mapping is symmetric:
 
 | Key | Type | Default | Meaning |
@@ -245,7 +259,9 @@ run cannot leave an earlier green report looking current. Locks keep dependency 
 stable on later runs; `--refresh-locks` deliberately asks the resolver to upgrade them. The command
 returns `2` if any lane errors, otherwise `1` if any lane fails, otherwise `0`.
 
-Configured replay paths are based on the directory containing `parity.toml`. The managed workspace
+Configured replay paths are based on the directory containing `parity.toml`. Replay v2 records that
+base as a bounded ancestor of the artifact and resolves it from the artifact itself, never from the
+process current directory. The managed workspace
 directory and its private environments must be contained by that configuration directory; a config
 in a child or unrelated directory is rejected before setup. Keeping `parity.toml` beside
 `parity.workspace.toml` is the default and simplest layout.
@@ -313,9 +329,9 @@ contained, regular manifest-bound artifacts. Verification checks stored hashes a
 requires verified runtime provenance, and replays the exact saved input.
 
 Configured artifact contracts make interpreter, workdir and path-like executable paths relative to
-the directory containing the loaded `parity.toml`. Run `replay` or evidence verification from that
-same directory (normally `migrations/` for a managed workspace). Those paths must remain
-configuration-local; configuration-local virtual-environment entry points may still resolve through
+the directory containing the loaded `parity.toml`. Replay v2 locates that base from the artifact,
+so the command may be launched from any directory. Those paths must remain configuration-local;
+configuration-local virtual-environment entry points may still resolve through
 their final symlink to a host Python. A non-importable live callable, external
 interpreter/workdir/executable or missing configuration-local executable leaves the artifact
 inspectable but non-replayable. An optional retained `replay_blockers` map identifies the side with

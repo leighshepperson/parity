@@ -60,7 +60,7 @@ def _write_artifact(root: Path, *, signature: str = SIGNATURE) -> Path:
             "sha256": hashlib.sha256(content).hexdigest(),
         }
     (root / "manifest.json").write_text(
-        json.dumps({"version": 1, "files": manifest_files}), encoding="utf-8"
+        json.dumps({"version": 2, "files": manifest_files}), encoding="utf-8"
     )
     return root
 

@@ -1,0 +1,1026 @@
+{
+  "$defs": {
+    "CaseProvenance": {
+      "additionalProperties": false,
+      "description": "Runtime identities observed on the two sides of one campaign.",
+      "properties": {
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verification": {
+          "default": "captured",
+          "enum": [
+            "captured",
+            "verified",
+            "drifted"
+          ],
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "title": "CaseProvenance",
+      "type": "object"
+    },
+    "Diagnosis": {
+      "additionalProperties": false,
+      "description": "Evidence-based explanation for a class of observed difference.",
+      "properties": {
+        "code": {
+          "pattern": "^[a-z0-9_.-]+$",
+          "title": "Code",
+          "type": "string"
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "documentation_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Documentation Url"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "explanation": {
+          "title": "Explanation",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "title",
+        "explanation",
+        "confidence"
+      ],
+      "title": "Diagnosis",
+      "type": "object"
+    },
+    "DistributionProvenance": {
+      "additionalProperties": false,
+      "description": "Version status for one normalized Python distribution name.",
+      "properties": {
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "installed",
+            "missing",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "title": "DistributionProvenance",
+      "type": "object"
+    },
+    "FindingContract": {
+      "additionalProperties": false,
+      "description": "One data-safe finding or operational error embedded in a suite report.",
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact"
+        },
+        "candidate_metrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "finding_signature": {
+          "anyOf": [
+            {
+              "pattern": "^ms3:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finding Signature"
+        },
+        "mismatch_counts": {
+          "$ref": "#/$defs/MismatchCountsContract"
+        },
+        "mismatches": {
+          "items": {
+            "$ref": "#/$defs/MismatchSummaryContract"
+          },
+          "title": "Mismatches",
+          "type": "array"
+        },
+        "reference_metrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "required": [
+        "source",
+        "status",
+        "mismatch_counts",
+        "mismatches"
+      ],
+      "title": "FindingContract",
+      "type": "object"
+    },
+    "MismatchCountsContract": {
+      "additionalProperties": false,
+      "description": "Counts for the finite public mismatch taxonomy.",
+      "properties": {
+        "column": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column"
+        },
+        "dtype": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dtype"
+        },
+        "exception": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exception"
+        },
+        "mutation": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mutation"
+        },
+        "performance": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Performance"
+        },
+        "row": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row"
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema"
+        },
+        "shape": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shape"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "title": "MismatchCountsContract",
+      "type": "object"
+    },
+    "MismatchKind": {
+      "enum": [
+        "column",
+        "dtype",
+        "exception",
+        "mutation",
+        "performance",
+        "row",
+        "schema",
+        "shape",
+        "value"
+      ],
+      "title": "MismatchKind",
+      "type": "string"
+    },
+    "MismatchSummaryContract": {
+      "additionalProperties": false,
+      "description": "Data-safe structural evidence for one mismatch in a finding.",
+      "properties": {
+        "candidate": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "raise": "#/$defs/RaiseOutcomeContract",
+                  "return": "#/$defs/ReturnOutcomeContract"
+                },
+                "propertyName": "outcome"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ReturnOutcomeContract"
+                },
+                {
+                  "$ref": "#/$defs/RaiseOutcomeContract"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate"
+        },
+        "kind": {
+          "$ref": "#/$defs/MismatchKind"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "raise": "#/$defs/RaiseOutcomeContract",
+                  "return": "#/$defs/ReturnOutcomeContract"
+                },
+                "propertyName": "outcome"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/ReturnOutcomeContract"
+                },
+                {
+                  "$ref": "#/$defs/RaiseOutcomeContract"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "summary",
+        "path"
+      ],
+      "title": "MismatchSummaryContract",
+      "type": "object"
+    },
+    "PerformanceResult": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/RunMetrics"
+        },
+        "confidence_level": {
+          "default": 0.95,
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0.5,
+          "title": "Confidence Level",
+          "type": "number"
+        },
+        "memory_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Ratio"
+        },
+        "memory_ratio_ci": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Ratio Ci"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "reference": {
+          "$ref": "#/$defs/RunMetrics"
+        },
+        "regression": {
+          "default": false,
+          "title": "Regression",
+          "type": "boolean"
+        },
+        "speed_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speed Ratio"
+        },
+        "speed_ratio_ci": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speed Ratio Ci"
+        }
+      },
+      "required": [
+        "reference",
+        "candidate"
+      ],
+      "title": "PerformanceResult",
+      "type": "object"
+    },
+    "RaiseOutcomeContract": {
+      "additionalProperties": false,
+      "description": "A public exception-comparison side that raised.",
+      "properties": {
+        "api_tokens": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Tokens"
+        },
+        "errno": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Errno"
+        },
+        "error_codes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Codes"
+        },
+        "exception_type": {
+          "minLength": 1,
+          "title": "Exception Type",
+          "type": "string"
+        },
+        "location_shapes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Location Shapes"
+        },
+        "member_types": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Member Types"
+        },
+        "outcome": {
+          "const": "raise",
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "exception_type"
+      ],
+      "title": "RaiseOutcomeContract",
+      "type": "object"
+    },
+    "ReturnOutcomeContract": {
+      "additionalProperties": false,
+      "description": "A public exception-comparison side that returned normally.",
+      "properties": {
+        "outcome": {
+          "const": "return",
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "title": "ReturnOutcomeContract",
+      "type": "object"
+    },
+    "RunMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_seconds": {
+          "minimum": 0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "iterations": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Iterations",
+          "type": "integer"
+        },
+        "peak_rss_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Rss Bytes"
+        }
+      },
+      "required": [
+        "duration_seconds"
+      ],
+      "title": "RunMetrics",
+      "type": "object"
+    },
+    "RuntimeIdentity": {
+      "additionalProperties": false,
+      "description": "One optional path-free identity claim supplied by a target runtime.",
+      "properties": {
+        "dirty": {
+          "title": "Dirty",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "git-worktree-v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "revision",
+        "dirty",
+        "sha256"
+      ],
+      "title": "RuntimeIdentity",
+      "type": "object"
+    },
+    "RuntimeProvenance": {
+      "additionalProperties": false,
+      "description": "Bounded, path-free identity reported by one target executor.",
+      "properties": {
+        "distributions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DistributionProvenance"
+          },
+          "title": "Distributions",
+          "type": "array"
+        },
+        "executor": {
+          "default": "parity-python",
+          "enum": [
+            "parity-python",
+            "portable-python",
+            "command"
+          ],
+          "title": "Executor",
+          "type": "string"
+        },
+        "identities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RuntimeIdentity"
+          },
+          "title": "Identities",
+          "type": "array"
+        },
+        "parity_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parity Version"
+        },
+        "platform_machine": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Platform Machine",
+          "type": "string"
+        },
+        "platform_system": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Platform System",
+          "type": "string"
+        },
+        "python_implementation": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python Implementation"
+        },
+        "python_version": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python Version"
+        },
+        "runtime_name": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Name"
+        },
+        "runtime_version": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Version"
+        }
+      },
+      "required": [
+        "platform_system",
+        "platform_machine"
+      ],
+      "title": "RuntimeProvenance",
+      "type": "object"
+    },
+    "Status": {
+      "enum": [
+        "passed",
+        "failed",
+        "error",
+        "skipped"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "SuiteCaseReportContract": {
+      "additionalProperties": false,
+      "description": "Data-safe result projection for one configured case.",
+      "properties": {
+        "deterministic_examples": {
+          "minimum": 0,
+          "title": "Deterministic Examples",
+          "type": "integer"
+        },
+        "diagnoses": {
+          "items": {
+            "$ref": "#/$defs/Diagnosis"
+          },
+          "title": "Diagnoses",
+          "type": "array"
+        },
+        "elapsed_seconds": {
+          "minimum": 0,
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "examples_run": {
+          "minimum": 0,
+          "title": "Examples Run",
+          "type": "integer"
+        },
+        "failures": {
+          "items": {
+            "$ref": "#/$defs/FindingContract"
+          },
+          "title": "Failures",
+          "type": "array"
+        },
+        "finding_limit_reached": {
+          "title": "Finding Limit Reached",
+          "type": "boolean"
+        },
+        "findings_discovered": {
+          "minimum": 0,
+          "title": "Findings Discovered",
+          "type": "integer"
+        },
+        "generated_examples": {
+          "minimum": 0,
+          "title": "Generated Examples",
+          "type": "integer"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "performance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PerformanceResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaseProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "examples_run",
+        "deterministic_examples",
+        "generated_examples",
+        "findings_discovered",
+        "finding_limit_reached",
+        "failures",
+        "diagnoses",
+        "performance",
+        "provenance",
+        "elapsed_seconds"
+      ],
+      "title": "SuiteCaseReportContract",
+      "type": "object"
+    },
+    "SuiteProvenance": {
+      "additionalProperties": false,
+      "description": "Orchestrator runtime and data-safe effective-configuration fingerprint.",
+      "properties": {
+        "config_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Sha256"
+        },
+        "orchestrator": {
+          "$ref": "#/$defs/RuntimeProvenance"
+        }
+      },
+      "required": [
+        "orchestrator"
+      ],
+      "title": "SuiteProvenance",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/suite-report/v3.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Data-eliding projection returned by :func:`parity.reporting.report_payload`.",
+  "properties": {
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/SuiteCaseReportContract"
+      },
+      "title": "Cases",
+      "type": "array"
+    },
+    "elapsed_seconds": {
+      "minimum": 0,
+      "title": "Elapsed Seconds",
+      "type": "number"
+    },
+    "parity_version": {
+      "title": "Parity Version",
+      "type": "string"
+    },
+    "provenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SuiteProvenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schema_version": {
+      "const": 3,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "status": {
+      "$ref": "#/$defs/Status"
+    }
+  },
+  "required": [
+    "schema_version",
+    "status",
+    "cases",
+    "elapsed_seconds",
+    "parity_version"
+  ],
+  "title": "SuiteReportContract",
+  "type": "object",
+  "x-parity-contract": "suite-report",
+  "x-parity-contract-version": 3
+}

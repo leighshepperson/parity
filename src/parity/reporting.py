@@ -401,7 +401,7 @@ def _case_payload(case: CaseResult) -> dict[str, Any]:
 def report_payload(result: SuiteResult) -> dict[str, Any]:
     """Return the stable, data-eliding JSON report contract."""
 
-    return {
+    payload = {
         "schema_version": 3,
         "status": result.status.value,
         "cases": [_case_payload(case) for case in result.cases],
@@ -409,6 +409,11 @@ def report_payload(result: SuiteResult) -> dict[str, Any]:
         "parity_version": result.parity_version,
         "provenance": result.provenance.model_dump(mode="json") if result.provenance else None,
     }
+    from parity.json_contracts import SuiteReportContract
+
+    return SuiteReportContract.model_validate(payload).model_dump(
+        mode="json", by_alias=True, exclude_unset=True
+    )
 
 
 def _provenance_warning(case: CaseResult) -> str | None:

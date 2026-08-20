@@ -133,14 +133,12 @@ tags = ["migration", "critical"]
 
 [cases.reference]
 target = "{reference}"
-adapter = "pandas"
-pandas_input = "arrow"
+adapter = "arrow"
 record_distributions = []
 
 [cases.candidate]
 target = "{candidate}"
-adapter = "polars"
-pandas_input = "arrow"
+adapter = "arrow"
 record_distributions = []
 
 # A case needs a fixture, a generated schema, or both. This generated schema
@@ -385,33 +383,122 @@ def write_project_config(
 
 
 def render_example_module() -> str:
-    """Return the small, passing pandas-to-Polars example used by ``parity init``."""
+    """Return the small, passing Arrow example used by ``parity init``."""
 
     return '''"""Generated Parity example. Replace these functions with your migration."""
 
-import pandas as pd
-import polars as pl
+import pyarrow as pa
+import pyarrow.compute as pc
 
 
-def reference(frame: pd.DataFrame) -> pd.DataFrame:
+def _contract(frame: pa.Table) -> pa.Table:
+    quantity = pc.cast(frame["quantity"], pa.float64())
+    unit_price = pc.cast(frame["unit_price"], pa.float64())
+    return pa.table(
+        {
+            "quantity": quantity,
+            "unit_price": unit_price,
+            "total": pc.multiply(quantity, unit_price),
+        }
+    )
+
+
+def reference(frame: pa.Table) -> pa.Table:
     """Existing implementation: total value with a documented float contract."""
 
-    result = frame.astype({"quantity": "float64", "unit_price": "float64"})
-    result["total"] = result["quantity"] * result["unit_price"]
-    return result[["quantity", "unit_price", "total"]]
+    return _contract(frame)
 
 
-def candidate(frame: pl.DataFrame) -> pl.DataFrame:
-    """Rewritten implementation with explicit cross-engine missing values."""
+def candidate(frame: pa.Table) -> pa.Table:
+    """Candidate implementation of the same explicit Arrow contract."""
 
-    normalized = frame.with_columns(
-        pl.col("quantity").cast(pl.Float64).fill_null(float("nan")),
-        pl.col("unit_price").cast(pl.Float64).fill_null(float("nan")),
-    )
-    return normalized.with_columns(
-        (pl.col("quantity") * pl.col("unit_price")).alias("total")
-    ).select("quantity", "unit_price", "total")
+    return _contract(frame)
 '''
+
+
+def render_migration_adapter() -> str:
+    """Return a deliberately incomplete, environment-neutral migration adapter."""
+
+    return '''"""Migration contract reviewed and owned by this project.
+
+Keep subject-package imports inside ``migration_contract``: the same module is
+imported in isolated reference and candidate environments.
+"""
+
+import pyarrow as pa
+
+
+def migration_contract(frame: pa.Table) -> pa.Table:
+    """Translate one canonical Arrow input into the behaviour under review."""
+
+    # Import the package under test here, translate ``frame`` into its public API,
+    # and return an Arrow table (or another JSON-compatible canonical value).
+    raise NotImplementedError("review and implement the migration contract")
+'''
+
+
+def write_migration_scaffold(
+    config_path: str | Path,
+    *,
+    manifest_path: str | Path,
+    case_name: str = "migration",
+) -> dict[str, Path]:
+    """Create an all-or-nothing, non-overwriting agent-review scaffold.
+
+    The fixture, adapter, checklist and config are deliberately adjacent so the
+    complete project can be moved without rewriting authored paths.
+    """
+
+    from parity.agent_output import ContractChecklist
+
+    config = Path(config_path)
+    adapter = config.parent / "migration_adapters.py"
+    fixture = config.parent / "fixtures" / "input.json"
+    checklist = config.parent / "migration.checklist.json"
+    destinations = (config, adapter, fixture, checklist)
+    existing = [path for path in destinations if _lexists(path)]
+    if existing:
+        raise FileExistsError(f"refusing to overwrite scaffold file: {existing[0]}")
+
+    created: list[Path] = []
+    try:
+        _atomic_write_text(fixture, '[{"value": 0}]\n', force=False)
+        created.append(fixture)
+        _atomic_write_text(adapter, render_migration_adapter(), force=False)
+        created.append(adapter)
+        _atomic_write_text(
+            checklist,
+            ContractChecklist.for_scaffold(
+                adapter=adapter.name,
+                fixture=Path(os.path.relpath(fixture, config.parent)).as_posix(),
+                manifest=Path(os.path.relpath(Path(manifest_path), config.parent)).as_posix(),
+                config=config.name,
+            ).model_dump_json(indent=2)
+            + "\n",
+            force=False,
+        )
+        created.append(checklist)
+        write_project_config(
+            config,
+            reference="migration_adapters:migration_contract",
+            candidate="migration_adapters:migration_contract",
+            fixture=fixture,
+            case_name=case_name,
+            reference_adapter="arrow",
+            candidate_adapter="arrow",
+            target_workdir=config.parent,
+        )
+        created.append(config)
+    except BaseException:
+        for path in reversed(created):
+            path.unlink(missing_ok=True)
+        raise
+    return {
+        "config": config,
+        "adapter": adapter,
+        "fixture": fixture,
+        "checklist": checklist,
+    }
 
 
 def write_starter(path: str | Path = "parity.toml", *, force: bool = False) -> list[Path]:
@@ -433,8 +520,10 @@ def write_starter(path: str | Path = "parity.toml", *, force: bool = False) -> l
 __all__ = [
     "render_config_template",
     "render_example_module",
+    "render_migration_adapter",
     "render_project_config",
     "write_config_template",
+    "write_migration_scaffold",
     "write_project_config",
     "write_starter",
 ]

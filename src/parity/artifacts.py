@@ -421,19 +421,49 @@ class ArtifactStore:
                 input_files=input_files,
                 single_input=single_input,
             )
+            input_digest = hashlib.sha256()
+            for input_name, arrow_path in zip(input_files, arrow_paths, strict=True):
+                input_digest.update(input_name.encode("utf-8"))
+                input_digest.update(b"\0")
+                input_digest.update(bytes.fromhex(_sha256(arrow_path)))
+            input_hash = input_digest.hexdigest()
+            campaign_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ") + "-" + input_hash[:12]
+            destination = case_root / campaign_id
+            # Microsecond timestamps should be unique; retain atomicity even under
+            # a frozen test clock by adding a numeric suffix before the rename.
+            suffix = 1
+            while destination.exists():
+                destination = case_root / f"{campaign_id}-{suffix}"
+                suffix += 1
+
+            # Replay paths are rooted at the configuration directory captured by
+            # this store, never at the directory of a future replay invocation.
+            # Persist only a bounded ancestor count: it is path-free, portable
+            # across project moves, and cannot name a sibling outside the project.
+            path_base: dict[str, Any] | None = None
+            try:
+                relative_destination = destination.resolve().relative_to(self.invocation_directory)
+            except ValueError:
+                if complete_runtime:
+                    replay_blockers["artifact"] = "external_artifact_root"
+            else:
+                levels = len(relative_destination.parts)
+                if levels < 1:  # pragma: no cover - a campaign is always nested
+                    raise RuntimeError("artifact campaign must be below its replay root")
+                path_base = {"kind": "artifact_ancestor", "levels": levels}
             replay: dict[str, Any] = {
                 # The current replay transport covers both single inputs and
                 # named bundles. A failure without complete bindings remains
                 # useful inspection evidence, but cannot execute automatically.
-                "version": 1,
-                "working_directory": "recorded project configuration directory",
-                "path_base": "invocation_cwd",
+                "version": 2,
                 "case": replay_case,
                 "environment": "inherited; values are never stored in artifacts",
                 "inputs": [
                     {"name": name, "file": filename} for name, filename in input_files.items()
                 ],
             }
+            if path_base is not None:
+                replay["path_base"] = path_base
             if replay_blockers:
                 # Preserve only a bounded reason code, never an external path.
                 # This lets replay explain why reconstruction was declined
@@ -443,22 +473,19 @@ class ArtifactStore:
                 replay["expected_runtime"] = runtime_provenance.model_dump(mode="json")
             if config_sha256 is not None:
                 replay["config_sha256"] = config_sha256
-            if complete_runtime and _case_supports_automatic_replay(
-                replay_case, input_files=input_files, single_input=single_input
+            if (
+                complete_runtime
+                and _case_supports_automatic_replay(
+                    replay_case, input_files=input_files, single_input=single_input
+                )
+                and not replay_blockers
             ):
                 replay["command"] = ["parity", "replay", "<artifact-path>"]
             replay_path.write_text(
                 json.dumps(replay, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
-            input_digest = hashlib.sha256()
-            for input_name, arrow_path in zip(input_files, arrow_paths, strict=True):
-                input_digest.update(input_name.encode("utf-8"))
-                input_digest.update(b"\0")
-                input_digest.update(bytes.fromhex(_sha256(arrow_path)))
-            input_hash = input_digest.hexdigest()
-            campaign_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ") + "-" + input_hash[:12]
             manifest: dict[str, Any] = {
-                "version": 1,
+                "version": 2,
                 "campaign_id": campaign_id,
                 "case": name,
                 "created_at": datetime.now(UTC).isoformat(),
@@ -476,13 +503,6 @@ class ArtifactStore:
             manifest_path.write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
-            destination = case_root / campaign_id
-            # Microsecond timestamps should be unique; retain atomicity even under
-            # a frozen test clock by adding a numeric suffix before the rename.
-            suffix = 1
-            while destination.exists():
-                destination = case_root / f"{campaign_id}-{suffix}"
-                suffix += 1
             os.replace(temporary, destination)
             return destination
         except BaseException:

@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 
 import parity.migration_workspace as migration_workspace_module
 from parity import cli
+from parity.agent_output import ChecklistItemId, ContractChecklist
 from parity.engine import replay_artifact
 from parity.migration import (
     MigrationManifest,
@@ -292,7 +293,7 @@ def test_released_workspace_resolves_both_exact_package_sources(tmp_path: Path) 
     document = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
     resolved = load_workspace(workspace_path)
 
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert document["reference_package"] == "Candidate_Lib[io]==1.9.0"
     assert document["candidate_package"] == "candidate-lib[io]==2.0.0"
     assert "candidate_path" not in document
@@ -358,7 +359,7 @@ def test_local_workspace_resolves_distinct_matching_checkouts(tmp_path: Path) ->
     document = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
     resolved = load_workspace(workspace_path)
 
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert "reference_package" not in document
     assert document["reference_path"] == "../reference"
     assert document["candidate_path"] == "../candidate"
@@ -472,7 +473,7 @@ def test_workspace_init_rebases_invocation_paths_beside_nested_document(
 
     assert written == destination
     document = tomllib.loads(destination.read_text(encoding="utf-8"))
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert document["candidate_path"] == "../candidate-src/candidate-lib"
     assert document["config"] == "parity.toml"
     assert document["manifest"] == "migration.toml"
@@ -542,7 +543,7 @@ def test_advance_workspace_preserves_harness_and_locks_but_invalidates_reports(
 
     assert advanced == workspace_path
     document = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert document["reference_package"] == "candidate-lib==2.0.0"
     assert document["candidate_package"] == "candidate-lib==2.0.0"
     assert document["lanes"] == [{"name": "release", "requirements": "release.in"}]
@@ -963,7 +964,7 @@ def test_setup_compiles_locks_runs_tox_and_queries_worker_interpreters(
         ),
     )
     tools = {"uv": "/tools/uv", "tox": "/tools/tox"}
-    monkeypatch.setattr("parity.migration_workspace.shutil.which", tools.get)
+    monkeypatch.setattr("parity.migration_workspace._tool", lambda name: (tools[name],))
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -1023,10 +1024,26 @@ def test_setup_compiles_locks_runs_tox_and_queries_worker_interpreters(
 
 def test_setup_missing_optional_tool_is_actionable(tmp_path: Path, monkeypatch) -> None:
     workspace_path = _project(tmp_path)
-    monkeypatch.setattr("parity.migration_workspace.shutil.which", lambda _name: None)
+    monkeypatch.setattr("parity.migration_workspace.importlib.util.find_spec", lambda _name: None)
 
     with pytest.raises(WorkspaceError, match=r"parity-check\[workspace\]"):
         setup_workspace(workspace_path)
+
+
+def test_workspace_tools_use_the_controller_interpreter_instead_of_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "parity.migration_workspace.shutil.which",
+        lambda name: f"/untrusted/path/{name}",
+    )
+    monkeypatch.setattr(
+        "parity.migration_workspace.importlib.util.find_spec",
+        lambda _name: object(),
+    )
+
+    assert migration_workspace_module._tool("uv") == (sys.executable, "-I", "-m", "uv")
+    assert migration_workspace_module._tool("tox") == (sys.executable, "-I", "-m", "tox")
 
 
 def test_source_revision_tracks_head_dirty_state_and_worktree_content(tmp_path: Path) -> None:
@@ -1229,7 +1246,7 @@ def test_setup_failure_hides_subprocess_output_and_preserves_previous_lock(
     previous = "parity-check==0.9.2\n"
     lock.write_text(previous, encoding="utf-8")
     tools = {"uv": "/tools/uv", "tox": "/tools/tox"}
-    monkeypatch.setattr("parity.migration_workspace.shutil.which", tools.get)
+    monkeypatch.setattr("parity.migration_workspace._tool", lambda name: (tools[name],))
 
     def fail(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
@@ -1268,7 +1285,7 @@ def test_private_state_symlink_cannot_escape_workspace(tmp_path: Path, monkeypat
     outside.mkdir()
     (tmp_path / ".parity").symlink_to(outside, target_is_directory=True)
     tools = {"uv": "/tools/uv", "tox": "/tools/tox"}
-    monkeypatch.setattr("parity.migration_workspace.shutil.which", tools.get)
+    monkeypatch.setattr("parity.migration_workspace._tool", lambda name: (tools[name],))
 
     with pytest.raises(WorkspaceError, match="root cannot be a symbolic link"):
         setup_workspace(workspace_path)
@@ -1289,7 +1306,7 @@ def test_private_state_child_symlink_cannot_escape_workspace(
     outside.mkdir()
     (state / child).symlink_to(outside, target_is_directory=True)
     tools = {"uv": "/tools/uv", "tox": "/tools/tox"}
-    monkeypatch.setattr("parity.migration_workspace.shutil.which", tools.get)
+    monkeypatch.setattr("parity.migration_workspace._tool", lambda name: (tools[name],))
 
     with pytest.raises(WorkspaceError, match=rf"{child!r} directory cannot be a symlink"):
         setup_workspace(workspace_path)
@@ -2060,11 +2077,11 @@ def test_migration_init_cli_creates_only_declarative_workspace(
     )
 
     assert result.exit_code == 0, result.output
-    assert "parity migration run" in result.stdout
+    assert "parity migration validate" in result.stdout
     assert "active pair declared" in result.stdout
     assert "created starter ledger" in result.stdout
     document = tomllib.loads(workspace.read_text(encoding="utf-8"))
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert document["reference_package"] == "candidate-lib==1.9.0"
     assert document["candidate_path"] == "candidate"
     assert [lane["name"] for lane in document["lanes"]] == ["release", "current"]
@@ -2099,7 +2116,7 @@ def test_migration_init_cli_declares_local_worktree_pair(tmp_path: Path, monkeyp
     document = tomllib.loads(
         (tmp_path / "migrations/parity.workspace.toml").read_text(encoding="utf-8")
     )
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert "reference_package" not in document
     assert document["reference_path"] == "../reference-worktree"
     assert document["candidate_path"] == "../candidate-worktree"
@@ -2156,7 +2173,7 @@ def test_migration_init_cli_scaffolds_released_pair_contract(
     workspace = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
     config = tomllib.loads((tmp_path / "migrations/parity.toml").read_text(encoding="utf-8"))
     manifest = tomllib.loads((tmp_path / "migrations/migration.toml").read_text(encoding="utf-8"))
-    assert workspace["version"] == 2
+    assert workspace["version"] == 3
     assert workspace["reference_package"] == "more-itertools==8.14.0"
     assert workspace["candidate_package"] == "more-itertools==9.0.0"
     assert "candidate_path" not in workspace
@@ -2167,6 +2184,109 @@ def test_migration_init_cli_scaffolds_released_pair_contract(
     assert "workdir" not in config["cases"][0]["reference"]
     assert "workdir" not in config["cases"][0]["candidate"]
     assert manifest["units"][0]["cases"] == ["windowed"]
+
+
+def test_agent_scaffold_json_requires_explicit_review_before_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    initialized = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "more-itertools==8.14.0",
+            "--candidate-package",
+            "more-itertools==9.0.0",
+            "--scaffold",
+            "--json",
+        ],
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    assert initialized.stderr == ""
+    payload = json.loads(initialized.stdout)
+    assert payload["status"] == "needs_review"
+    assert [item["kind"] for item in payload["created_files"]] == [
+        "workspace",
+        "config",
+        "manifest",
+        "adapter",
+        "fixture",
+        "checklist",
+    ]
+    assert payload["next_commands"][0]["argv"] == [
+        "parity",
+        "migration",
+        "validate",
+        "--workspace",
+        "migrations/parity.workspace.toml",
+        "--json",
+    ]
+    workspace = tomllib.loads(
+        (tmp_path / "migrations/parity.workspace.toml").read_text(encoding="utf-8")
+    )
+    assert workspace["version"] == 3
+    assert workspace["checklist"] == "migration.checklist.json"
+    assert not (tmp_path / "migrations/.parity").exists()
+
+    pending = runner.invoke(cli.app, ["migration", "validate", "--json"])
+    assert pending.exit_code == 1
+    pending_payload = json.loads(pending.stdout)
+    assert pending_payload["status"] == "needs_review"
+    assert {issue["code"] for issue in pending_payload["issues"]} == {
+        f"checklist.{identifier.value}" for identifier in ChecklistItemId
+    }
+    assert not (tmp_path / "migrations/.parity").exists()
+
+    checklist_path = tmp_path / "migrations/migration.checklist.json"
+    checklist = ContractChecklist.model_validate_json(checklist_path.read_text(encoding="utf-8"))
+    resolved = checklist.resolving(*ChecklistItemId)
+    checklist_path.write_text(resolved.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+    ready = runner.invoke(cli.app, ["migration", "validate", "--json"])
+    assert ready.exit_code == 0, ready.output
+    ready_payload = json.loads(ready.stdout)
+    assert ready_payload["status"] == "ready"
+    assert ready_payload["next_commands"][0]["argv"][1:3] == ["migration", "run"]
+    assert not (tmp_path / "migrations/.parity").exists()
+
+
+def test_agent_scaffold_is_all_or_nothing_and_never_overwrites_authored_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    adapter = migrations / "migration_adapters.py"
+    adapter.write_text("# reviewed\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--scaffold",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.stdout)["status"] == "error"
+    assert adapter.read_text(encoding="utf-8") == "# reviewed\n"
+    assert not (migrations / "parity.toml").exists()
+    assert not (migrations / "migration.toml").exists()
+    assert not (migrations / "parity.workspace.toml").exists()
+    assert not (migrations / "migration.checklist.json").exists()
+    assert not (migrations / "fixtures/input.json").exists()
 
 
 def test_migration_init_cli_supports_config_above_workspace_for_replay(
@@ -2397,7 +2517,7 @@ def test_default_cli_flow_creates_nested_active_pair_and_advances_it(
     assert initialized.exit_code == 0, initialized.output
     workspace = tmp_path / "migrations/parity.workspace.toml"
     document = tomllib.loads(workspace.read_text(encoding="utf-8"))
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert document["reference_package"] == "candidate-lib==1.9.0"
     assert document["candidate_path"] == ".."
     assert document["config"] == "parity.toml"

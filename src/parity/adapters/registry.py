@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import json
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -16,10 +19,61 @@ import pyarrow.parquet as pa_parquet
 
 from parity.adapters.arrow import ArrowAdapter
 from parity.adapters.base import AdapterError, DataFrameAdapter
-from parity.adapters.pandas import PandasAdapter
-from parity.adapters.polars import PolarsAdapter
 
 _REGISTRY: dict[str, DataFrameAdapter] = {}
+_OPTIONAL_ADAPTERS = {
+    "pandas": ("pandas", "parity.adapters.pandas", "PandasAdapter"),
+    "polars": ("polars", "parity.adapters.polars", "PolarsAdapter"),
+}
+_OPTIONAL_ADAPTER_LOCK = threading.Lock()
+
+
+def _optional_adapter(name: str) -> DataFrameAdapter:
+    """Load one first-party optional adapter with an actionable failure."""
+
+    if adapter := _REGISTRY.get(name):
+        return adapter
+    with _OPTIONAL_ADAPTER_LOCK:
+        if adapter := _REGISTRY.get(name):
+            return adapter
+        dependency, module_name, class_name = _OPTIONAL_ADAPTERS[name]
+        try:
+            available = importlib.util.find_spec(dependency) is not None
+        except (ImportError, ModuleNotFoundError, ValueError):
+            available = False
+        if not available:
+            raise AdapterError(f"{name} adapter is not installed; install parity-check[{name}]")
+        try:
+            module = importlib.import_module(module_name)
+            adapter_type = getattr(module, class_name)
+            loaded = adapter_type()
+            if not isinstance(loaded, DataFrameAdapter):
+                raise AttributeError("optional adapter does not implement DataFrameAdapter")
+            adapter = loaded
+        except (AttributeError, ImportError, ModuleNotFoundError) as exc:
+            raise AdapterError(
+                f"{name} adapter could not be loaded; reinstall parity-check[{name}]"
+            ) from exc
+        register_adapter(adapter)
+        return adapter
+
+
+def _optional_dependency_available(name: str) -> bool:
+    dependency = _OPTIONAL_ADAPTERS[name][0]
+    try:
+        return importlib.util.find_spec(dependency) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
+def _optional_adapter_name(value: Any) -> str | None:
+    """Identify an optional engine from a value's class hierarchy."""
+
+    for value_type in type(value).__mro__:
+        name = value_type.__module__.partition(".")[0]
+        if name in _OPTIONAL_ADAPTERS:
+            return name
+    return None
 
 
 def register_adapter(adapter: DataFrameAdapter, *, replace: bool = False) -> None:
@@ -38,9 +92,11 @@ def register_adapter(adapter: DataFrameAdapter, *, replace: bool = False) -> Non
 
 
 def available_adapters() -> tuple[str, ...]:
-    """Return registered adapter names in stable order."""
+    """Return installed adapter names in stable order."""
 
-    return tuple(sorted(_REGISTRY))
+    names = set(_REGISTRY)
+    names.update(name for name in _OPTIONAL_ADAPTERS if _optional_dependency_available(name))
+    return tuple(sorted(names))
 
 
 def detect_adapter(value: Any) -> DataFrameAdapter:
@@ -49,6 +105,11 @@ def detect_adapter(value: Any) -> DataFrameAdapter:
     for name in ("arrow", "pandas", "polars"):
         adapter = _REGISTRY.get(name)
         if adapter is not None and adapter.accepts(value):
+            return adapter
+    native_module = _optional_adapter_name(value)
+    if native_module is not None:
+        adapter = _optional_adapter(native_module)
+        if adapter.accepts(value):
             return adapter
     for name, adapter in _REGISTRY.items():
         if name not in {"arrow", "pandas", "polars"} and adapter.accepts(value):
@@ -75,6 +136,8 @@ def get_adapter(
         if value is None:
             raise AdapterError("automatic adapter selection requires a value")
         return detect_adapter(value)
+    if name in _OPTIONAL_ADAPTERS:
+        return _optional_adapter(name)
     try:
         return _REGISTRY[name]
     except KeyError as exc:
@@ -154,5 +217,4 @@ def convert_many(values: Iterable[Any], adapter: str | DataFrameAdapter) -> list
     return [from_arrow(to_arrow(value), adapter) for value in values]
 
 
-for _adapter in (ArrowAdapter(), PandasAdapter(), PolarsAdapter()):
-    register_adapter(_adapter)
+register_adapter(ArrowAdapter())

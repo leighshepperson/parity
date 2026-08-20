@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.console import Console
@@ -46,6 +46,89 @@ def _fail(message: str, code: int = 2) -> None:
     rendered.append("error:", style="bold red")
     rendered.append(f" {message}")
     error_console.print(rendered)
+    raise typer.Exit(code)
+
+
+def _cli_path(path: str | Path, *, base: Path | None = None) -> str:
+    """Return a stable slash-separated path relative to the invocation when possible."""
+
+    source = Path(path)
+    root = (base or Path.cwd()).resolve()
+    absolute = source.resolve() if source.is_absolute() else (root / source).resolve()
+    try:
+        return absolute.relative_to(root).as_posix() or "."
+    except ValueError:
+        return Path(os.path.relpath(absolute, root)).as_posix()
+
+
+def _artifact_has_executable_replay(path: Path) -> bool:
+    """Return whether a freshly written v2 artifact advertises exact replay."""
+
+    try:
+        payload = json.loads((path / "replay.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    if not isinstance(payload, dict) or type(payload.get("version")) is not int:
+        return False
+    path_base = payload.get("path_base")
+    levels = path_base.get("levels") if isinstance(path_base, dict) else None
+    return bool(
+        payload["version"] == 2
+        and isinstance(path_base, dict)
+        and set(path_base) == {"kind", "levels"}
+        and path_base.get("kind") == "artifact_ancestor"
+        and type(levels) is int
+        and 1 <= levels <= 64
+        and payload.get("command") == ["parity", "replay", "<artifact-path>"]
+        and "replay_blockers" not in payload
+    )
+
+
+def _agent_document(
+    command: str,
+    status: str,
+    *,
+    created_files: list[dict[str, str]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
+    artifacts: list[dict[str, Any]] | None = None,
+    checks: list[dict[str, Any]] | None = None,
+    issues: list[dict[str, str]] | None = None,
+    next_commands: list[dict[str, Any]] | None = None,
+    result: Any = None,
+) -> dict[str, Any]:
+    """Build the one stable, data-safe result envelope shared by agent-facing commands."""
+
+    return {
+        "schema_version": 1,
+        "command": command,
+        "status": status,
+        "created_files": created_files or [],
+        "reports": reports or [],
+        "artifacts": artifacts or [],
+        "checks": checks or [],
+        "issues": issues or [],
+        "next_commands": next_commands or [],
+        "result": result,
+    }
+
+
+def _emit_agent_document(document: dict[str, Any]) -> None:
+    """Write exactly one deterministic JSON document to stdout."""
+
+    from parity.agent_output import AgentCommandOutput
+
+    validated = AgentCommandOutput.model_validate(document)
+    typer.echo(validated.model_dump_json())
+
+
+def _agent_fail(command: str, message: str, *, code: int = 2) -> None:
+    _emit_agent_document(
+        _agent_document(
+            command,
+            "error",
+            issues=[{"code": "operational_error", "severity": "error", "message": message}],
+        )
+    )
     raise typer.Exit(code)
 
 
@@ -101,6 +184,43 @@ def version_command() -> None:
     """Print the installed Parity version."""
 
     console.print(__version__)
+
+
+@app.command("schema")
+def schema_command(
+    name: Annotated[
+        str,
+        typer.Argument(help="Contract name, or 'list' to enumerate contracts"),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write the schema atomically to this path"),
+    ] = None,
+) -> None:
+    """Print a versioned JSON Schema for an authored or emitted contract."""
+
+    from parity.json_contracts import contract_names, contract_schema
+
+    if name == "list":
+        rendered = json.dumps(
+            {"schema_version": 1, "contracts": list(contract_names())},
+            indent=2,
+            sort_keys=True,
+        )
+    else:
+        try:
+            schema = contract_schema(name)
+        except ValueError as exc:
+            _fail(str(exc))
+        rendered = json.dumps(schema, indent=2, sort_keys=True, allow_nan=False)
+    if output is None:
+        typer.echo(rendered)
+        return
+    try:
+        _atomic_write_output(output, rendered + "\n")
+    except OSError as exc:
+        _fail(f"schema output could not be written ({type(exc).__name__})")
+    _print_path_status("wrote", output)
 
 
 @app.command()
@@ -533,6 +653,17 @@ def migration_init(
         list[str] | None,
         typer.Option("--row-key", help="Unique output key column; repeatable"),
     ] = None,
+    scaffold: Annotated[
+        bool,
+        typer.Option(
+            "--scaffold",
+            help="Create a safe adapter, fixture and explicit review checklist",
+        ),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit exactly one machine-readable result document"),
+    ] = False,
     force: Annotated[
         bool,
         typer.Option("--force", help="Replace an existing workspace file"),
@@ -553,13 +684,18 @@ def migration_init(
         rebase_workspace_path,
         write_workspace,
     )
-    from parity.templates import write_project_config
+    from parity.templates import write_migration_scaffold, write_project_config
+
+    def fail(message: str) -> None:
+        if as_json:
+            _agent_fail("migration.init", message)
+        _fail(message)
 
     invocation = Path.cwd()
     if (reference_package is None) == (reference_path is None):
-        _fail("set exactly one of --reference-package or --reference-path")
+        fail("set exactly one of --reference-package or --reference-path")
     if candidate_package is not None and candidate_path is not None:
-        _fail("set exactly one of --candidate-package or --candidate-path")
+        fail("set exactly one of --candidate-package or --candidate-path")
     if candidate_package is None and candidate_path is None:
         candidate_path = Path(".")
     absolute_workspace = (
@@ -568,7 +704,7 @@ def migration_init(
     absolute_config = config_path if config_path.is_absolute() else invocation / config_path
     absolute_manifest = manifest_path if manifest_path.is_absolute() else invocation / manifest_path
     if os.path.lexists(absolute_workspace) and not force:
-        _fail(f"{workspace_path} already exists; pass --force to replace it")
+        fail(f"{workspace_path} already exists; pass --force to replace it")
 
     scaffold_requested = any(
         (
@@ -583,41 +719,56 @@ def migration_init(
             bool(row_key),
         )
     )
+    if scaffold and scaffold_requested:
+        fail(
+            "--scaffold creates the adapter and fixture; omit --target, --fixture and other "
+            "case-scaffolding options"
+        )
     generated_config = False
     generated_manifest = False
+    generated_scaffold: dict[str, Path] = {}
+    checklist_path: Path | None = None
     try:
         if os.path.lexists(absolute_config):
-            if scaffold_requested:
+            if scaffold or scaffold_requested:
                 raise WorkspaceError(
                     "the reviewed Parity config already exists; omit --target, --fixture and "
                     "other case-scaffolding options"
                 )
             configured = load_config(absolute_config)
         else:
-            effective_reference_target = reference_target or target
-            effective_candidate_target = candidate_target or target
-            if (
-                fixture is None
-                or effective_reference_target is None
-                or effective_candidate_target is None
-            ):
-                raise WorkspaceError(
-                    "the Parity config is missing; supply --fixture and either --target or both "
-                    "--reference-target and --candidate-target to scaffold it"
+            if scaffold:
+                generated_scaffold = write_migration_scaffold(
+                    absolute_config,
+                    manifest_path=absolute_manifest,
+                    case_name=case_name,
                 )
-            absolute_fixture = fixture if fixture.is_absolute() else invocation / fixture
-            write_project_config(
-                absolute_config,
-                reference=effective_reference_target,
-                candidate=effective_candidate_target,
-                fixture=absolute_fixture,
-                case_name=case_name,
-                reference_adapter=reference_adapter,
-                candidate_adapter=candidate_adapter,
-                target_workdir=absolute_workspace.parent,
-                record_distributions=record_distribution or (),
-                row_keys=row_key or (),
-            )
+                checklist_path = generated_scaffold["checklist"]
+            else:
+                effective_reference_target = reference_target or target
+                effective_candidate_target = candidate_target or target
+                if (
+                    fixture is None
+                    or effective_reference_target is None
+                    or effective_candidate_target is None
+                ):
+                    raise WorkspaceError(
+                        "the Parity config is missing; pass --scaffold, or supply --fixture and "
+                        "either --target or both --reference-target and --candidate-target"
+                    )
+                absolute_fixture = fixture if fixture.is_absolute() else invocation / fixture
+                write_project_config(
+                    absolute_config,
+                    reference=effective_reference_target,
+                    candidate=effective_candidate_target,
+                    fixture=absolute_fixture,
+                    case_name=case_name,
+                    reference_adapter=reference_adapter,
+                    candidate_adapter=candidate_adapter,
+                    target_workdir=absolute_workspace.parent,
+                    record_distributions=record_distribution or (),
+                    row_keys=row_key or (),
+                )
             generated_config = True
             configured = load_config(absolute_config)
         if os.path.lexists(absolute_manifest):
@@ -657,6 +808,7 @@ def migration_init(
             candidate_python_version=candidate_python_version,
             config=config_path,
             manifest=manifest_path,
+            checklist=checklist_path,
             report_dir=effective_report_dir,
             lanes=parse_lane_options(lane or ()),
             force=force,
@@ -665,21 +817,80 @@ def migration_init(
     except FileExistsError as exc:
         if generated_manifest:
             absolute_manifest.unlink(missing_ok=True)
-        if generated_config:
+        if generated_scaffold:
+            for path in generated_scaffold.values():
+                path.unlink(missing_ok=True)
+        elif generated_config:
             absolute_config.unlink(missing_ok=True)
-        _fail(str(exc))
+        fail(str(exc))
     except (ConfigError, MigrationConfigError, WorkspaceError, ValueError) as exc:
         if generated_manifest:
             absolute_manifest.unlink(missing_ok=True)
-        if generated_config:
+        if generated_scaffold:
+            for path in generated_scaffold.values():
+                path.unlink(missing_ok=True)
+        elif generated_config:
             absolute_config.unlink(missing_ok=True)
-        _fail(str(exc))
+        fail(str(exc))
     except OSError as exc:
         if generated_manifest:
             absolute_manifest.unlink(missing_ok=True)
-        if generated_config:
+        if generated_scaffold:
+            for path in generated_scaffold.values():
+                path.unlink(missing_ok=True)
+        elif generated_config:
             absolute_config.unlink(missing_ok=True)
-        _fail(f"migration workspace could not be written ({type(exc).__name__})")
+        fail(f"migration workspace could not be written ({type(exc).__name__})")
+    if as_json:
+        created_files: list[dict[str, str]] = [
+            {"kind": "workspace", "path": _cli_path(created, base=invocation)}
+        ]
+        if generated_config:
+            created_files.append(
+                {"kind": "config", "path": _cli_path(absolute_config, base=invocation)}
+            )
+        if generated_manifest:
+            created_files.append(
+                {"kind": "manifest", "path": _cli_path(absolute_manifest, base=invocation)}
+            )
+        for kind in ("adapter", "fixture", "checklist"):
+            if scaffold_path := generated_scaffold.get(kind):
+                created_files.append(
+                    {"kind": kind, "path": _cli_path(scaffold_path, base=invocation)}
+                )
+        issues = (
+            [
+                {
+                    "code": "contract_review_required",
+                    "severity": "review",
+                    "message": "resolve every migration checklist item before execution",
+                }
+            ]
+            if scaffold
+            else []
+        )
+        _emit_agent_document(
+            _agent_document(
+                "migration.init",
+                "needs_review" if scaffold else "ready",
+                created_files=created_files,
+                issues=issues,
+                next_commands=[
+                    {
+                        "argv": [
+                            "parity",
+                            "migration",
+                            "validate",
+                            "--workspace",
+                            _cli_path(created, base=invocation),
+                            "--json",
+                        ],
+                        "cwd": "invocation",
+                    }
+                ],
+            )
+        )
+        return
     _print_path_status("created", created)
     if generated_config:
         _print_path_status("created migration contract; review", absolute_config)
@@ -696,7 +907,192 @@ def migration_init(
             "active pair declared (mixed sources); setup will install the local checkout "
             "without modifying it"
         )
-    console.print(f"next: parity migration run --workspace {created}", markup=False)
+    console.print(f"next: parity migration validate --workspace {created}", markup=False)
+
+
+@migration_app.command("validate")
+def migration_validate(
+    workspace_path: Annotated[
+        Path,
+        typer.Option("--workspace", "-w", help="Path to parity.workspace.toml"),
+    ] = Path("migrations/parity.workspace.toml"),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit exactly one machine-readable result document"),
+    ] = False,
+) -> None:
+    """Validate authored contracts without creating environments or invoking targets."""
+
+    from parity.adapters import load_arrow_fixture
+    from parity.agent_output import ContractChecklist
+    from parity.migration import MigrationConfigError, load_migration_manifest
+    from parity.migration_workspace import WorkspaceError, load_workspace
+
+    invocation = Path.cwd()
+    checks: list[dict[str, Any]] = []
+    issues: list[dict[str, str]] = []
+    try:
+        workspace = load_workspace(workspace_path)
+        checks.append(
+            {
+                "code": "workspace_valid",
+                "status": "passed",
+                "message": "workspace v3 is structurally valid",
+                "path": _cli_path(workspace.path, base=invocation),
+            }
+        )
+        configured = load_config(workspace.config)
+        checks.append(
+            {
+                "code": "config_valid",
+                "status": "passed",
+                "message": "Parity configuration is structurally valid",
+                "path": _cli_path(workspace.config, base=invocation),
+            }
+        )
+        manifest = load_migration_manifest(workspace.manifest)
+        checks.append(
+            {
+                "code": "manifest_valid",
+                "status": "passed",
+                "message": "migration ledger is structurally valid",
+                "path": _cli_path(workspace.manifest, base=invocation),
+            }
+        )
+
+        fixture_count = 0
+        for case in configured.cases:
+            fixtures = [case.fixture] if case.fixture is not None else []
+            if case.input_bundle is not None:
+                fixtures.extend(
+                    spec.fixture
+                    for spec in case.input_bundle.inputs.values()
+                    if spec.fixture is not None
+                )
+            for fixture_path in fixtures:
+                assert fixture_path is not None
+                load_arrow_fixture(fixture_path)
+                fixture_count += 1
+        checks.append(
+            {
+                "code": "fixtures_loadable",
+                "status": "passed",
+                "message": f"{fixture_count} declared fixture(s) loaded as Arrow",
+            }
+        )
+
+        selected = {case for unit in manifest.units for case in unit.cases}
+        known = {case.name for case in configured.cases}
+        if unknown := selected - known:
+            raise MigrationConfigError(
+                "migration manifest references unknown case(s): " + ", ".join(sorted(unknown))
+            )
+        uncovered = [
+            unit.id for unit in manifest.units if not unit.cases and unit.excluded_reason is None
+        ]
+        if uncovered:
+            for unit_id in uncovered:
+                issues.append(
+                    {
+                        "code": "migration_unit_uncovered",
+                        "severity": "review",
+                        "message": f"migration unit {unit_id!r} needs cases or an exclusion reason",
+                    }
+                )
+            checks.append(
+                {
+                    "code": "migration_mapping_complete",
+                    "status": "failed",
+                    "message": f"{len(uncovered)} migration unit(s) remain uncovered",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "code": "migration_mapping_complete",
+                    "status": "passed",
+                    "message": "every migration unit is mapped or explicitly excluded",
+                }
+            )
+
+        if workspace.checklist is None:
+            checks.append(
+                {
+                    "code": "contract_review",
+                    "status": "deferred",
+                    "message": "no generated checklist is attached to this authored workspace",
+                }
+            )
+        else:
+            checklist = ContractChecklist.model_validate_json(
+                workspace.checklist.read_text(encoding="utf-8")
+            )
+            if checklist.unresolved_ids:
+                for identifier in checklist.unresolved_ids:
+                    issues.append(
+                        {
+                            "code": f"checklist.{identifier.value}",
+                            "severity": "review",
+                            "message": "explicit contract review remains unresolved",
+                            "path": _cli_path(workspace.checklist, base=invocation),
+                        }
+                    )
+                checks.append(
+                    {
+                        "code": "contract_review",
+                        "status": "failed",
+                        "message": f"{len(checklist.unresolved_ids)} checklist item(s) remain",
+                        "path": _cli_path(workspace.checklist, base=invocation),
+                    }
+                )
+            else:
+                checks.append(
+                    {
+                        "code": "contract_review",
+                        "status": "passed",
+                        "message": "every generated contract decision is marked resolved",
+                        "path": _cli_path(workspace.checklist, base=invocation),
+                    }
+                )
+    except (ConfigError, MigrationConfigError, WorkspaceError, OSError, ValueError) as exc:
+        if as_json:
+            _agent_fail("migration.validate", str(exc))
+        _fail(str(exc))
+
+    needs_review = bool(issues)
+    next_argv = [
+        "parity",
+        "migration",
+        "validate" if needs_review else "run",
+        "--workspace",
+        _cli_path(workspace.path, base=invocation),
+    ]
+    if as_json:
+        next_argv.append("--json")
+        _emit_agent_document(
+            _agent_document(
+                "migration.validate",
+                "needs_review" if needs_review else "ready",
+                checks=checks,
+                issues=issues,
+                next_commands=[{"argv": next_argv, "cwd": "invocation"}],
+            )
+        )
+    else:
+        table = Table("Check", "Status", "Detail")
+        for check_result in checks:
+            table.add_row(
+                str(check_result["code"]),
+                str(check_result["status"]),
+                str(check_result["message"]),
+            )
+        console.print(table)
+        if needs_review:
+            console.print("[yellow]contract review is incomplete[/yellow]")
+        else:
+            console.print("[green]migration contract is ready to run[/green]")
+    if needs_review:
+        raise typer.Exit(1)
 
 
 @migration_app.command("advance")
@@ -767,6 +1163,10 @@ def migration_run(
         bool,
         typer.Option("--refresh-locks", help="Upgrade dependency locks deliberately"),
     ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit exactly one machine-readable result document"),
+    ] = False,
 ) -> None:
     """Prepare environments and run the complete gate in every lane."""
 
@@ -785,12 +1185,95 @@ def migration_run(
         completed = run_workspace(
             workspace_path,
             refresh_locks=refresh_locks,
-            progress=show_progress,
+            progress=None if as_json else show_progress,
         )
     except (ConfigError, MigrationConfigError, WorkspaceError) as exc:
+        if as_json:
+            _agent_fail("migration.run", str(exc))
         _fail(str(exc))
     except Exception as exc:
-        _fail(f"migration workspace could not run ({type(exc).__name__})")
+        message = f"migration workspace could not run ({type(exc).__name__})"
+        if as_json:
+            _agent_fail("migration.run", message)
+        _fail(message)
+
+    has_error = any(lane.result.status is Status.ERROR for lane in completed.lanes)
+    has_failure = any(lane.result.status is Status.FAILED for lane in completed.lanes)
+    if as_json:
+        from parity.migration import migration_report_payload
+
+        reports: list[dict[str, Any]] = [
+            {
+                "kind": "migration",
+                "path": _cli_path(lane.report),
+                "lane": lane.name,
+            }
+            for lane in completed.lanes
+        ]
+        if completed.source_provenance is not None:
+            reports.append(
+                {
+                    "kind": "source_provenance",
+                    "path": _cli_path(completed.source_provenance),
+                    "lane": None,
+                }
+            )
+        artifact_by_path: dict[str, dict[str, Any]] = {}
+        evidence_only_issues: dict[str, dict[str, str]] = {}
+        for lane in completed.lanes:
+            for case_result in lane.result.suite.cases:
+                for failure in case_result.failures:
+                    if failure.artifact is None:
+                        continue
+                    rendered = _cli_path(failure.artifact)
+                    artifact_reference: dict[str, Any] = {
+                        "path": rendered,
+                        "case": case_result.name,
+                        "finding_signature": failure.finding_signature,
+                    }
+                    if _artifact_has_executable_replay(failure.artifact):
+                        artifact_reference["replay_command"] = {
+                            "argv": ["parity", "replay", rendered, "--json"],
+                            "cwd": "invocation",
+                        }
+                    else:
+                        evidence_only_issues.setdefault(
+                            rendered,
+                            {
+                                "code": "artifact.evidence_only",
+                                "severity": "warning",
+                                "message": (
+                                    "artifact is retained evidence but has no executable replay "
+                                    "contract"
+                                ),
+                                "path": rendered,
+                                "case": case_result.name,
+                            },
+                        )
+                    artifact_by_path.setdefault(rendered, artifact_reference)
+        _emit_agent_document(
+            _agent_document(
+                "migration.run",
+                "error" if has_error else "failed" if has_failure else "passed",
+                reports=reports,
+                artifacts=list(artifact_by_path.values()),
+                issues=list(evidence_only_issues.values()),
+                result={
+                    "lanes": [
+                        {
+                            "name": lane.name,
+                            "report": migration_report_payload(lane.result),
+                        }
+                        for lane in completed.lanes
+                    ]
+                },
+            )
+        )
+        if has_error:
+            raise typer.Exit(2)
+        if has_failure:
+            raise typer.Exit(1)
+        return
 
     for index, lane_result in enumerate(completed.lanes):
         if index:
@@ -800,9 +1283,9 @@ def migration_run(
         _print_path_status("report", Path(lane_result.report.name))
     if completed.source_provenance is not None:
         _print_path_status("source provenance", Path(completed.source_provenance.name))
-    if any(lane.result.status is Status.ERROR for lane in completed.lanes):
+    if has_error:
         raise typer.Exit(2)
-    if any(lane.result.status is Status.FAILED for lane in completed.lanes):
+    if has_failure:
         raise typer.Exit(1)
 
 
@@ -919,7 +1402,11 @@ def evidence_verify(
 
 @app.command()
 def replay(
-    artifact: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    artifact: Annotated[Path, typer.Argument(help="Finding artifact directory")],
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit exactly one machine-readable result document"),
+    ] = False,
 ) -> None:
     """Re-run a preserved counterexample exactly."""
 
@@ -929,7 +1416,25 @@ def replay(
     try:
         result = replay_artifact(artifact)
     except Exception as exc:
+        if as_json:
+            _agent_fail("replay", str(exc))
         _fail(str(exc))
+    if as_json:
+        from parity.reporting import report_payload
+
+        _emit_agent_document(
+            _agent_document(
+                "replay",
+                result.status.value,
+                artifacts=[{"path": _cli_path(artifact)}],
+                result=report_payload(result),
+            )
+        )
+        if result.status is Status.ERROR:
+            raise typer.Exit(2)
+        if result.status is Status.FAILED:
+            raise typer.Exit(1)
+        return
     render_terminal(result, console=console)
     if result.status is Status.ERROR:
         raise typer.Exit(2)

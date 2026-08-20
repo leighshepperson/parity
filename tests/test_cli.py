@@ -11,12 +11,22 @@ import pytest
 from typer.testing import CliRunner
 
 from parity import __version__, cli
-from parity.migration import MigrationManifest, MigrationUnit
+from parity.migration import (
+    MigrationCaseEvidence,
+    MigrationCaseStatus,
+    MigrationManifest,
+    MigrationResult,
+    MigrationUnit,
+    MigrationUnitResult,
+    MigrationUnitStatus,
+)
+from parity.migration_workspace import LaneMigrationResult, WorkspaceRunResult
 from parity.models import (
     CallableSpec,
     CaseConfig,
     CaseResult,
     ColumnSchema,
+    ExampleResult,
     FrameSchema,
     ParityConfig,
     Status,
@@ -193,6 +203,179 @@ def test_migration_check_preserves_failure_and_error_exit_codes(
     assert result.exit_code == exit_code
     assert "case evidence" in result.stdout
     assert f"Parity {status.value.upper()}" in result.stdout
+
+
+def test_migration_run_json_emits_one_data_safe_lane_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    suite = _suite(Status.FAILED)
+    migration = MigrationResult(
+        status=Status.FAILED,
+        units=[
+            MigrationUnitResult(
+                id="orders-api",
+                status=MigrationUnitStatus.FAILED,
+                cases=[
+                    MigrationCaseEvidence(
+                        name="orders",
+                        status=MigrationCaseStatus.FAILED,
+                        examples_run=1,
+                    )
+                ],
+            )
+        ],
+        suite=suite,
+        manifest_sha256="a" * 64,
+    )
+    completed = WorkspaceRunResult(
+        lanes=(
+            LaneMigrationResult(
+                name="default",
+                result=migration,
+                report=tmp_path / "reports/default.json",
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "parity.migration_workspace.run_workspace",
+        lambda *_args, **_kwargs: completed,
+    )
+
+    result = runner.invoke(cli.app, ["migration", "run", "--json"])
+
+    assert result.exit_code == 1
+    assert result.stderr == ""
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "migration.run"
+    assert payload["status"] == "failed"
+    assert payload["reports"][0]["lane"] == "default"
+    assert payload["result"]["lanes"][0]["report"]["schema_version"] == 1
+    assert "dependency lane" not in result.stdout
+
+
+def test_migration_run_json_only_advertises_executable_replay_contracts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replayable = tmp_path / "artifacts/replayable"
+    evidence_only = tmp_path / "artifacts/evidence-only"
+    legacy = tmp_path / "artifacts/legacy"
+    for artifact in (replayable, evidence_only, legacy):
+        artifact.mkdir(parents=True)
+    (replayable / "replay.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "path_base": {"kind": "artifact_ancestor", "levels": 2},
+                "command": ["parity", "replay", "<artifact-path>"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (evidence_only / "replay.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "path_base": {"kind": "artifact_ancestor", "levels": 2},
+                "replay_blockers": {"reference": "live_callable"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (legacy / "replay.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "path_base": {"kind": "artifact_ancestor", "levels": 2},
+                "command": ["parity", "replay", "<artifact-path>"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    suite = _suite(Status.FAILED)
+    suite.cases[0].failures = [
+        ExampleResult(
+            source="generated",
+            status=Status.FAILED,
+            artifact=replayable,
+            finding_signature="ms3:" + "a" * 64,
+        ),
+        ExampleResult(
+            source="generated",
+            status=Status.FAILED,
+            artifact=evidence_only,
+            finding_signature="ms3:" + "b" * 64,
+        ),
+        ExampleResult(
+            source="generated",
+            status=Status.FAILED,
+            artifact=legacy,
+            finding_signature="ms3:" + "c" * 64,
+        ),
+    ]
+    migration = MigrationResult(
+        status=Status.FAILED,
+        units=[
+            MigrationUnitResult(
+                id="orders-api",
+                status=MigrationUnitStatus.FAILED,
+                cases=[
+                    MigrationCaseEvidence(
+                        name="orders",
+                        status=MigrationCaseStatus.FAILED,
+                        examples_run=3,
+                    )
+                ],
+            )
+        ],
+        suite=suite,
+        manifest_sha256="a" * 64,
+    )
+    completed = WorkspaceRunResult(
+        lanes=(
+            LaneMigrationResult(
+                name="default",
+                result=migration,
+                report=tmp_path / "reports/default.json",
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "parity.migration_workspace.run_workspace",
+        lambda *_args, **_kwargs: completed,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.app, ["migration", "run", "--json"])
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    artifacts = {item["path"]: item for item in payload["artifacts"]}
+    assert artifacts["artifacts/replayable"]["replay_command"] == {
+        "argv": ["parity", "replay", "artifacts/replayable", "--json"],
+        "cwd": "invocation",
+    }
+    assert artifacts["artifacts/evidence-only"]["replay_command"] is None
+    assert artifacts["artifacts/legacy"]["replay_command"] is None
+    assert payload["issues"] == [
+        {
+            "code": "artifact.evidence_only",
+            "severity": "warning",
+            "message": "artifact is retained evidence but has no executable replay contract",
+            "path": "artifacts/evidence-only",
+            "case": "orders",
+            "side": None,
+        },
+        {
+            "code": "artifact.evidence_only",
+            "severity": "warning",
+            "message": "artifact is retained evidence but has no executable replay contract",
+            "path": "artifacts/legacy",
+            "case": "orders",
+            "side": None,
+        },
+    ]
 
 
 def test_version_and_init_are_runnable(tmp_path: Path) -> None:
@@ -647,3 +830,42 @@ def test_replay_preserves_exit_contract(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(cli.app, ["replay", str(artifact)])
     assert result.exit_code == 2
     assert "Parity ERROR" in result.stdout
+
+
+def test_replay_json_is_one_data_safe_document_for_results_and_errors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "campaign"
+    monkeypatch.setattr("parity.engine.replay_artifact", lambda _path: _suite(Status.FAILED))
+
+    failed = runner.invoke(cli.app, ["replay", str(artifact), "--json"])
+
+    assert failed.exit_code == 1
+    assert failed.stderr == ""
+    payload = json.loads(failed.stdout)
+    assert payload["command"] == "replay"
+    assert payload["status"] == "failed"
+    assert payload["result"]["schema_version"] == 3
+
+    def unavailable(_path: Path) -> SuiteResult:
+        raise RuntimeError("artifact is unavailable")
+
+    monkeypatch.setattr("parity.engine.replay_artifact", unavailable)
+    errored = runner.invoke(cli.app, ["replay", str(artifact), "--json"])
+    assert errored.exit_code == 2
+    error_payload = json.loads(errored.stdout)
+    assert error_payload["status"] == "error"
+    assert error_payload["issues"][0]["code"] == "operational_error"
+
+
+def test_schema_command_lists_and_emits_versioned_contracts() -> None:
+    listed = runner.invoke(cli.app, ["schema", "list"])
+    assert listed.exit_code == 0
+    assert "workspace" in json.loads(listed.stdout)["contracts"]
+
+    workspace = runner.invoke(cli.app, ["schema", "workspace"])
+    assert workspace.exit_code == 0
+    schema = json.loads(workspace.stdout)
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["$id"].endswith("/workspace/v3.json")
+    assert schema["properties"]["version"]["const"] == 3

@@ -1,0 +1,1828 @@
+{
+  "$defs": {
+    "CallableSpec": {
+      "additionalProperties": false,
+      "description": "One Python or protocol-command implementation and its environment.",
+      "properties": {
+        "adapter": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "pandas",
+            "polars",
+            "arrow"
+          ],
+          "title": "Adapter",
+          "type": "string"
+        },
+        "canonicalizer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonicalizer"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Environment",
+          "type": "object"
+        },
+        "native_threads": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Threads"
+        },
+        "pandas_input": {
+          "default": "arrow",
+          "enum": [
+            "arrow",
+            "native"
+          ],
+          "title": "Pandas Input",
+          "type": "string"
+        },
+        "python": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python"
+        },
+        "record_distributions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Record Distributions",
+          "type": "array"
+        },
+        "required_distributions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "title": "Required Distributions",
+          "type": "object"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "workdir": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workdir"
+        }
+      },
+      "title": "CallableSpec",
+      "type": "object"
+    },
+    "Cardinality": {
+      "additionalProperties": false,
+      "description": "Declare which side(s) of a relationship must have unique keys.",
+      "properties": {
+        "kind": {
+          "const": "cardinality",
+          "default": "cardinality",
+          "title": "Kind",
+          "type": "string"
+        },
+        "left": {
+          "$ref": "#/$defs/KeyRef"
+        },
+        "relationship": {
+          "enum": [
+            "one_to_one",
+            "one_to_many",
+            "many_to_one",
+            "many_to_many"
+          ],
+          "title": "Relationship",
+          "type": "string"
+        },
+        "right": {
+          "$ref": "#/$defs/KeyRef"
+        }
+      },
+      "required": [
+        "left",
+        "right",
+        "relationship"
+      ],
+      "title": "Cardinality",
+      "type": "object"
+    },
+    "CaseConfig": {
+      "additionalProperties": false,
+      "description": "One reference-versus-candidate verification campaign.",
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/CallableSpec"
+        },
+        "candidate_kwargs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Candidate Kwargs",
+          "type": "object"
+        },
+        "comparison": {
+          "$ref": "#/$defs/ComparisonPolicy"
+        },
+        "fixture": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fixture"
+        },
+        "generation": {
+          "$ref": "#/$defs/GenerationConfig"
+        },
+        "input_bundle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputBundle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Name",
+          "type": "string"
+        },
+        "performance": {
+          "$ref": "#/$defs/PerformanceConfig"
+        },
+        "reference": {
+          "$ref": "#/$defs/CallableSpec"
+        },
+        "reference_kwargs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Reference Kwargs",
+          "type": "object"
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FrameSchema"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "static_args": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Static Args",
+          "type": "array"
+        },
+        "static_kwargs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Static Kwargs",
+          "type": "object"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "timeout_seconds": {
+          "default": 30.0,
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Timeout Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "reference",
+        "candidate"
+      ],
+      "title": "CaseConfig",
+      "type": "object"
+    },
+    "ColumnSchema": {
+      "additionalProperties": false,
+      "description": "Portable description of a generated dataframe column.",
+      "properties": {
+        "categories": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Categories"
+        },
+        "dtype": {
+          "description": "Portable dtype or concrete pandas/Polars dtype name",
+          "title": "Dtype",
+          "type": "string"
+        },
+        "examples": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Examples",
+          "type": "array"
+        },
+        "max_length": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Length"
+        },
+        "maximum": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "min_length": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Length"
+        },
+        "minimum": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "nullable": {
+          "default": true,
+          "title": "Nullable",
+          "type": "boolean"
+        },
+        "regex": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Regex"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone"
+        },
+        "unique": {
+          "default": false,
+          "title": "Unique",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "dtype"
+      ],
+      "title": "ColumnSchema",
+      "type": "object"
+    },
+    "ComparisonPolicy": {
+      "additionalProperties": false,
+      "description": "Explicit definition of semantic equivalence.",
+      "properties": {
+        "atol": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Atol",
+          "type": "number"
+        },
+        "check_exceptions": {
+          "default": true,
+          "title": "Check Exceptions",
+          "type": "boolean"
+        },
+        "check_input_mutation": {
+          "default": true,
+          "title": "Check Input Mutation",
+          "type": "boolean"
+        },
+        "column_order": {
+          "default": "strict",
+          "enum": [
+            "strict",
+            "ignore"
+          ],
+          "title": "Column Order",
+          "type": "string"
+        },
+        "datetime_tolerance_ns": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Datetime Tolerance Ns",
+          "type": "integer"
+        },
+        "dtype": {
+          "default": "compatible",
+          "enum": [
+            "strict",
+            "compatible",
+            "ignore"
+          ],
+          "title": "Dtype",
+          "type": "string"
+        },
+        "ignored_columns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Ignored Columns",
+          "type": "array"
+        },
+        "names": {
+          "default": "strict",
+          "enum": [
+            "strict",
+            "case_insensitive"
+          ],
+          "title": "Names",
+          "type": "string"
+        },
+        "nan_equal": {
+          "default": true,
+          "title": "Nan Equal",
+          "type": "boolean"
+        },
+        "null_equal": {
+          "default": true,
+          "title": "Null Equal",
+          "type": "boolean"
+        },
+        "null_nan_equal": {
+          "default": false,
+          "title": "Null Nan Equal",
+          "type": "boolean"
+        },
+        "row_keys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Row Keys",
+          "type": "array"
+        },
+        "row_order": {
+          "default": "strict",
+          "enum": [
+            "strict",
+            "ignore",
+            "keyed"
+          ],
+          "title": "Row Order",
+          "type": "string"
+        },
+        "rtol": {
+          "default": 1e-07,
+          "minimum": 0,
+          "title": "Rtol",
+          "type": "number"
+        },
+        "signed_zero_equal": {
+          "default": true,
+          "title": "Signed Zero Equal",
+          "type": "boolean"
+        }
+      },
+      "title": "ComparisonPolicy",
+      "type": "object"
+    },
+    "EqualRowCount": {
+      "additionalProperties": false,
+      "description": "Require selected inputs to contain the same number of rows.",
+      "properties": {
+        "inputs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 2,
+          "title": "Inputs",
+          "type": "array"
+        },
+        "kind": {
+          "const": "equal_row_count",
+          "default": "equal_row_count",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputs"
+      ],
+      "title": "EqualRowCount",
+      "type": "object"
+    },
+    "ForeignKey": {
+      "additionalProperties": false,
+      "description": "Require each non-null child key to occur in the parent input.",
+      "properties": {
+        "allow_nulls": {
+          "default": true,
+          "title": "Allow Nulls",
+          "type": "boolean"
+        },
+        "child": {
+          "$ref": "#/$defs/KeyRef"
+        },
+        "kind": {
+          "const": "foreign_key",
+          "default": "foreign_key",
+          "title": "Kind",
+          "type": "string"
+        },
+        "parent": {
+          "$ref": "#/$defs/KeyRef"
+        }
+      },
+      "required": [
+        "child",
+        "parent"
+      ],
+      "title": "ForeignKey",
+      "type": "object"
+    },
+    "FrameSchema": {
+      "additionalProperties": false,
+      "description": "Schema and domain constraints for generated tabular inputs.",
+      "properties": {
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/ColumnSchema"
+          },
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "row_comparison": "#/$defs/RowComparison",
+                "sorted_by": "#/$defs/SortedBy"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/SortedBy"
+              },
+              {
+                "$ref": "#/$defs/RowComparison"
+              }
+            ]
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "max_rows": {
+          "default": 30,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Max Rows",
+          "type": "integer"
+        },
+        "min_rows": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Min Rows",
+          "type": "integer"
+        },
+        "unique_together": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Unique Together",
+          "type": "array"
+        }
+      },
+      "required": [
+        "columns"
+      ],
+      "title": "FrameSchema",
+      "type": "object"
+    },
+    "GenerationConfig": {
+      "additionalProperties": false,
+      "description": "Deterministic and property-based exploration limits.",
+      "properties": {
+        "adversarial_examples": {
+          "default": true,
+          "title": "Adversarial Examples",
+          "type": "boolean"
+        },
+        "deadline_ms": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deadline Ms"
+        },
+        "derandomize": {
+          "default": false,
+          "title": "Derandomize",
+          "type": "boolean"
+        },
+        "generator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generator"
+        },
+        "max_examples": {
+          "default": 100,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Max Examples",
+          "type": "integer"
+        },
+        "max_findings": {
+          "default": 10,
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Max Findings",
+          "type": "integer"
+        },
+        "search": {
+          "default": true,
+          "title": "Search",
+          "type": "boolean"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "shrink": {
+          "default": true,
+          "title": "Shrink",
+          "type": "boolean"
+        },
+        "stability_repeats": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Stability Repeats",
+          "type": "integer"
+        },
+        "suppress_too_slow": {
+          "default": true,
+          "title": "Suppress Too Slow",
+          "type": "boolean"
+        }
+      },
+      "title": "GenerationConfig",
+      "type": "object"
+    },
+    "InputBundle": {
+      "additionalProperties": false,
+      "description": "Two or three named frames and their relational generation constraints.",
+      "properties": {
+        "binding": {
+          "default": "keyword",
+          "enum": [
+            "keyword",
+            "positional"
+          ],
+          "title": "Binding",
+          "type": "string"
+        },
+        "inputs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/InputSpec"
+          },
+          "maxProperties": 3,
+          "minProperties": 2,
+          "title": "Inputs",
+          "type": "object"
+        },
+        "relationships": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "cardinality": "#/$defs/Cardinality",
+                "equal_row_count": "#/$defs/EqualRowCount",
+                "foreign_key": "#/$defs/ForeignKey",
+                "key_overlap": "#/$defs/KeyOverlap"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/KeyOverlap"
+              },
+              {
+                "$ref": "#/$defs/ForeignKey"
+              },
+              {
+                "$ref": "#/$defs/EqualRowCount"
+              },
+              {
+                "$ref": "#/$defs/Cardinality"
+              }
+            ]
+          },
+          "title": "Relationships",
+          "type": "array"
+        }
+      },
+      "required": [
+        "inputs"
+      ],
+      "title": "InputBundle",
+      "type": "object"
+    },
+    "InputSpec": {
+      "additionalProperties": false,
+      "description": "Fixture and/or generation schema for one named input frame.",
+      "properties": {
+        "fixture": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fixture"
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FrameSchema"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "InputSpec",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "KeyOverlap": {
+      "additionalProperties": false,
+      "description": "Require a minimum number of distinct non-null keys to be shared.",
+      "properties": {
+        "kind": {
+          "const": "key_overlap",
+          "default": "key_overlap",
+          "title": "Kind",
+          "type": "string"
+        },
+        "left": {
+          "$ref": "#/$defs/KeyRef"
+        },
+        "min_shared": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Min Shared",
+          "type": "integer"
+        },
+        "right": {
+          "$ref": "#/$defs/KeyRef"
+        }
+      },
+      "required": [
+        "left",
+        "right"
+      ],
+      "title": "KeyOverlap",
+      "type": "object"
+    },
+    "KeyRef": {
+      "additionalProperties": false,
+      "description": "A possibly composite key in one named input.",
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        },
+        "input": {
+          "minLength": 1,
+          "title": "Input",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "columns"
+      ],
+      "title": "KeyRef",
+      "type": "object"
+    },
+    "PerformanceConfig": {
+      "additionalProperties": false,
+      "description": "Benchmark policy applied after semantic verification.",
+      "properties": {
+        "bootstrap_samples": {
+          "default": 2000,
+          "maximum": 100000,
+          "minimum": 100,
+          "title": "Bootstrap Samples",
+          "type": "integer"
+        },
+        "confidence_level": {
+          "default": 0.95,
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0.5,
+          "title": "Confidence Level",
+          "type": "number"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "fail_on_regression": {
+          "default": false,
+          "title": "Fail On Regression",
+          "type": "boolean"
+        },
+        "max_memory_ratio": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 1.5,
+          "title": "Max Memory Ratio"
+        },
+        "max_slowdown": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 1.25,
+          "title": "Max Slowdown"
+        },
+        "min_reference_ms": {
+          "default": 1.0,
+          "minimum": 0,
+          "title": "Min Reference Ms",
+          "type": "number"
+        },
+        "repeats": {
+          "default": 9,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Repeats",
+          "type": "integer"
+        },
+        "warmups": {
+          "default": 1,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Warmups",
+          "type": "integer"
+        }
+      },
+      "title": "PerformanceConfig",
+      "type": "object"
+    },
+    "RowComparison": {
+      "additionalProperties": false,
+      "description": "Require a positional comparison between two columns on every non-null row.",
+      "properties": {
+        "kind": {
+          "const": "row_comparison",
+          "default": "row_comparison",
+          "title": "Kind",
+          "type": "string"
+        },
+        "left": {
+          "minLength": 1,
+          "title": "Left",
+          "type": "string"
+        },
+        "operator": {
+          "enum": [
+            "lt",
+            "le",
+            "eq",
+            "ge",
+            "gt"
+          ],
+          "title": "Operator",
+          "type": "string"
+        },
+        "right": {
+          "minLength": 1,
+          "title": "Right",
+          "type": "string"
+        }
+      },
+      "required": [
+        "left",
+        "operator",
+        "right"
+      ],
+      "title": "RowComparison",
+      "type": "object"
+    },
+    "SortedBy": {
+      "additionalProperties": false,
+      "description": "Require rows to be lexicographically ordered by selected columns.",
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        },
+        "descending": {
+          "default": false,
+          "title": "Descending",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "sorted_by",
+          "default": "sorted_by",
+          "title": "Kind",
+          "type": "string"
+        },
+        "nulls": {
+          "default": "last",
+          "enum": [
+            "first",
+            "last"
+          ],
+          "title": "Nulls",
+          "type": "string"
+        }
+      },
+      "required": [
+        "columns"
+      ],
+      "title": "SortedBy",
+      "type": "object"
+    },
+    "_CallableDefaults": {
+      "additionalProperties": false,
+      "description": "Reusable non-target fields for one side of a configured case.",
+      "properties": {
+        "adapter": {
+          "anyOf": [
+            {
+              "enum": [
+                "auto",
+                "pandas",
+                "polars",
+                "arrow"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adapter"
+        },
+        "canonicalizer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonicalizer"
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Environment"
+        },
+        "native_threads": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Threads"
+        },
+        "pandas_input": {
+          "anyOf": [
+            {
+              "enum": [
+                "arrow",
+                "native"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pandas Input"
+        },
+        "python": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python"
+        },
+        "record_distributions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Record Distributions"
+        },
+        "required_distributions": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Distributions"
+        },
+        "workdir": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workdir"
+        }
+      },
+      "title": "_CallableDefaults",
+      "type": "object"
+    },
+    "_CaseDefaults": {
+      "additionalProperties": false,
+      "description": "Bounded defaults that cannot hide case identity, inputs, or targets.",
+      "properties": {
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_CallableDefaults"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "candidate_kwargs": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Kwargs"
+        },
+        "comparison": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_ComparisonDefaults"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_GenerationDefaults"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "performance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_PerformanceDefaults"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_CallableDefaults"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reference_kwargs": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Kwargs"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Seconds"
+        }
+      },
+      "title": "_CaseDefaults",
+      "type": "object"
+    },
+    "_ComparisonDefaults": {
+      "additionalProperties": false,
+      "description": "Partial comparison policy applied before effective validation.",
+      "properties": {
+        "atol": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Atol"
+        },
+        "check_exceptions": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Check Exceptions"
+        },
+        "check_input_mutation": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Check Input Mutation"
+        },
+        "column_order": {
+          "anyOf": [
+            {
+              "enum": [
+                "strict",
+                "ignore"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column Order"
+        },
+        "datetime_tolerance_ns": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Datetime Tolerance Ns"
+        },
+        "dtype": {
+          "anyOf": [
+            {
+              "enum": [
+                "strict",
+                "compatible",
+                "ignore"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dtype"
+        },
+        "ignored_columns": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ignored Columns"
+        },
+        "names": {
+          "anyOf": [
+            {
+              "enum": [
+                "strict",
+                "case_insensitive"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Names"
+        },
+        "nan_equal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nan Equal"
+        },
+        "null_equal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Null Equal"
+        },
+        "null_nan_equal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Null Nan Equal"
+        },
+        "row_keys": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Keys"
+        },
+        "row_order": {
+          "anyOf": [
+            {
+              "enum": [
+                "strict",
+                "ignore",
+                "keyed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Order"
+        },
+        "rtol": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rtol"
+        },
+        "signed_zero_equal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signed Zero Equal"
+        }
+      },
+      "title": "_ComparisonDefaults",
+      "type": "object"
+    },
+    "_GenerationDefaults": {
+      "additionalProperties": false,
+      "description": "Partial generation policy applied before effective validation.",
+      "properties": {
+        "adversarial_examples": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Adversarial Examples"
+        },
+        "deadline_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deadline Ms"
+        },
+        "derandomize": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Derandomize"
+        },
+        "max_examples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Examples"
+        },
+        "max_findings": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Findings"
+        },
+        "search": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Search"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "shrink": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shrink"
+        },
+        "stability_repeats": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stability Repeats"
+        },
+        "suppress_too_slow": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suppress Too Slow"
+        }
+      },
+      "title": "_GenerationDefaults",
+      "type": "object"
+    },
+    "_PerformanceDefaults": {
+      "additionalProperties": false,
+      "description": "Partial benchmark policy applied before effective validation.",
+      "properties": {
+        "bootstrap_samples": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bootstrap Samples"
+        },
+        "confidence_level": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1,
+              "exclusiveMinimum": 0.5,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence Level"
+        },
+        "enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Enabled"
+        },
+        "fail_on_regression": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fail On Regression"
+        },
+        "max_memory_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Memory Ratio"
+        },
+        "max_slowdown": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Slowdown"
+        },
+        "min_reference_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Reference Ms"
+        },
+        "repeats": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repeats"
+        },
+        "warmups": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Warmups"
+        }
+      },
+      "title": "_PerformanceDefaults",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/config/v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "cases_file"
+            ]
+          },
+          "required": [
+            "cases"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "cases"
+            ]
+          },
+          "required": [
+            "cases_file"
+          ]
+        }
+      ]
+    }
+  ],
+  "description": "Structurally typed authoring contract for ``parity.toml``.",
+  "properties": {
+    "artifact_dir": {
+      "default": ".parity",
+      "format": "path",
+      "title": "Artifact Dir",
+      "type": "string"
+    },
+    "case_defaults": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_CaseDefaults"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "cases": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/CaseConfig"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cases"
+    },
+    "cases_file": {
+      "anyOf": [
+        {
+          "format": "path",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cases File"
+    },
+    "fail_fast": {
+      "default": false,
+      "title": "Fail Fast",
+      "type": "boolean"
+    },
+    "jobs": {
+      "default": 1,
+      "maximum": 256,
+      "minimum": 1,
+      "title": "Jobs",
+      "type": "integer"
+    },
+    "native_threads": {
+      "anyOf": [
+        {
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Threads"
+    },
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "title": "ConfigContract",
+  "type": "object",
+  "x-parity-contract": "config",
+  "x-parity-contract-version": 1
+}

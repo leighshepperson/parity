@@ -207,9 +207,10 @@ existing directory:
 Arrow IPC files are the lossless replay authority; Parquet is only a human/tooling convenience and
 is omitted for schemas it cannot represent. Bundle filenames are opaque: `replay.json` binds each
 file to its logical input name. `manifest.json` binds case/config metadata, hashes and
-artifact schema. `replay.json` contains the
-sanitized executable contract and argument vector needed to reproduce the case, and records that
-replay must be launched from its project base. Configured runs use the directory containing the
+artifact schema. `replay.json` contains the sanitized executable contract and argument vector
+needed to reproduce the case. Replay v2 records the project base as a bounded ancestor count from
+the artifact. The reader walks from the artifact and never falls back to `Path.cwd()`, so a complete
+project tree remains replayable after relocation. Configured runs use the directory containing the
 loaded `parity.toml`; direct live runs use their invocation directory. Import roots, interpreters,
 workdirs and path-like commands outside that base are deliberately non-replayable rather than
 replaced with a potentially different same-named module or runtime. An optional top-level
@@ -222,7 +223,7 @@ are rejected before setup so automatic replay paths cannot silently become exter
 Reports are separate projections that omit frame and value data. Artifact writes use a temporary
 directory and final rename so interrupted runs do not look complete.
 
-Manifest contract 1 hash-binds every artifact file. Replay contract 1 represents one to three named
+Manifest contract 2 hash-binds every artifact file. Replay contract 2 represents one to three named
 inputs through a single `inputs` list; a single-frame case uses the reserved logical name `input`.
 Every automatic replay binds target runtime fingerprints and the data-safe effective-configuration
 hash. Replay preflights both target sessions and blocks both implementations on drift or incomplete
