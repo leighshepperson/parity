@@ -1528,8 +1528,20 @@ def _run_checked(
             except OSError:
                 pass
             else:
-                relative_hint = "/".join(failure_log.parts[-4:])
-                log_hint = f"; details saved in {relative_hint}"
+                # The state directory is workspace-relative, but the user may
+                # invoke Parity from its parent (or any other directory).  A
+                # truncated ``.parity/...`` hint therefore often named a path
+                # that did not exist from the caller's current directory.
+                # Render the actual file relative to that invocation so the
+                # reported path can be opened or copied as-is.
+                absolute_log = failure_log.resolve()
+                try:
+                    rendered_log = Path(
+                        os.path.relpath(absolute_log, Path.cwd().resolve())
+                    ).as_posix()
+                except ValueError:  # Different drives on Windows.
+                    rendered_log = absolute_log.as_posix()
+                log_hint = f"; details saved in {rendered_log}"
         raise WorkspaceError(f"{operation} failed (exit {completed.returncode}){log_hint}")
     if failure_log is not None:
         failure_log.unlink(missing_ok=True)

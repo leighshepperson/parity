@@ -77,7 +77,8 @@ def test_migration_check_runs_complete_gate_and_writes_json(tmp_path: Path, monk
         return _suite(Status.PASSED)
 
     monkeypatch.setattr("parity.engine.run_suite", fake_run_suite)
-    output = tmp_path / "reports" / "migration.json"
+    monkeypatch.chdir(tmp_path)
+    output = Path("reports/migration.json")
 
     result = runner.invoke(
         cli.app,
@@ -94,6 +95,7 @@ def test_migration_check_runs_complete_gate_and_writes_json(tmp_path: Path, monk
     )
 
     assert result.exit_code == 0, result.output
+    assert "wrote reports/migration.json" in result.stdout
     assert calls == [{"orders"}]
     assert "all declared in-scope migration units passed" in result.stdout
     payload = json.loads(output.read_text(encoding="utf-8"))
@@ -254,6 +256,65 @@ def test_migration_run_json_emits_one_data_safe_lane_result(
     assert "dependency lane" not in result.stdout
 
 
+def test_migration_run_human_output_reports_paths_from_invocation_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    artifact = project / "migrations/.parity/orders/campaign"
+    suite = _suite(Status.FAILED)
+    suite.cases[0].failures = [
+        ExampleResult(
+            source="generated",
+            status=Status.FAILED,
+            artifact=artifact,
+            finding_signature="ms3:" + "a" * 64,
+        )
+    ]
+    migration = MigrationResult(
+        status=Status.FAILED,
+        units=[
+            MigrationUnitResult(
+                id="orders-api",
+                status=MigrationUnitStatus.FAILED,
+                cases=[
+                    MigrationCaseEvidence(
+                        name="orders",
+                        status=MigrationCaseStatus.FAILED,
+                        examples_run=1,
+                    )
+                ],
+            )
+        ],
+        suite=suite,
+        manifest_sha256="a" * 64,
+    )
+    report = project / "migrations/.parity/workspace/reports/default.json"
+    source_provenance = report.with_name("source-provenance.json")
+    completed = WorkspaceRunResult(
+        lanes=(LaneMigrationResult(name="default", result=migration, report=report),),
+        source_provenance=source_provenance,
+    )
+    monkeypatch.setattr(
+        "parity.migration_workspace.run_workspace",
+        lambda *_args, **_kwargs: completed,
+    )
+    invocation = tmp_path / "unrelated"
+    invocation.mkdir()
+    monkeypatch.chdir(invocation)
+
+    result = runner.invoke(cli.app, ["migration", "run"])
+
+    assert result.exit_code == 1, result.output
+    expected_report = report.relative_to(tmp_path).as_posix()
+    expected_source = source_provenance.relative_to(tmp_path).as_posix()
+    expected_artifact = artifact.relative_to(tmp_path).as_posix()
+    assert f"report ../{expected_report}" in result.stdout
+    assert "source provenance" in result.stdout
+    assert f"../{expected_source}" in result.stdout
+    assert f"artifact: ../{expected_artifact}" in result.stdout
+
+
 def test_migration_run_json_only_advertises_executable_replay_contracts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -390,6 +451,7 @@ def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     config_path = tmp_path / "nested" / "parity.toml"
     created = runner.invoke(cli.app, ["init", str(config_path)])
     assert created.exit_code == 0
+    assert f"next: parity check --config {config_path.as_posix()}" in created.stdout
     assert config_path.is_file()
     assert (config_path.parent / "parity_example.py").is_file()
 
@@ -431,12 +493,24 @@ def test_init_project_mode_writes_only_a_runnable_config(tmp_path: Path) -> None
         ],
     )
     assert result.exit_code == 0, result.output
+    assert f"next: parity check --config {config_path.as_posix()}" in result.stdout
     assert not (config_path.parent / "parity_example.py").exists()
     raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert raw["cases"][0]["reference"]["target"] == raw["cases"][0]["candidate"]["target"]
     assert raw["cases"][0]["comparison"] == {"row_order": "keyed", "row_keys": ["id"]}
     configured = cli.load_config(config_path)
     assert configured.cases[0].fixture == fixture.resolve()
+
+
+def test_default_init_prints_the_immediate_next_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[-1] == "next: parity check"
 
 
 def test_init_project_mode_requires_the_target_and_fixture_trio(tmp_path: Path) -> None:
@@ -525,7 +599,6 @@ def test_init_project_mode_output_runs_without_generated_demo(tmp_path: Path, mo
             "2",
             "--stability-repeats",
             "1",
-            "--no-performance",
         ],
     )
     assert checked.exit_code == 0, checked.output
@@ -736,9 +809,10 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
         return _suite(Status.FAILED)
 
     monkeypatch.setattr("parity.engine.run_suite", run_suite)
-    json_path = tmp_path / "reports" / "report.json"
-    junit_path = tmp_path / "reports" / "junit.xml"
-    markdown_path = tmp_path / "reports" / "summary.md"
+    monkeypatch.chdir(tmp_path)
+    json_path = Path("reports/report.json")
+    junit_path = Path("reports/junit.xml")
+    markdown_path = Path("reports/summary.md")
     result = runner.invoke(
         cli.app,
         [
@@ -779,6 +853,9 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
     assert "<testsuite" in junit_path.read_text(encoding="utf-8")
     assert markdown_path.read_text(encoding="utf-8").startswith("# Parity verification")
     assert result.stdout.count("wrote") == 3
+    assert "wrote reports/report.json" in result.stdout
+    assert "wrote reports/junit.xml" in result.stdout
+    assert "wrote reports/summary.md" in result.stdout
 
 
 def test_check_markdown_alone_creates_parents_and_write_failures_exit_two(

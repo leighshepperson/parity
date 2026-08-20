@@ -10,6 +10,7 @@ import re
 import tempfile
 import xml.etree.ElementTree as ET
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, get_args
 
@@ -28,6 +29,20 @@ _SAFE_PATH_ROOT = re.compile(
     r"^\$(?:(?:reference|candidate|campaign|performance|inputs|result)(?:\[\*\])?|\[\*\])?$"
 )
 _SAFE_PERFORMANCE_REASON = re.compile(r"^[A-Za-z0-9 .%();:+x-]{1,512}$")
+_SAFE_PERFORMANCE_EVIDENCE_ERROR = re.compile(
+    r"^(?:"
+    r"enforced runtime gate requires finite positive reference timing evidence for every run "
+    r"\(\d+/\d+ runs observed\)|"
+    r"enforced runtime gate requires finite positive timing evidence for every paired run "
+    r"\(\d+/\d+ pairs observed\)|"
+    r"enforced runtime gate requires a finite positive runtime ratio and confidence interval|"
+    r"benchmark requires finite non-negative timing metrics for every observation "
+    r"\(\d+/\d+ observed\)|"
+    r"enforced memory gate requires peak RSS evidence for every paired run "
+    r"\(\d+/\d+ pairs observed\)|"
+    r"enforced memory gate requires usable non-zero peak RSS evidence"
+    r")$"
+)
 _BUILTIN_EXCEPTION_TYPES = frozenset(
     f"builtins.{name}"
     for name, value in vars(builtins).items()
@@ -153,7 +168,31 @@ def _safe_mismatch_summary(failure: ExampleResult, mismatch: Mismatch) -> str:
     if failure.status is Status.ERROR:
         path = mismatch.path or ""
         if path == "$performance":
-            return "performance measurement could not be completed"
+            message = mismatch.message
+            if message == "performance measurement runner is unavailable":
+                return (
+                    "performance runner is unavailable; rerun with --no-performance "
+                    "or configure a supported runner"
+                )
+            if message == "performance measurement has no validated representative input":
+                return (
+                    "performance needs a validated input; add a fixture or generated schema, "
+                    "or rerun with --no-performance"
+                )
+            benchmark_failure = re.fullmatch(
+                r"(reference|candidate)( warmup)? benchmark did not return successfully \(.+\)",
+                message,
+            )
+            if benchmark_failure is not None:
+                side, warmup = benchmark_failure.groups()
+                phase = " warmup" if warmup else ""
+                return (
+                    f"{side}{phase} benchmark execution failed; rerun with --no-performance "
+                    "to verify semantics separately"
+                )
+            if _SAFE_PERFORMANCE_EVIDENCE_ERROR.fullmatch(message) is not None:
+                return f"{message}; rerun with --no-performance to verify semantics separately"
+            return "performance measurement could not be completed; rerun with --no-performance"
         if ".stability[" in path:
             return "nondeterminism prevented a reliable comparison"
         if path.endswith(".runtime"):
@@ -578,7 +617,13 @@ def render_markdown(result: SuiteResult) -> str:
     return "\n".join(lines)
 
 
-def render_terminal(result: SuiteResult, *, color: bool = False, console: Any | None = None) -> str:
+def render_terminal(
+    result: SuiteResult,
+    *,
+    color: bool = False,
+    console: Any | None = None,
+    artifact_renderer: Callable[[Path], str] | None = None,
+) -> str:
     """Render a concise terminal report, optionally with ANSI status colours."""
 
     colors = {
@@ -651,9 +696,15 @@ def render_terminal(result: SuiteResult, *, color: bool = False, console: Any | 
         if case.performance is not None:
             for reason in case.performance.reasons:
                 lines.append(f"             performance gate: {_safe_performance_reason(reason)}")
-        for artifact in filter(
-            None, (_artifact_name(failure.artifact) for failure in _ordered_failures(case))
-        ):
+        artifacts = (
+            (
+                artifact_renderer(failure.artifact)
+                if artifact_renderer is not None and failure.artifact is not None
+                else _artifact_name(failure.artifact)
+            )
+            for failure in _ordered_failures(case)
+        )
+        for artifact in filter(None, artifacts):
             lines.append(f"             artifact: {artifact}")
     rendered = "\n".join(lines) + "\n"
     if console is not None:

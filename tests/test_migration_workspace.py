@@ -1270,6 +1270,37 @@ def test_setup_failure_hides_subprocess_output_and_preserves_previous_lock(
     assert "token@example.invalid" in private_log.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("unrelated_invocation", [False, True])
+def test_setup_failure_reports_log_path_from_invocation_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unrelated_invocation: bool,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace_path = _project(project)
+    invocation = tmp_path / "unrelated" if unrelated_invocation else tmp_path
+    invocation.mkdir(exist_ok=True)
+    monkeypatch.chdir(invocation)
+    tools = {"uv": "/tools/uv", "tox": "/tools/tox"}
+    monkeypatch.setattr("parity.migration_workspace._tool", lambda name: (tools[name],))
+
+    def fail(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, stdout="failure", stderr="details")
+
+    monkeypatch.setattr("parity.migration_workspace.subprocess.run", fail)
+    workspace_argument = Path(os.path.relpath(workspace_path, invocation))
+
+    with pytest.raises(WorkspaceError) as caught:
+        setup_workspace(workspace_argument)
+
+    private_log = project / ".parity/workspace/logs/resolve-default-reference.log"
+    reported_log = Path(os.path.relpath(private_log, invocation))
+    assert f"details saved in {reported_log.as_posix()}" in str(caught.value)
+    assert (invocation / reported_log).resolve() == private_log.resolve()
+    assert private_log.read_text(encoding="utf-8").startswith("# Captured stdout\nfailure")
+
+
 def test_private_state_symlink_cannot_escape_workspace(tmp_path: Path, monkeypatch) -> None:
     workspace_path = _project(tmp_path)
     # Keep reports outside .parity so setup reaches the private-state guard itself.
@@ -2231,6 +2262,10 @@ def test_agent_scaffold_json_requires_explicit_review_before_run(
     )
     assert workspace["version"] == 3
     assert workspace["checklist"] == "migration.checklist.json"
+    generated_config = tomllib.loads(
+        (tmp_path / "migrations/parity.toml").read_text(encoding="utf-8")
+    )
+    assert generated_config["cases"][0]["performance"] == {"enabled": False}
     assert not (tmp_path / "migrations/.parity").exists()
 
     pending = runner.invoke(cli.app, ["migration", "validate", "--json"])
@@ -2238,7 +2273,8 @@ def test_agent_scaffold_json_requires_explicit_review_before_run(
     pending_payload = json.loads(pending.stdout)
     assert pending_payload["status"] == "needs_review"
     assert {issue["code"] for issue in pending_payload["issues"]} == {
-        f"checklist.{identifier.value}" for identifier in ChecklistItemId
+        "generated_adapter_placeholder",
+        *(f"checklist.{identifier.value}" for identifier in ChecklistItemId),
     }
     assert not (tmp_path / "migrations/.parity").exists()
 
@@ -2247,12 +2283,123 @@ def test_agent_scaffold_json_requires_explicit_review_before_run(
     resolved = checklist.resolving(*ChecklistItemId)
     checklist_path.write_text(resolved.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
+    still_incomplete = runner.invoke(cli.app, ["migration", "validate", "--json"])
+    assert still_incomplete.exit_code == 1
+    incomplete_payload = json.loads(still_incomplete.stdout)
+    assert incomplete_payload["status"] == "needs_review"
+    assert [issue["code"] for issue in incomplete_payload["issues"]] == [
+        "generated_adapter_placeholder"
+    ]
+    adapter_check = next(
+        check for check in incomplete_payload["checks"] if check["code"] == "adapter_implemented"
+    )
+    assert adapter_check == {
+        "code": "adapter_implemented",
+        "status": "failed",
+        "message": "the generated migration adapter is still a placeholder",
+        "path": "migrations/migration_adapters.py",
+        "case": None,
+        "side": None,
+    }
+    assert incomplete_payload["next_commands"][0]["argv"][1:3] == ["migration", "validate"]
+
+    adapter_path = tmp_path / "migrations/migration_adapters.py"
+    adapter_path.write_text(
+        "import pyarrow as pa\n\n"
+        "def migration_contract(frame: pa.Table) -> pa.Table:\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+
     ready = runner.invoke(cli.app, ["migration", "validate", "--json"])
     assert ready.exit_code == 0, ready.output
     ready_payload = json.loads(ready.stdout)
     assert ready_payload["status"] == "ready"
     assert ready_payload["next_commands"][0]["argv"][1:3] == ["migration", "run"]
     assert not (tmp_path / "migrations/.parity").exists()
+
+
+def test_migration_validate_human_output_rejects_resolved_placeholder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    initialized = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--scaffold",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+
+    checklist_path = tmp_path / "migrations/migration.checklist.json"
+    checklist = ContractChecklist.model_validate_json(checklist_path.read_text(encoding="utf-8"))
+    checklist_path.write_text(
+        checklist.resolving(*ChecklistItemId).model_dump_json(indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli.app, ["migration", "validate"])
+
+    assert result.exit_code == 1
+    assert "adapter_implemented" in result.stdout
+    assert "placeholder" in result.stdout
+    assert "migration contract is not ready" in result.stdout
+    assert "migration contract is ready to run" not in result.stdout
+
+
+def test_migration_validate_rejects_invalid_generated_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    initialized = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--scaffold",
+            "--json",
+        ],
+    )
+    assert initialized.exit_code == 0, initialized.output
+
+    checklist_path = tmp_path / "migrations/migration.checklist.json"
+    checklist = ContractChecklist.model_validate_json(checklist_path.read_text(encoding="utf-8"))
+    checklist_path.write_text(
+        checklist.resolving(*ChecklistItemId).model_dump_json(indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "migrations/migration_adapters.py").write_text(
+        "def migration_contract(:\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli.app, ["migration", "validate", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "needs_review"
+    assert [issue["code"] for issue in payload["issues"]] == ["adapter_python_invalid"]
+    assert payload["issues"][0]["severity"] == "error"
+    assert "invalid Python" in payload["issues"][0]["message"]
+    adapter_check = next(
+        check for check in payload["checks"] if check["code"] == "adapter_implemented"
+    )
+    assert adapter_check["status"] == "failed"
+    assert "line 1" in adapter_check["message"]
+    assert adapter_check["path"] == "migrations/migration_adapters.py"
+    assert payload["next_commands"][0]["argv"][1:3] == ["migration", "validate"]
 
 
 def test_agent_scaffold_is_all_or_nothing_and_never_overwrites_authored_files(

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.1
+
+### Migration workflow UX
+
+- Keep generated migration contracts in `needs_review` until the scaffolded
+  `NotImplementedError` adapter has actually been replaced, even when every checklist item is
+  marked resolved. Validate the generated adapter without importing or executing project code.
+- Disable benchmarking in generated project and migration configs until users opt in after
+  semantic compatibility passes. When enabled benchmarking cannot run, report a safe actionable
+  cause and the `--no-performance` recovery path instead of a generic measurement error.
+- Make emitted report, workspace log, source-provenance and finding-artifact paths directly usable
+  from the invocation directory, including parent and unrelated working directories.
+- Print the runnable `parity check` command after `parity init`.
+
 ## 0.14.0
 
 ### Agent-first migration workflow

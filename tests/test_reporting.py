@@ -285,6 +285,91 @@ def test_error_reports_never_present_a_behavioural_diagnosis(tmp_path: Path) -> 
     assert "runtime preflight could not be completed" in combined
 
 
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "performance measurement runner is unavailable",
+            "performance runner is unavailable; rerun with --no-performance or configure a "
+            "supported runner",
+        ),
+        (
+            "performance measurement has no validated representative input",
+            "performance needs a validated input; add a fixture or generated schema, or rerun "
+            "with --no-performance",
+        ),
+        (
+            "candidate warmup benchmark did not return successfully "
+            "(private_package.Customer42Error)",
+            "candidate warmup benchmark execution failed; rerun with --no-performance to verify "
+            "semantics separately",
+        ),
+        (
+            "enforced memory gate requires peak RSS evidence for every paired run "
+            "(2/5 pairs observed)",
+            "enforced memory gate requires peak RSS evidence for every paired run "
+            "(2/5 pairs observed); rerun with --no-performance to verify semantics separately",
+        ),
+    ],
+)
+def test_performance_errors_report_actionable_data_safe_diagnostics(
+    message: str,
+    expected: str,
+) -> None:
+    case = CaseResult(
+        name="migration",
+        status=Status.ERROR,
+        failures=[
+            ExampleResult(
+                source="performance",
+                status=Status.ERROR,
+                mismatches=[
+                    Mismatch(
+                        kind=MismatchKind.PERFORMANCE,
+                        message=message,
+                        path="$performance",
+                    )
+                ],
+            )
+        ],
+    )
+    suite = SuiteResult(status=Status.ERROR, cases=[case])
+
+    terminal = render_terminal(suite)
+    payload = json.loads(render_json(suite))
+
+    assert expected in terminal
+    assert payload["cases"][0]["failures"][0]["mismatches"][0]["summary"] == expected
+    assert "private_package" not in terminal
+    assert "Customer42Error" not in terminal
+
+
+def test_unknown_performance_error_remains_redacted_but_actionable() -> None:
+    secret = "enforced memory gate requires customer@example.test"
+    case = CaseResult(
+        name="migration",
+        status=Status.ERROR,
+        failures=[
+            ExampleResult(
+                source="performance",
+                status=Status.ERROR,
+                mismatches=[
+                    Mismatch(
+                        kind=MismatchKind.PERFORMANCE,
+                        message=secret,
+                        path="$performance",
+                    )
+                ],
+            )
+        ],
+    )
+
+    terminal = render_terminal(SuiteResult(status=Status.ERROR, cases=[case]))
+
+    assert "performance measurement could not be completed; rerun with --no-performance" in terminal
+    assert secret not in terminal
+
+
 def test_reports_warn_when_finding_limit_was_reached(tmp_path: Path) -> None:
     suite = _suite(tmp_path)
     suite.cases[0].finding_limit_reached = True

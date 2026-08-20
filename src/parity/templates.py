@@ -14,6 +14,7 @@ from parity.targets import is_import_target
 
 _CASE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _ADAPTERS = frozenset({"auto", "pandas", "polars", "arrow"})
+MIGRATION_ADAPTER_PLACEHOLDER_MESSAGE = "review and implement the migration contract"
 
 
 def _lexists(path: Path) -> bool:
@@ -310,6 +311,14 @@ def render_project_config(
                 f"row_keys = {_toml_array(row_keys)}",
             ]
         )
+    lines.extend(
+        [
+            "",
+            "# Establish semantic compatibility first; set enabled = true to benchmark later.",
+            "[cases.performance]",
+            "enabled = false",
+        ]
+    )
     lines.append("")
     return "\n".join(lines)
 
@@ -419,7 +428,8 @@ def candidate(frame: pa.Table) -> pa.Table:
 def render_migration_adapter() -> str:
     """Return a deliberately incomplete, environment-neutral migration adapter."""
 
-    return '''"""Migration contract reviewed and owned by this project.
+    placeholder = json.dumps(MIGRATION_ADAPTER_PLACEHOLDER_MESSAGE)
+    return f'''"""Migration contract reviewed and owned by this project.
 
 Keep subject-package imports inside ``migration_contract``: the same module is
 imported in isolated reference and candidate environments.
@@ -433,7 +443,7 @@ def migration_contract(frame: pa.Table) -> pa.Table:
 
     # Import the package under test here, translate ``frame`` into its public API,
     # and return an Arrow table (or another JSON-compatible canonical value).
-    raise NotImplementedError("review and implement the migration contract")
+    raise NotImplementedError({placeholder})
 '''
 
 
@@ -518,6 +528,7 @@ def write_starter(path: str | Path = "parity.toml", *, force: bool = False) -> l
 
 
 __all__ = [
+    "MIGRATION_ADAPTER_PLACEHOLDER_MESSAGE",
     "render_config_template",
     "render_example_module",
     "render_migration_adapter",
