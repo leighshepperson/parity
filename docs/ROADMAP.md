@@ -20,8 +20,9 @@ The current architecture establishes the core verification loop:
 - composable case files/defaults and side-specific arguments without hiding case identity or input
   contracts;
 - batch verification of retained mismatch evidence from suite and migration reports;
-- separately locked released/local and local/local migration workspaces, with local source
-  provenance; and
+- separately locked released/released, released/local, local/released and local/local migration
+  workspaces, with target-side Git/content identity for every local source and paired driver
+  provenance for local/local pairs; and
 - one active adjacent migration pair with reusable core controls rather than an append-only history.
 
 The controller owns search, comparison, findings and artifacts. Targets own only translation into a

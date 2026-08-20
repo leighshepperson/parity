@@ -162,34 +162,52 @@ and exclusions before relying on the gate.
 
 ## Migration workspace
 
-After creating `migrations/parity.toml` (for example with the fixture-backed `parity init` flow in
-the user guide), install the optional environment support and declare the current checkout against
-either one exact released reference or another existing checkout:
+Install the optional environment support, then declare each side as either one exact released
+requirement or an existing checkout. When `migrations/parity.toml` does not exist, the same command
+can scaffold its first fixture-backed case and the migration ledger:
 
 ```bash
 python -m pip install "parity-check[workspace]"
-parity migration init --reference 'your-library==1.2.3'
+parity migration init \
+  --reference-package 'your-library==1.2.3' \
+  --candidate-package 'your-library==2.0.0' \
+  --target migration_adapters:transform \
+  --fixture tests/fixtures/input.parquet
 parity migration run
 ```
 
 ```bash
 parity migration init \
   --reference-path ../main-worktree \
-  --candidate ../feature-worktree
+  --candidate-path ../feature-worktree
 parity migration run
 ```
 
+`--target` sets both callable targets; side-specific `--reference-target` and
+`--candidate-target` override it. Scaffolding requires a fixture and both effective targets, then
+creates the minimal `migrations/parity.toml` before deriving the starter ledger. It may also set
+`--case-name`, side adapters, repeatable recorded distributions and repeatable row keys. These are
+reviewable contract inputs, not API discovery. If `parity.toml` already exists, all case-scaffolding
+options are rejected: omit them to load the reviewed contract. `--force` applies only to
+`parity.workspace.toml` and never replaces `parity.toml`. `--fixture` is interpreted from the
+invocation directory and serialized relative to the generated `parity.toml`. Targets must already
+name importable callables; scaffolding does not create wrapper modules. Managed wrappers are
+imported from the workspace directory. Initialization validates import-target spelling and fixture
+readability, but the target import itself is preflighted by `migration run` after environment setup.
+
 By default `migration init` writes a strict `migrations/parity.workspace.toml`, uses the current
-checkout as the candidate, reads `migrations/parity.toml`, and creates a starter
+checkout as the candidate when neither candidate flag is present, and creates
 `migrations/migration.toml` when that ledger is absent. The starter maps every configured case to
-one `core-regression` unit and must be reviewed as an inventory. The document fields are:
+one `core-regression` unit and must be reviewed as an inventory. Workspace format 2 is a breaking
+schema; its source mapping is symmetric:
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
-| `version` | integer | `1` | Workspace format; only version 1 is accepted. |
-| `reference` | exact requirement | conditional | Released `package==version` or `package[extras]==version`. |
-| `reference_path` | path | conditional | Existing local reference checkout. Exactly one reference field is required. |
-| `candidate` | path | current directory | Local checkout with statically declared distribution metadata. |
+| `version` | integer | `2` | Workspace format; only version 2 is accepted. |
+| `reference_package` | exact requirement | conditional | Released reference; CLI `--reference-package`. |
+| `reference_path` | path | conditional | Local reference; CLI `--reference-path`. Exactly one reference source field is required. |
+| `candidate_package` | exact requirement | conditional | Released candidate; CLI `--candidate-package`. |
+| `candidate_path` | path | conditional | Local candidate; CLI `--candidate-path`. Exactly one candidate source field is required; the CLI writes `.` here when neither candidate flag is supplied. |
 | `python` | `major.minor` | invoking Python | Shared target Python shorthand, at least 3.8. |
 | `reference_python` | `major.minor` | `python` | Reference target Python override, at least 3.8. |
 | `candidate_python` | `major.minor` | `python` | Candidate target Python override, at least 3.8. |
@@ -199,10 +217,16 @@ one `core-regression` unit and must be reviewed as an inventory. The document fi
 | `lanes` | array of tables | one `default` lane | Unique dependency lanes. |
 
 Each `[[lanes]]` has a required `[A-Za-z0-9_.-]+` `name` and an optional `requirements` path.
-Equivalent CLI values are repeatable `--lane NAME` or `--lane NAME=REQUIREMENTS`. Paths supplied to
-`migration init` are interpreted from the invocation directory and serialized relative to the
-workspace file. Paths inside the saved TOML are resolved beside that file. `report_dir` must remain
+Equivalent CLI values are repeatable `--lane NAME` or `--lane NAME=REQUIREMENTS`. Workspace source,
+config, manifest and lane paths supplied to `migration init` are interpreted from the invocation
+directory and serialized relative to the workspace file. Paths inside the saved TOML are resolved
+beside that file. Fixture rebasing follows the separate config rule above. `report_dir` must remain
 inside the workspace directory.
+
+Both package fields accept exactly one unconditional, non-wildcard PEP 508 `==` requirement, such
+as `package==1.2.3` or `package[extra]==1.2.3`. Reference and candidate must normalize to the same
+distribution name. The four valid source combinations are released/released, released/local,
+local/released and local/local. No other managed source keys are accepted.
 
 Use `python` when both sides support the same target interpreter. For a runtime migration, pass
 `--reference-python 3.8 --candidate-python 3.12` (or set both side-specific fields); either side may
@@ -213,28 +237,38 @@ still requires Python 3.11 or newer.
 candidate in every lane, then prepares an isolated worker pair. `parity migration run` performs
 that setup and runs the complete manifest in every lane. Managed execution uses the workspace
 directory as both worker working directories, supplies the two prepared interpreter paths,
-requires an exact released reference when configured and records the subject distribution on both sides.
-An explicit conflicting distribution contract is rejected. It writes
+binds each released side to its exact workspace version and records the subject distribution on
+both sides. An explicit `required_distributions` constraint that excludes either exact version is
+rejected. It writes
 `<report_dir>/<lane>.json`. The active lane report is removed before execution, so an interrupted
 run cannot leave an earlier green report looking current. Locks keep dependency selection
 stable on later runs; `--refresh-locks` deliberately asks the resolver to upgrade them. The command
 returns `2` if any lane errors, otherwise `1` if any lane fails, otherwise `0`.
 
-Local/local mode installs each checkout editable only in its own worker. Parity validates the
-normalized static distribution names before setup, then proves that installed distribution metadata
-and importable modules resolve to the declared source in every effective worker environment. It
-captures both Git HEADs, dirty flags and SHA-256 worktree-content digests before and throughout the
-run. Each target independently recomputes the same path-free identity before execution. Semantic
-lane evidence is written only when both target identities match the driver's snapshots; the
-identities are embedded in the lane report and every replayable finding. Replay recomputes them and
-returns `ERROR` before target invocation if a same-version checkout has changed. Any source change
-also invalidates all active reports. Success writes
-`<report_dir>/source-provenance.json`; this report intentionally contains no paths, branch names,
-file names or source values and remains meaningful if the report directory is relocated.
+Configured replay paths are based on the directory containing `parity.toml`. The managed workspace
+directory and its private environments must be contained by that configuration directory; a config
+in a child or unrelated directory is rejected before setup. Keeping `parity.toml` beside
+`parity.workspace.toml` is the default and simplest layout.
 
-`parity migration advance --reference package==version` atomically changes only an active exact
-reference. The distribution name must be unchanged. Candidate, Python, paths and lanes are
-preserved; current lane reports are invalidated. Parity intentionally stores no A→…→M history.
+Every local side is installed editable only in its own worker and, during `migration run`, Parity
+proves that installed distribution metadata and importable modules resolve to the declared source
+in every effective worker environment. Its target runtime reports a path-free Git HEAD, dirty flag
+and source digest; findings and replay bind that identity. Each local source must therefore be a Git
+worktree with a committed HEAD, although a dirty worktree is allowed and explicitly bound.
+
+Local/local mode additionally captures paired driver snapshots before and throughout the run.
+Semantic lane evidence is written only when both target identities match those snapshots; any
+source change invalidates all active reports. Success writes
+`<report_dir>/source-provenance.json`; this report intentionally contains no paths, branch names,
+file names or source values and remains meaningful if the report directory is relocated. Mixed
+local/released runs retain their one local target identity in runtime/finding/replay evidence but do
+not create this paired report or receive the continuous two-worktree driver checks.
+
+`parity migration advance --reference-package package==version` atomically changes only an active
+exact reference. The distribution name must be unchanged. Candidate, Python, paths and lanes are
+preserved; current lane reports are invalidated. For a released candidate, update
+`candidate_package` separately for the next pair before running it; `advance` never guesses the next
+candidate release. Parity intentionally stores no A→…→M history.
 Keep durable cases mapped in a permanent manifest unit and replace transition-specific units for
 each adjacent pair. `advance` does not move a local branch or worktree; regenerate or edit a
 local/local declaration (using `migration init --force` when replacing the workspace file) to
@@ -251,17 +285,19 @@ supply pandas, Polars or any other selected adapter dependency. They do not inst
 controller. Use explicit endpoint `python` paths in `parity.toml` when environments are provisioned
 elsewhere.
 
-Managed setup requires each local distribution name to match the reference name and to be
+Managed setup requires each local distribution name to match the shared subject name and to be
 declared statically as `project.name`, `tool.poetry.name`, or `setup.cfg` `[metadata] name`. It
 rejects dynamic `setup.py`-only names because executing project code merely to discover identity
-would make validation unsafe and a stale or differently named editable could cause a false pass. Provision both worker
-interpreters explicitly for projects with dynamic distribution metadata.
+would make validation unsafe and a stale or differently named editable could cause a false pass.
+For projects with dynamic distribution metadata, skip the managed workspace and provision both
+worker interpreters explicitly in `parity.toml`.
 
 The workspace directory must not expose either local checkout and neither worker's configured or
 inherited `PYTHONPATH` may expose a managed source root. Otherwise a flat-layout package could shadow
 the intended editable while distribution metadata still looked correct. Keep workspaces and wrapper
 modules in a neutral `migrations/` directory; editable installations provide local imports without
-adding source roots manually.
+adding source roots manually. The workspace directory must also remain inside the configured
+`parity.toml` directory when automatic replay is required.
 
 ## Retained evidence verification
 
@@ -275,6 +311,17 @@ entries resolves that ancestor automatically; otherwise Parity resolves the name
 the current directory. A supplied root relocates that same named directory. Report paths must remain
 contained, regular manifest-bound artifacts. Verification checks stored hashes and result metadata,
 requires verified runtime provenance, and replays the exact saved input.
+
+Configured artifact contracts make interpreter, workdir and path-like executable paths relative to
+the directory containing the loaded `parity.toml`. Run `replay` or evidence verification from that
+same directory (normally `migrations/` for a managed workspace). Those paths must remain
+configuration-local; configuration-local virtual-environment entry points may still resolve through
+their final symlink to a host Python. A non-importable live callable, external
+interpreter/workdir/executable or missing configuration-local executable leaves the artifact
+inspectable but non-replayable. An optional retained `replay_blockers` map identifies the side with
+the bounded `live_callable`, `external_python`,
+`external_workdir`, `external_command` or `missing_command`; replay reports an actionable remedy
+without persisting the external host path.
 
 Exit codes are:
 

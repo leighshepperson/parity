@@ -8,8 +8,8 @@ intentional contract adapter, and what remains future work.
 
 | Use case | Reference and candidate | Contract boundary |
 | --- | --- | --- |
-| Dependency upgrade | Separately provisioned Python environments | Same canonical cases through portable Python workers |
-| Release regression | Published baseline and local candidate | Fixtures/generated inputs, findings and replay |
+| Dependency upgrade | Exact released packages and/or local checkouts | Separately locked portable Python workers per side |
+| Release regression | Published baseline and published or local candidate | Fixtures/generated inputs, findings and replay |
 | Branch or worktree comparison | Two existing local checkouts | Managed local/local workspace with Git/content provenance |
 | Large refactor | Old and new Python callables | Small side-specific API adapters and output canonicalizers |
 | Backend replacement | Different dataframe/numerical engines | Canonical Arrow input plus explicit comparison policy |
@@ -28,16 +28,30 @@ portable worker requirements and target dependencies enter those environments; t
 `parity-check` dependency tree stays in the controller. This is the intended path for conflicting
 dependency graphs and older supported Python targets.
 
+Managed declarations are symmetric: combine `--reference-package` or `--reference-path` with
+`--candidate-package` or `--candidate-path` for released→released, released→local,
+local→released or local→local checks. Exact release declarations use an unconditional,
+non-wildcard `package==version` requirement and are enforced on the corresponding target before
+import. Separate locks are reused until `--refresh-locks` deliberately updates dependency
+selection. For a simple same-API package upgrade, `migration init --target ... --fixture ...` can
+create the first reviewed case contract, ledger and workspace together; side-specific target flags
+cover renamed APIs.
+
 Declare relevant `record_distributions` for provenance and `required_distributions` for fail-closed
 preconditions. A version difference is allowed; unexpected drift from the recorded/replay contract
 is not.
 
 ### Local branch, worktree and source comparisons
 
-`parity migration init --reference-path ... --candidate ...` accepts two existing checkouts. Parity
+`parity migration init --reference-path ... --candidate-path ...` accepts two existing checkouts. Parity
 does not create, select, switch or edit branches/worktrees. It provisions each checkout separately,
 verifies installed import origins, records path-free revision/dirty/content identities and rejects
 source changes during the campaign.
+
+Every local target reports a path-free Git/content identity that findings and replay bind, so a
+local source must be a Git worktree with committed HEAD. A mixed package/path workspace retains its
+one local target identity but does not emit the paired `source-provenance.json` or receive the
+continuous two-worktree driver checks used by local/local runs.
 
 This is useful beyond migrations: run it as a behavioural pull-request gate, compare an optimization
 branch with `main`, check a mechanical codemod, or validate a proposed bug fix against stable

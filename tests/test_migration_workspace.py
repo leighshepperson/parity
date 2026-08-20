@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -55,6 +56,11 @@ from parity.models import (
 from parity.templates import write_starter
 
 runner = CliRunner()
+_ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _normalized_cli_stderr(stderr: str) -> str:
+    return " ".join(_ANSI_ESCAPE.sub("", stderr).split())
 
 
 def _project(tmp_path: Path, *, lanes: tuple[WorkspaceLane, ...] = ()) -> Path:
@@ -62,13 +68,13 @@ def _project(tmp_path: Path, *, lanes: tuple[WorkspaceLane, ...] = ()) -> Path:
         '[project]\nname = "candidate-lib"\nversion = "2.0.0"\n',
         encoding="utf-8",
     )
-    (tmp_path / "parity.toml").write_text("", encoding="utf-8")
+    write_starter(tmp_path / "parity.toml")
     (tmp_path / "migration.toml").write_text("", encoding="utf-8")
     workspace = tmp_path / "parity.workspace.toml"
     write_workspace(
         workspace,
-        reference="candidate-lib==1.9.0",
-        candidate=Path("."),
+        reference_package="candidate-lib==1.9.0",
+        candidate_package="candidate-lib==2.0.0",
         python_version="3.12",
         lanes=lanes,
     )
@@ -101,13 +107,18 @@ def _write_resolved_workspace_document(workspace: ResolvedWorkspace) -> None:
     workspace.root.mkdir(parents=True, exist_ok=True)
     write_workspace(
         workspace.path,
-        reference=workspace.reference,
+        reference_package=workspace.reference_package,
         reference_path=(
             Path(os.path.relpath(workspace.reference_path, workspace.root))
             if workspace.reference_path is not None
             else None
         ),
-        candidate=Path(os.path.relpath(workspace.candidate, workspace.root)),
+        candidate_package=workspace.candidate_package,
+        candidate_path=(
+            Path(os.path.relpath(workspace.candidate_path, workspace.root))
+            if workspace.candidate_path is not None
+            else None
+        ),
         python_version=(
             workspace.reference_python
             if workspace.reference_python == workspace.candidate_python
@@ -167,22 +178,40 @@ def test_workspace_model_rejects_ambiguous_inputs_and_parses_lanes() -> None:
         MigrationWorkspace(python="3.12")
     with pytest.raises(ValidationError, match="exactly one"):
         MigrationWorkspace(
-            reference="candidate-lib==1",
+            reference_package="candidate-lib==1",
             reference_path=Path("../reference"),
+            candidate_path=Path("."),
             python="3.12",
         )
     with pytest.raises(ValidationError, match="exact requirement"):
-        MigrationWorkspace(reference="candidate-lib>=1", python="3.12")
+        MigrationWorkspace(
+            reference_package="candidate-lib>=1",
+            candidate_path=Path("."),
+            python="3.12",
+        )
     for invalid in ("candidate-lib==banana", "candidate-lib==1..2", "candidate-lib[-]==1"):
         with pytest.raises(ValidationError, match="exact requirement"):
-            MigrationWorkspace(reference=invalid, python="3.12")
+            MigrationWorkspace(
+                reference_package=invalid,
+                candidate_path=Path("."),
+                python="3.12",
+            )
     with pytest.raises(ValidationError, match=r"at least 3\.8"):
-        MigrationWorkspace(reference="candidate-lib==1", python="3.7")
+        MigrationWorkspace(
+            reference_package="candidate-lib==1",
+            candidate_path=Path("."),
+            python="3.7",
+        )
     with pytest.raises(ValidationError, match="both reference_python and candidate_python"):
-        MigrationWorkspace(reference="candidate-lib==1", reference_python="3.8")
+        MigrationWorkspace(
+            reference_package="candidate-lib==1",
+            candidate_path=Path("."),
+            reference_python="3.8",
+        )
     with pytest.raises(ValidationError, match="lane names must be unique"):
         MigrationWorkspace(
-            reference="candidate-lib==1",
+            reference_package="candidate-lib==1",
+            candidate_path=Path("."),
             python="3.12",
             lanes=[WorkspaceLane(name="same"), WorkspaceLane(name="same")],
         )
@@ -197,12 +226,112 @@ def test_workspace_model_rejects_ambiguous_inputs_and_parses_lanes() -> None:
         parse_lane_options(["same", "same"])
 
     split = MigrationWorkspace(
-        reference="candidate-lib==1",
+        reference_package="candidate-lib==1",
+        candidate_path=Path("."),
         reference_python="3.8",
         candidate_python="3.13",
     )
     assert split.effective_reference_python == "3.8"
     assert split.effective_candidate_python == "3.13"
+
+    released_pair = MigrationWorkspace(
+        reference_package="candidate-lib[io]==1",
+        candidate_package="candidate-lib[io]==2",
+        python="3.12",
+    )
+    assert released_pair.reference_extras == ("io",)
+    assert released_pair.candidate_extras == ("io",)
+    assert released_pair.candidate_path is None
+    with pytest.raises(ValidationError, match="exactly one"):
+        MigrationWorkspace(
+            reference_package="candidate-lib==1",
+            candidate_package="candidate-lib==2",
+            candidate_path=Path("candidate"),
+            python="3.12",
+        )
+    with pytest.raises(ValidationError, match="exact requirement"):
+        MigrationWorkspace(
+            reference_package="candidate-lib==1",
+            candidate_package="candidate-lib>=2",
+            python="3.12",
+        )
+
+
+def test_workspace_model_rejects_v1_and_legacy_source_keys() -> None:
+    with pytest.raises(ValidationError):
+        MigrationWorkspace.model_validate(
+            {
+                "version": 1,
+                "reference_package": "candidate-lib==1",
+                "candidate_path": ".",
+                "python": "3.12",
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        MigrationWorkspace.model_validate(
+            {
+                "version": 2,
+                "reference": "candidate-lib==1",
+                "candidate": ".",
+                "python": "3.12",
+            }
+        )
+
+
+def test_released_workspace_resolves_both_exact_package_sources(tmp_path: Path) -> None:
+    (tmp_path / "parity.toml").write_text("configured\n", encoding="utf-8")
+    (tmp_path / "migration.toml").write_text("declared\n", encoding="utf-8")
+    workspace_path = write_workspace(
+        tmp_path / "parity.workspace.toml",
+        reference_package="Candidate_Lib[io]==1.9.0",
+        candidate_package="candidate-lib[io]==2.0.0",
+        python_version="3.12",
+    )
+
+    document = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
+    resolved = load_workspace(workspace_path)
+
+    assert document["version"] == 2
+    assert document["reference_package"] == "Candidate_Lib[io]==1.9.0"
+    assert document["candidate_package"] == "candidate-lib[io]==2.0.0"
+    assert "candidate_path" not in document
+    assert resolved.reference_package == "Candidate_Lib[io]==1.9.0"
+    assert resolved.candidate_package == "candidate-lib[io]==2.0.0"
+    assert resolved.candidate_path is None
+    assert resolved.reference_extras == ("io",)
+    assert resolved.candidate_extras == ("io",)
+    assert resolved.subject_name == "candidate-lib"
+    assert not resolved.has_local_sources
+
+
+def test_local_reference_can_compare_with_released_candidate(tmp_path: Path) -> None:
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    (reference / "pyproject.toml").write_text(
+        '[project]\nname = "candidate-lib"\nversion = "1.9.0"\n',
+        encoding="utf-8",
+    )
+    harness = tmp_path / "migrations"
+    harness.mkdir()
+    (harness / "parity.toml").write_text("configured\n", encoding="utf-8")
+    (harness / "migration.toml").write_text("declared\n", encoding="utf-8")
+    workspace_path = write_workspace(
+        harness / "parity.workspace.toml",
+        reference_path=Path("../reference"),
+        candidate_package="candidate-lib==2.0.0",
+        python_version="3.12",
+    )
+
+    resolved = load_workspace(workspace_path)
+
+    assert resolved.reference_package is None
+    assert resolved.reference_path == reference.resolve()
+    assert resolved.reference_install_mode == "editable"
+    assert resolved.candidate_path is None
+    assert resolved.candidate_package == "candidate-lib==2.0.0"
+    assert resolved.has_local_sources
+    assert not resolved.is_local_comparison
 
 
 def test_local_workspace_resolves_distinct_matching_checkouts(tmp_path: Path) -> None:
@@ -222,22 +351,25 @@ def test_local_workspace_resolves_distinct_matching_checkouts(tmp_path: Path) ->
     workspace_path = write_workspace(
         harness / "parity.workspace.toml",
         reference_path=Path("../reference"),
-        candidate=Path("../candidate"),
+        candidate_path=Path("../candidate"),
         reference_python_version="3.8",
         candidate_python_version="3.12",
     )
     document = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
     resolved = load_workspace(workspace_path)
 
-    assert "reference" not in document
+    assert document["version"] == 2
+    assert "reference_package" not in document
     assert document["reference_path"] == "../reference"
+    assert document["candidate_path"] == "../candidate"
     assert "python" not in document
     assert document["reference_python"] == "3.8"
     assert document["candidate_python"] == "3.12"
-    assert resolved.reference is None
+    assert resolved.reference_package is None
     assert resolved.reference_path == reference.resolve()
-    assert resolved.reference_package == "editable"
-    assert resolved.candidate == candidate.resolve()
+    assert resolved.reference_install_mode == "editable"
+    assert resolved.candidate_path == candidate.resolve()
+    assert resolved.candidate_install_mode == "editable"
     assert resolved.reference_python == "3.8"
     assert resolved.candidate_python == "3.12"
     assert resolved.subject_name == "candidate-lib"
@@ -260,7 +392,7 @@ def test_local_workspace_rejects_same_checkout_and_dynamic_metadata(tmp_path: Pa
     workspace_path = write_workspace(
         tmp_path / "parity.workspace.toml",
         reference_path=Path("source"),
-        candidate=Path("source"),
+        candidate_path=Path("source"),
         python_version="3.12",
     )
 
@@ -286,15 +418,15 @@ def test_workspace_paths_are_relative_to_document_and_candidate_must_be_local(
     requirements.write_text("pandas<3\n", encoding="utf-8")
     checks = project / "checks"
     checks.mkdir()
-    (checks / "parity.toml").write_text("", encoding="utf-8")
+    (project / "parity.toml").write_text("", encoding="utf-8")
     (checks / "migration.toml").write_text("", encoding="utf-8")
     workspace_path = project / "parity.workspace.toml"
     write_workspace(
         workspace_path,
-        reference="candidate-lib[plot,io]==1.9.0",
-        candidate=Path("candidate"),
+        reference_package="candidate-lib[plot,io]==1.9.0",
+        candidate_path=Path("candidate"),
         python_version="3.13",
-        config=Path("checks/parity.toml"),
+        config=Path("parity.toml"),
         manifest=Path("checks/migration.toml"),
         lanes=[WorkspaceLane(name="current", requirements=Path("requirements-current.in"))],
     )
@@ -305,8 +437,8 @@ def test_workspace_paths_are_relative_to_document_and_candidate_must_be_local(
     )
     workspace = load_workspace(workspace_path)
 
-    assert workspace.candidate == candidate.resolve()
-    assert workspace.config == (project / "checks/parity.toml").resolve()
+    assert workspace.candidate_path == candidate.resolve()
+    assert workspace.config == (project / "parity.toml").resolve()
     assert workspace.manifest == (project / "checks/migration.toml").resolve()
     assert workspace.reference_extras == ("plot", "io")
     assert workspace.lanes[0].requirements == requirements.resolve()
@@ -325,8 +457,8 @@ def test_workspace_init_rebases_invocation_paths_beside_nested_document(
 
     written = write_workspace(
         Path("migrations/parity.workspace.toml"),
-        reference="candidate-lib==1.9.0",
-        candidate=Path("candidate-src/candidate-lib"),
+        reference_package="candidate-lib==1.9.0",
+        candidate_path=Path("candidate-src/candidate-lib"),
         config=Path("migrations/parity.toml"),
         manifest=Path("migrations/migration.toml"),
         lanes=[
@@ -340,7 +472,8 @@ def test_workspace_init_rebases_invocation_paths_beside_nested_document(
 
     assert written == destination
     document = tomllib.loads(destination.read_text(encoding="utf-8"))
-    assert document["candidate"] == "../candidate-src/candidate-lib"
+    assert document["version"] == 2
+    assert document["candidate_path"] == "../candidate-src/candidate-lib"
     assert document["config"] == "parity.toml"
     assert document["manifest"] == "migration.toml"
     assert document["report_dir"] == ".parity/workspace/reports"
@@ -350,6 +483,22 @@ def test_workspace_init_rebases_invocation_paths_beside_nested_document(
         workspace_path=Path("migrations/parity.workspace.toml"),
         invocation_cwd=invocation,
     ) == Path("parity.toml")
+
+
+def test_workspace_rejects_config_directory_outside_managed_runtime_root(
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "migrations" / "parity.workspace.toml"
+
+    with pytest.raises(WorkspaceError, match="config must contain the workspace directory"):
+        write_workspace(
+            workspace_path,
+            reference_package="candidate-lib==1.9.0",
+            candidate_package="candidate-lib==2.0.0",
+            config=Path("../configs/parity.toml"),
+        )
+
+    assert not workspace_path.exists()
 
 
 def test_advance_workspace_preserves_harness_and_locks_but_invalidates_reports(
@@ -386,12 +535,16 @@ def test_advance_workspace_preserves_harness_and_locks_but_invalidates_reports(
     lock.parent.mkdir(parents=True)
     lock.write_text("candidate-lib==1.9.0\n", encoding="utf-8")
 
-    advanced = advance_workspace(workspace_path, reference="candidate-lib==2.0.0")
+    advanced = advance_workspace(
+        workspace_path,
+        reference_package="candidate-lib==2.0.0",
+    )
 
     assert advanced == workspace_path
     document = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
-    assert document["reference"] == "candidate-lib==2.0.0"
-    assert document["candidate"] == "."
+    assert document["version"] == 2
+    assert document["reference_package"] == "candidate-lib==2.0.0"
+    assert document["candidate_package"] == "candidate-lib==2.0.0"
     assert document["lanes"] == [{"name": "release", "requirements": "release.in"}]
     assert not report.exists()
     assert not obsolete.exists()
@@ -401,11 +554,12 @@ def test_advance_workspace_preserves_harness_and_locks_but_invalidates_reports(
 
     for non_advance in ("candidate-lib==2.0.0", "candidate-lib==1.8.0"):
         with pytest.raises(WorkspaceError, match="must be newer"):
-            advance_workspace(workspace_path, reference=non_advance)
+            advance_workspace(workspace_path, reference_package=non_advance)
     with pytest.raises(WorkspaceError, match="cannot change the subject distribution"):
-        advance_workspace(workspace_path, reference="other-lib==3.0.0")
-    assert tomllib.loads(workspace_path.read_text(encoding="utf-8"))["reference"] == (
-        "candidate-lib==2.0.0"
+        advance_workspace(workspace_path, reference_package="other-lib==3.0.0")
+    assert (
+        tomllib.loads(workspace_path.read_text(encoding="utf-8"))["reference_package"]
+        == "candidate-lib==2.0.0"
     )
 
 
@@ -415,7 +569,7 @@ def test_workspace_requires_dedicated_report_subdirectory(tmp_path: Path) -> Non
     with pytest.raises(WorkspaceError, match="dedicated contained subdirectory"):
         write_workspace(
             workspace,
-            reference="candidate-lib==1.9.0",
+            reference_package="candidate-lib==1.9.0",
             report_dir=Path("."),
         )
 
@@ -425,17 +579,27 @@ def test_workspace_requires_dedicated_report_subdirectory(tmp_path: Path) -> Non
 def test_workspace_rejects_candidate_with_wrong_or_unverifiable_distribution_name(
     tmp_path: Path,
 ) -> None:
-    workspace_path = _project(tmp_path)
-    (tmp_path / "pyproject.toml").write_text(
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / "pyproject.toml").write_text(
         '[project]\nname = "other-candidate"\nversion = "2.0.0"\n',
         encoding="utf-8",
+    )
+    harness = tmp_path / "migrations"
+    write_starter(harness / "parity.toml")
+    (harness / "migration.toml").write_text("", encoding="utf-8")
+    workspace_path = write_workspace(
+        harness / "parity.workspace.toml",
+        reference_package="candidate-lib==1.9.0",
+        candidate_path=Path("../candidate"),
+        python_version="3.12",
     )
 
     with pytest.raises(WorkspaceError, match="does not match reference distribution"):
         load_workspace(workspace_path)
 
-    (tmp_path / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
-    (tmp_path / "setup.py").write_text("# dynamic legacy metadata\n", encoding="utf-8")
+    (candidate / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
+    (candidate / "setup.py").write_text("# dynamic legacy metadata\n", encoding="utf-8")
     with pytest.raises(WorkspaceError, match="is not declared statically"):
         load_workspace(workspace_path)
 
@@ -447,10 +611,14 @@ def test_generated_tox_config_pairs_every_lane_with_side_specific_locks(tmp_path
     workspace = ResolvedWorkspace(
         path=project / "parity.workspace.toml",
         root=project,
-        reference="candidate-lib[io]==1.9.0",
+        reference_package="candidate-lib[io]==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
         reference_extras=("io",),
-        candidate=project,
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=project,
+        candidate_install_mode="editable",
+        candidate_extras=("io",),
         reference_python="3.8",
         candidate_python="3.12",
         config=project / "parity.toml",
@@ -495,18 +663,20 @@ def test_generated_tox_config_installs_each_local_checkout_in_its_own_worker(
     workspace = ResolvedWorkspace(
         path=tmp_path / "harness/parity.workspace.toml",
         root=tmp_path / "harness",
-        reference=None,
+        reference_package=None,
+        reference_path=tmp_path / "reference",
+        reference_install_mode="editable-legacy",
         reference_extras=(),
-        candidate=tmp_path / "candidate",
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=tmp_path / "candidate",
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python="3.8",
         candidate_python="3.12",
         config=tmp_path / "harness/parity.toml",
         manifest=tmp_path / "harness/migration.toml",
         report_dir=tmp_path / "harness/.parity/workspace/reports",
         lanes=(ResolvedWorkspaceLane("default", None),),
-        reference_path=tmp_path / "reference",
-        reference_package="editable-legacy",
     )
 
     parsed = tomllib.loads(
@@ -523,6 +693,42 @@ def test_generated_tox_config_installs_each_local_checkout_in_its_own_worker(
     assert candidate["package_root"] == str(tmp_path / "candidate")
     assert candidate["deps"][0].endswith("requirements.default.candidate.txt")
     assert reference["deps"] != candidate["deps"]
+
+
+def test_generated_tox_config_skips_project_packaging_for_released_pair(
+    tmp_path: Path,
+) -> None:
+    workspace = ResolvedWorkspace(
+        path=tmp_path / "migrations/parity.workspace.toml",
+        root=tmp_path / "migrations",
+        reference_package="candidate-lib==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
+        reference_extras=(),
+        candidate_package="candidate-lib==2.0.0",
+        candidate_path=None,
+        candidate_install_mode=None,
+        candidate_extras=(),
+        reference_python="3.12",
+        candidate_python="3.12",
+        config=tmp_path / "migrations/parity.toml",
+        manifest=tmp_path / "migrations/migration.toml",
+        report_dir=tmp_path / "migrations/.parity/workspace/reports",
+        lanes=(ResolvedWorkspaceLane("default", None),),
+    )
+
+    parsed = tomllib.loads(
+        render_tox_config(workspace, state_root=tmp_path / "migrations/.parity/workspace")
+    )
+    reference = parsed["env"]["default-reference"]
+    candidate = parsed["env"]["default-candidate"]
+
+    assert reference["package"] == "skip"
+    assert candidate["package"] == "skip"
+    assert "package_root" not in reference
+    assert "package_root" not in candidate
+    assert "constrain_package_deps" not in reference
+    assert "constrain_package_deps" not in candidate
 
 
 def test_local_lock_resolution_uses_each_sources_own_dependency_metadata(
@@ -542,18 +748,20 @@ def test_local_lock_resolution_uses_each_sources_own_dependency_metadata(
     workspace = ResolvedWorkspace(
         path=tmp_path / "harness/parity.workspace.toml",
         root=tmp_path / "harness",
-        reference=None,
+        reference_package=None,
+        reference_path=reference,
+        reference_install_mode="editable",
         reference_extras=(),
-        candidate=candidate,
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=candidate,
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python="3.8",
         candidate_python="3.12",
         config=tmp_path / "harness/parity.toml",
         manifest=tmp_path / "harness/migration.toml",
         report_dir=tmp_path / "harness/reports",
         lanes=(ResolvedWorkspaceLane("default", None),),
-        reference_path=reference,
-        reference_package="editable",
     )
     commands: list[list[str]] = []
 
@@ -591,6 +799,71 @@ def test_local_lock_resolution_uses_each_sources_own_dependency_metadata(
     assert (state / "locks/requirements.default.candidate.txt").is_file()
 
 
+def test_released_pair_lock_inputs_pin_each_declared_package_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "migrations"
+    state = root / ".parity/workspace"
+    state.mkdir(parents=True)
+    workspace = ResolvedWorkspace(
+        path=root / "parity.workspace.toml",
+        root=root,
+        reference_package="candidate-lib==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
+        reference_extras=(),
+        candidate_package="candidate-lib==2.0.0",
+        candidate_path=None,
+        candidate_install_mode=None,
+        candidate_extras=(),
+        reference_python="3.11",
+        candidate_python="3.12",
+        config=root / "parity.toml",
+        manifest=root / "migration.toml",
+        report_dir=root / ".parity/workspace/reports",
+        lanes=(ResolvedWorkspaceLane("default", None),),
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        operation: str,
+        failure_log: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, operation, failure_log
+        commands.append(command)
+        output = Path(command[command.index("--output-file") + 1])
+        output.write_text("candidate-lib==1.9.0\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("parity.migration_workspace._run_checked", fake_run)
+    for side in ("reference", "candidate"):
+        migration_workspace_module._compile_lane_lock(
+            workspace,
+            workspace.lanes[0],
+            side=side,
+            uv="/tools/uv",
+            state_root=state,
+            refresh=False,
+        )
+
+    assert (
+        (state / "inputs/default.reference.in")
+        .read_text(encoding="utf-8")
+        .endswith("candidate-lib==1.9.0\n")
+    )
+    assert (
+        (state / "inputs/default.candidate.in")
+        .read_text(encoding="utf-8")
+        .endswith("candidate-lib==2.0.0\n")
+    )
+    assert commands[0][commands[0].index("--python-version") + 1] == "3.11"
+    assert commands[1][commands[1].index("--python-version") + 1] == "3.12"
+
+
 @pytest.mark.skipif(
     os.environ.get("PARITY_WORKSPACE_FLOOR_SMOKE") != "1",
     reason="requires the exact managed-workspace tool floor installed by CI",
@@ -621,10 +894,14 @@ def test_generated_tox_config_runs_on_declared_tool_floor(tmp_path: Path) -> Non
     workspace = ResolvedWorkspace(
         path=project / "parity.workspace.toml",
         root=project,
-        reference="candidate-lib==1.9.0",
+        reference_package="candidate-lib==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
         reference_extras=(),
-        candidate=project,
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=project,
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python=f"{sys.version_info.major}.{sys.version_info.minor}",
         candidate_python=f"{sys.version_info.major}.{sys.version_info.minor}",
         config=project / "parity.toml",
@@ -736,7 +1013,9 @@ def test_setup_compiles_locks_runs_tox_and_queries_worker_interpreters(
     assert reference_input == (
         "# Generated by Parity. Do not edit.\npyarrow>=16\ncandidate-lib==1.9.0\n"
     )
-    assert candidate_input == "# Generated by Parity. Do not edit.\npyarrow>=16\n"
+    assert candidate_input == (
+        "# Generated by Parity. Do not edit.\npyarrow>=16\ncandidate-lib==2.0.0\n"
+    )
     assert prepared.tox_config == tmp_path / ".parity/workspace/tox.toml"
     assert (tmp_path / ".parity/.gitignore").read_text(encoding="utf-8") == "*\n"
     assert not (tmp_path / ".gitignore").exists()
@@ -888,8 +1167,8 @@ def test_run_invalidates_active_report_before_environment_setup(
     workspace_path = harness / "parity.workspace.toml"
     write_workspace(
         workspace_path,
-        reference="candidate-lib==1.9.0",
-        candidate=Path(".."),
+        reference_package="candidate-lib==1.9.0",
+        candidate_path=Path(".."),
     )
     report = harness / ".parity/workspace/reports/default.json"
     report.parent.mkdir(parents=True)
@@ -979,8 +1258,8 @@ def test_private_state_symlink_cannot_escape_workspace(tmp_path: Path, monkeypat
     # Keep reports outside .parity so setup reaches the private-state guard itself.
     write_workspace(
         workspace_path,
-        reference="candidate-lib==1.9.0",
-        candidate=Path("."),
+        reference_package="candidate-lib==1.9.0",
+        candidate_package="candidate-lib==2.0.0",
         python_version="3.12",
         report_dir=Path("reports"),
         force=True,
@@ -1026,10 +1305,14 @@ def test_run_workspace_overrides_every_case_worker_without_mutating_config(
     workspace = ResolvedWorkspace(
         path=project / "parity.workspace.toml",
         root=project,
-        reference="Candidate_Lib==1.9.0",
+        reference_package="Candidate_Lib==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
         reference_extras=(),
-        candidate=project.parent / f"{project.name}-candidate-lib",
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=project.parent / f"{project.name}-candidate-lib",
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python="3.12",
         candidate_python="3.12",
         config=project / "parity.toml",
@@ -1065,6 +1348,10 @@ def test_run_workspace_overrides_every_case_worker_without_mutating_config(
     monkeypatch.setattr("parity.migration_workspace.load_config", lambda _path: config)
     monkeypatch.setattr(
         "parity.migration_workspace.load_migration_manifest", lambda _path: manifest
+    )
+    monkeypatch.setattr(
+        "parity.migration_workspace._validate_local_source_installs",
+        lambda _setup, _config: None,
     )
 
     def fake_run(_manifest: MigrationManifest, effective: ParityConfig) -> MigrationResult:
@@ -1152,10 +1439,14 @@ def test_run_workspace_rejects_conflicting_subject_requirement(
     workspace = ResolvedWorkspace(
         path=tmp_path / "parity.workspace.toml",
         root=tmp_path,
-        reference="candidate-lib==1.9.0",
+        reference_package="candidate-lib==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
         reference_extras=(),
-        candidate=tmp_path / "candidate-src" / "candidate-lib",
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=tmp_path / "candidate-src" / "candidate-lib",
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python="3.12",
         candidate_python="3.12",
         config=tmp_path / "parity.toml",
@@ -1181,6 +1472,46 @@ def test_run_workspace_rejects_conflicting_subject_requirement(
         run_workspace(tmp_path / "parity.workspace.toml")
 
     assert config.cases[0].reference.required_distributions == {"candidate-lib": "==1.8.0"}
+
+
+def test_released_pair_binds_both_exact_runtime_versions_without_mutating_config(
+    tmp_path: Path,
+) -> None:
+    workspace = ResolvedWorkspace(
+        path=tmp_path / "parity.workspace.toml",
+        root=tmp_path,
+        reference_package="candidate-lib==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
+        reference_extras=(),
+        candidate_package="candidate-lib==2.0.0",
+        candidate_path=None,
+        candidate_install_mode=None,
+        candidate_extras=(),
+        reference_python="3.12",
+        candidate_python="3.12",
+        config=tmp_path / "parity.toml",
+        manifest=tmp_path / "migration.toml",
+        report_dir=tmp_path / ".parity/workspace/reports",
+        lanes=(ResolvedWorkspaceLane("default", None),),
+    )
+    config = _config()
+
+    effective = migration_workspace_module._bind_subject_distribution(workspace, config)
+
+    case = effective.cases[0]
+    assert case.reference.required_distributions == {"candidate-lib": "==1.9.0"}
+    assert case.candidate.required_distributions == {"candidate-lib": "==2.0.0"}
+    assert case.reference.record_distributions == ["candidate-lib"]
+    assert case.candidate.record_distributions == ["candidate-lib"]
+    assert case.reference.workdir == tmp_path
+    assert case.candidate.workdir == tmp_path
+    assert config.cases[0].reference.required_distributions == {}
+    assert config.cases[0].candidate.required_distributions == {}
+
+    config.cases[0].candidate.required_distributions = {"candidate-lib": "<2"}
+    with pytest.raises(WorkspaceError, match="candidate runtime requirements conflict"):
+        migration_workspace_module._bind_subject_distribution(workspace, config)
 
 
 @pytest.mark.parametrize(
@@ -1212,10 +1543,14 @@ def test_run_workspace_rejects_candidate_source_visible_to_reference(
     workspace = ResolvedWorkspace(
         path=root / "parity.workspace.toml",
         root=root,
-        reference="candidate-lib==1.9.0",
+        reference_package="candidate-lib==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
         reference_extras=(),
-        candidate=candidate,
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=candidate,
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python="3.12",
         candidate_python="3.12",
         config=root / "parity.toml",
@@ -1269,10 +1604,14 @@ def test_run_workspace_allows_harness_subdirectory_inside_candidate(
     workspace = ResolvedWorkspace(
         path=root / "parity.workspace.toml",
         root=root,
-        reference="candidate-lib==1.9.0",
+        reference_package="candidate-lib==1.9.0",
+        reference_path=None,
+        reference_install_mode=None,
         reference_extras=(),
-        candidate=candidate,
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=candidate,
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python="3.12",
         candidate_python="3.12",
         config=root / "parity.toml",
@@ -1306,6 +1645,10 @@ def test_run_workspace_allows_harness_subdirectory_inside_candidate(
     monkeypatch.setattr(
         "parity.migration_workspace.load_migration_manifest",
         lambda _path: MigrationManifest(units=[MigrationUnit(id="orders", cases=["orders"])]),
+    )
+    monkeypatch.setattr(
+        "parity.migration_workspace._validate_local_source_installs",
+        lambda _setup, _config: None,
     )
     seen: list[tuple[Path | None, Path | None, Path | None, Path | None]] = []
     sentinel = cast(MigrationResult, object())
@@ -1344,18 +1687,20 @@ def test_local_run_writes_path_free_source_provenance(
     workspace = ResolvedWorkspace(
         path=root / "parity.workspace.toml",
         root=root,
-        reference=None,
+        reference_package=None,
+        reference_path=reference,
+        reference_install_mode="editable",
         reference_extras=(),
-        candidate=candidate,
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=candidate,
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python="3.12",
         candidate_python="3.12",
         config=root / "parity.toml",
         manifest=root / "migration.toml",
         report_dir=root / ".parity/workspace/reports",
         lanes=(ResolvedWorkspaceLane("default", None),),
-        reference_path=reference,
-        reference_package="editable",
     )
     _write_resolved_workspace_document(workspace)
     environment = LaneEnvironment(
@@ -1602,18 +1947,20 @@ def test_local_run_invalidates_results_when_a_checkout_changes(
     workspace = ResolvedWorkspace(
         path=root / "parity.workspace.toml",
         root=root,
-        reference=None,
+        reference_package=None,
+        reference_path=reference,
+        reference_install_mode="editable",
         reference_extras=(),
-        candidate=candidate,
-        candidate_package="editable",
+        candidate_package=None,
+        candidate_path=candidate,
+        candidate_install_mode="editable",
+        candidate_extras=(),
         reference_python="3.12",
         candidate_python="3.12",
         config=root / "parity.toml",
         manifest=root / "migration.toml",
         report_dir=root / ".parity/workspace/reports",
         lanes=(ResolvedWorkspaceLane("default", None),),
-        reference_path=reference,
-        reference_package="editable",
     )
     _write_resolved_workspace_document(workspace)
     environment = LaneEnvironment(
@@ -1695,11 +2042,11 @@ def test_migration_init_cli_creates_only_declarative_workspace(
         [
             "migration",
             "init",
-            "--reference",
+            "--reference-package",
             "candidate-lib==1.9.0",
             "--workspace",
             str(workspace),
-            "--candidate",
+            "--candidate-path",
             "candidate",
             "--config",
             "parity.toml",
@@ -1717,7 +2064,9 @@ def test_migration_init_cli_creates_only_declarative_workspace(
     assert "active pair declared" in result.stdout
     assert "created starter ledger" in result.stdout
     document = tomllib.loads(workspace.read_text(encoding="utf-8"))
-    assert document["reference"] == "candidate-lib==1.9.0"
+    assert document["version"] == 2
+    assert document["reference_package"] == "candidate-lib==1.9.0"
+    assert document["candidate_path"] == "candidate"
     assert [lane["name"] for lane in document["lanes"]] == ["release", "current"]
     assert document["report_dir"] == ".parity/workspace/reports"
     manifest = tomllib.loads((tmp_path / "migration.toml").read_text(encoding="utf-8"))
@@ -1736,7 +2085,7 @@ def test_migration_init_cli_declares_local_worktree_pair(tmp_path: Path, monkeyp
             "init",
             "--reference-path",
             "reference-worktree",
-            "--candidate",
+            "--candidate-path",
             "candidate-worktree",
             "--reference-python",
             "3.8",
@@ -1750,9 +2099,10 @@ def test_migration_init_cli_declares_local_worktree_pair(tmp_path: Path, monkeyp
     document = tomllib.loads(
         (tmp_path / "migrations/parity.workspace.toml").read_text(encoding="utf-8")
     )
-    assert "reference" not in document
+    assert document["version"] == 2
+    assert "reference_package" not in document
     assert document["reference_path"] == "../reference-worktree"
-    assert document["candidate"] == "../candidate-worktree"
+    assert document["candidate_path"] == "../candidate-worktree"
     assert "python" not in document
     assert document["reference_python"] == "3.8"
     assert document["candidate_python"] == "3.12"
@@ -1762,7 +2112,7 @@ def test_migration_init_cli_declares_local_worktree_pair(tmp_path: Path, monkeyp
         [
             "migration",
             "init",
-            "--reference",
+            "--reference-package",
             "candidate-lib==1",
             "--reference-path",
             "reference-worktree",
@@ -1771,6 +2121,261 @@ def test_migration_init_cli_declares_local_worktree_pair(tmp_path: Path, monkeyp
     )
     assert both.exit_code == 2
     assert "exactly one" in both.stderr
+
+
+def test_migration_init_cli_scaffolds_released_pair_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = tmp_path / "windowed.csv"
+    fixture.write_text("value\n1\n2\n3\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "more-itertools==8.14.0",
+            "--candidate-package",
+            "more-itertools==9.0.0",
+            "--target",
+            "migration_adapters:windowed_contract",
+            "--fixture",
+            fixture.name,
+            "--case-name",
+            "windowed",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "created migration contract" in result.stdout
+    assert "released pair declared" in result.stdout
+    workspace_path = tmp_path / "migrations/parity.workspace.toml"
+    workspace = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
+    config = tomllib.loads((tmp_path / "migrations/parity.toml").read_text(encoding="utf-8"))
+    manifest = tomllib.loads((tmp_path / "migrations/migration.toml").read_text(encoding="utf-8"))
+    assert workspace["version"] == 2
+    assert workspace["reference_package"] == "more-itertools==8.14.0"
+    assert workspace["candidate_package"] == "more-itertools==9.0.0"
+    assert "candidate_path" not in workspace
+    assert config["cases"][0]["name"] == "windowed"
+    assert config["cases"][0]["fixture"] == "../windowed.csv"
+    assert config["cases"][0]["reference"]["target"] == ("migration_adapters:windowed_contract")
+    assert config["cases"][0]["candidate"]["target"] == ("migration_adapters:windowed_contract")
+    assert "workdir" not in config["cases"][0]["reference"]
+    assert "workdir" not in config["cases"][0]["candidate"]
+    assert manifest["units"][0]["cases"] == ["windowed"]
+
+
+def test_migration_init_cli_supports_config_above_workspace_for_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = tmp_path / "fixture.csv"
+    fixture.write_text("value\n1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--config",
+            "parity.toml",
+            "--target",
+            "migration_adapters:transform",
+            "--fixture",
+            fixture.name,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    workspace_path = tmp_path / "migrations/parity.workspace.toml"
+    workspace = tomllib.loads(workspace_path.read_text(encoding="utf-8"))
+    config = tomllib.loads((tmp_path / "parity.toml").read_text(encoding="utf-8"))
+    assert workspace["config"] == "../parity.toml"
+    assert config["cases"][0]["reference"]["workdir"] == "migrations"
+    assert config["cases"][0]["candidate"]["workdir"] == "migrations"
+    assert load_workspace(workspace_path).config == (tmp_path / "parity.toml").resolve()
+
+
+def test_migration_init_cli_rolls_back_config_outside_replay_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = tmp_path / "fixture.csv"
+    fixture.write_text("value\n1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--config",
+            "configs/parity.toml",
+            "--target",
+            "migration_adapters:transform",
+            "--fixture",
+            fixture.name,
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "workspace config must contain" in result.stderr
+    assert not (tmp_path / "configs/parity.toml").exists()
+    assert not (tmp_path / "migrations/migration.toml").exists()
+    assert not (tmp_path / "migrations/parity.workspace.toml").exists()
+
+
+def test_migration_init_cli_side_targets_override_shared_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = tmp_path / "fixture.csv"
+    fixture.write_text("value\n1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--target",
+            "shared:transform",
+            "--reference-target",
+            "old:transform",
+            "--candidate-target",
+            "new:transform",
+            "--fixture",
+            fixture.name,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    config = tomllib.loads((tmp_path / "migrations/parity.toml").read_text(encoding="utf-8"))
+    assert config["cases"][0]["reference"]["target"] == "old:transform"
+    assert config["cases"][0]["candidate"]["target"] == "new:transform"
+
+
+def test_migration_init_cli_never_partially_scaffolds_or_overwrites_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = tmp_path / "fixture.csv"
+    fixture.write_text("value\n1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    incomplete = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--target",
+            "adapters:transform",
+        ],
+    )
+
+    assert incomplete.exit_code == 2
+    assert "supply --fixture" in incomplete.stderr
+    assert not (tmp_path / "migrations/parity.toml").exists()
+    assert not (tmp_path / "migrations/migration.toml").exists()
+    assert not (tmp_path / "migrations/parity.workspace.toml").exists()
+
+    write_starter(tmp_path / "migrations/parity.toml")
+    original = (tmp_path / "migrations/parity.toml").read_bytes()
+    existing = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--target",
+            "adapters:transform",
+            "--fixture",
+            fixture.name,
+        ],
+    )
+
+    assert existing.exit_code == 2
+    assert "reviewed Parity config already exists" in existing.stderr
+    assert (tmp_path / "migrations/parity.toml").read_bytes() == original
+    assert not (tmp_path / "migrations/migration.toml").exists()
+    assert not (tmp_path / "migrations/parity.workspace.toml").exists()
+
+
+def test_migration_init_cli_rejects_ambiguous_candidate_sources_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "migration",
+            "init",
+            "--reference-package",
+            "candidate-lib==1",
+            "--candidate-package",
+            "candidate-lib==2",
+            "--candidate-path",
+            "candidate",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "exactly one of --candidate-package or --candidate-path" in result.stderr
+    assert not (tmp_path / "migrations").exists()
+
+
+@pytest.mark.parametrize("legacy_flag", ["--reference", "--candidate"])
+def test_migration_init_cli_rejects_legacy_source_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_flag: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        ["migration", "init", legacy_flag, "candidate-lib==1.9.0"],
+    )
+
+    assert result.exit_code == 2
+    assert f"No such option: {legacy_flag}" in _normalized_cli_stderr(result.stderr)
+    assert not (tmp_path / "migrations").exists()
+
+
+def test_migration_advance_cli_rejects_legacy_reference_flag() -> None:
+    result = runner.invoke(
+        cli.app,
+        ["migration", "advance", "--reference", "candidate-lib==2.0.0"],
+    )
+
+    assert result.exit_code == 2
+    assert "No such option: --reference" in _normalized_cli_stderr(result.stderr)
 
 
 def test_default_cli_flow_creates_nested_active_pair_and_advances_it(
@@ -1786,13 +2391,15 @@ def test_default_cli_flow_creates_nested_active_pair_and_advances_it(
 
     initialized = runner.invoke(
         cli.app,
-        ["migration", "init", "--reference", "candidate-lib==1.9.0"],
+        ["migration", "init", "--reference-package", "candidate-lib==1.9.0"],
     )
 
     assert initialized.exit_code == 0, initialized.output
     workspace = tmp_path / "migrations/parity.workspace.toml"
     document = tomllib.loads(workspace.read_text(encoding="utf-8"))
-    assert document["candidate"] == ".."
+    assert document["version"] == 2
+    assert document["reference_package"] == "candidate-lib==1.9.0"
+    assert document["candidate_path"] == ".."
     assert document["config"] == "parity.toml"
     assert document["manifest"] == "migration.toml"
     assert (tmp_path / "migrations/migration.toml").is_file()
@@ -1802,14 +2409,15 @@ def test_default_cli_flow_creates_nested_active_pair_and_advances_it(
     report.write_text('{"status":"passed"}\n', encoding="utf-8")
     advanced = runner.invoke(
         cli.app,
-        ["migration", "advance", "--reference", "candidate-lib==2.0.0"],
+        ["migration", "advance", "--reference-package", "candidate-lib==2.0.0"],
     )
 
     assert advanced.exit_code == 0, advanced.output
     assert "previous active lane reports were invalidated" in advanced.stdout
     assert not report.exists()
-    assert tomllib.loads(workspace.read_text(encoding="utf-8"))["reference"] == (
-        "candidate-lib==2.0.0"
+    assert (
+        tomllib.loads(workspace.read_text(encoding="utf-8"))["reference_package"]
+        == "candidate-lib==2.0.0"
     )
 
 
@@ -1825,7 +2433,7 @@ def test_nested_cli_workspace_rejects_report_directory_outside_harness(
         [
             "migration",
             "init",
-            "--reference",
+            "--reference-package",
             "candidate-lib==1.9.0",
             "--report-dir",
             "reports",

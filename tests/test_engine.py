@@ -693,9 +693,12 @@ def test_live_bound_instance_method_is_not_claimed_as_replayable(tmp_path: Path)
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     replay_contract = replay["case"]
     assert replay_contract["candidate"] is None
+    assert replay["replay_blockers"] == {"candidate": "live_callable"}
     assert "command" not in replay
-    with pytest.raises(engine.ReplayError, match="live-callable"):
+    with pytest.raises(engine.ReplayError, match="candidate live-callable") as captured:
         replay_artifact(artifact)
+    assert "module-level import target in parity.toml" in str(captured.value)
+    assert "rerun parity check" in str(captured.value)
 
 
 def test_rebound_live_function_is_not_claimed_as_replayable(
@@ -2619,6 +2622,58 @@ python = "new/bin/python"
     assert second.provenance is not None
     assert first.provenance.config_sha256 == captured[0]
     assert second.provenance.config_sha256 == captured[1]
+
+
+def test_run_suite_uses_loaded_config_directory_for_replay_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    unrelated = tmp_path / "elsewhere"
+    project.mkdir()
+    unrelated.mkdir()
+    config_path = project / "parity.toml"
+    config_path.write_text(
+        """
+version = 1
+
+[[cases]]
+name = "stable-root"
+fixture = "fixture.csv"
+
+[cases.reference]
+target = "project:reference"
+
+[cases.candidate]
+target = "project:candidate"
+""",
+        encoding="utf-8",
+    )
+    artifacts: list[Path] = []
+    runtime = collect_runtime_provenance()
+
+    def configured_case(case: CaseConfig, store: ArtifactStore, **kwargs: Any) -> CaseResult:
+        artifacts.append(
+            store.write_failure(
+                case,
+                pa.table({"id": [1]}),
+                ExampleResult(source="test", status=Status.FAILED),
+                runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
+                config_sha256=kwargs["config_sha256"],
+            )
+        )
+        return CaseResult(name=case.name, status=Status.PASSED)
+
+    monkeypatch.setattr(engine, "_configured_case", configured_case)
+    config = load_config(config_path)
+    monkeypatch.chdir(unrelated)
+
+    engine.run_suite(config)
+
+    replay = json.loads((artifacts[0] / "replay.json").read_text(encoding="utf-8"))
+    assert "replay_blockers" not in replay
+    assert replay["case"]["reference"]["workdir"] == "."
+    assert replay["case"]["candidate"]["workdir"] == "."
 
 
 def test_replay_manifest_must_bind_every_consumed_file(tmp_path: Path) -> None:

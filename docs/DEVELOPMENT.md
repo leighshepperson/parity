@@ -161,7 +161,7 @@ python -m venv "$PARITY_SMOKE_DIR/controller"
 "$PARITY_SMOKE_DIR/controller/bin/python" -m pip install \
   "$PARITY_SMOKE_DIR"/dist/parity_check-*.whl
 "$PARITY_SMOKE_DIR/controller/bin/python" -m pip install tox tox-uv uv
-"$PARITY_SMOKE_DIR/controller/bin/parity" version
+"$PARITY_SMOKE_DIR/controller/bin/parity" --version
 "$PARITY_SMOKE_DIR/controller/bin/parity" migration run \
   --workspace path/to/parity.workspace.toml
 ```

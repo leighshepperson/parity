@@ -38,8 +38,8 @@ Treat the entire artifact directory at the same classification as its source fix
 8. Pin Parity and dependency versions for release gates; verify published package provenance.
 9. Keep secrets, customer names, private paths and copied data out of migration unit IDs and
    exclusion reasons, even though report projections apply ordinary diagnostic redaction.
-10. Review the candidate checkout and package indexes before a managed workspace installs from
-    either source; use an approved mirror or offline cache where policy requires it.
+10. Review every local checkout and package index before a managed workspace installs either side;
+    use an approved mirror or offline cache where policy requires it.
 
 ## Secrets
 
@@ -93,13 +93,13 @@ their approved registry.
 
 The optional migration workspace resolves hash-pinned requirements locks and creates isolated
 target environments. Resolution and installation may access configured package indexes and their
-normal caches. The exact reference requirement, lane requirement files, candidate packaging
-metadata and every resolved dependency are supply-chain inputs. Use a trusted index, review lock
-changes and keep `.parity/workspace` private because generated configuration can contain local
-paths. Managed setup rejects a workspace/import layout that exposes one editable checkout to the
-other target: otherwise a flat-layout package could shadow the installed reference while package
-metadata still appeared correct. Keep the workspace and wrappers in a separate `migrations/`
-directory and do not add either checkout root to target `PYTHONPATH`.
+normal caches. Either side's exact released requirement, each local checkout's packaging metadata,
+lane requirement files and every resolved dependency are supply-chain inputs. Use a trusted index,
+review lock changes and keep `.parity/workspace` private because generated configuration can contain
+local paths. Managed setup rejects a workspace/import layout that exposes one editable checkout to
+the wrong target: otherwise a flat-layout package could shadow the intended installation while
+package metadata still appeared correct. Keep the workspace and wrappers in a separate
+`migrations/` directory and do not add either checkout root to target `PYTHONPATH`.
 
 When environment resolution or setup fails, Parity captures raw tool stdout and stderr under
 `.parity/workspace/logs/` while keeping it out of the data-safe terminal error. Those private logs
@@ -145,13 +145,17 @@ in every dependency lane. `parity evidence verify` checks local artifact integri
 report-referenced finding. Both commands must be run only against trusted source and packaging
 metadata, or inside the hardened environment described below.
 
-Configured runs and artifact replay execute the selected Python interpreter or command path. A project-local
-virtual-environment entry point may be a symlink to a host Python binary; Parity preserves that
-entry point because its surrounding environment determines installed packages. Replay requires the
-recorded path to stay lexically within the invocation project, but this is provenance hygiene, not
-a sandbox or trust boundary. Review repository code and interpreter paths before replaying evidence
-from another source. Fixture, manifest and workdir containment checks continue to resolve symlinks
-and reject escapes.
+Configured runs and artifact replay execute the selected Python interpreter or command path. A
+configuration-local virtual-environment entry point may be a symlink to a host Python binary; Parity
+preserves that entry point because its surrounding environment determines installed packages.
+Configured replay paths are relative to the directory containing `parity.toml` and replay must be
+launched from that directory. Paths must stay lexically within that configuration base, but this is
+provenance hygiene, not a sandbox or trust boundary. External or missing paths leave bounded blocker
+codes instead of host locations. A managed workspace, its generated environments and path-like
+executables must remain inside the configured `parity.toml` directory for automatic replay;
+wrappers import from the workspace directory. Review repository code and interpreter paths before
+replaying evidence from another source. Fixture, manifest and workdir containment checks continue
+to resolve symlinks and reject escapes.
 
 For third-party or AI-produced code that has not been reviewed, put the entire Parity invocation in
 a container/VM with:

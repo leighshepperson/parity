@@ -209,10 +209,18 @@ is omitted for schemas it cannot represent. Bundle filenames are opaque: `replay
 file to its logical input name. `manifest.json` binds case/config metadata, hashes and
 artifact schema. `replay.json` contains the
 sanitized executable contract and argument vector needed to reproduce the case, and records that
-replay must be launched from the original project invocation directory. Import roots outside that
-directory are deliberately non-replayable rather than replaced with a potentially different
-same-named module. Reports are separate projections that omit frame and value data. Artifact writes
-use a temporary directory and final rename so interrupted runs do not look complete.
+replay must be launched from its project base. Configured runs use the directory containing the
+loaded `parity.toml`; direct live runs use their invocation directory. Import roots, interpreters,
+workdirs and path-like commands outside that base are deliberately non-replayable rather than
+replaced with a potentially different same-named module or runtime. An optional top-level
+`replay_blockers` map preserves a bounded per-side `live_callable`, `external_python`,
+`external_workdir`, `external_command` or `missing_command` reason without preserving an external
+path, so replay can give an actionable repair.
+Managed wrappers import from the workspace directory, and that directory plus its generated
+environments must be contained by the configured `parity.toml` directory. Other managed layouts
+are rejected before setup so automatic replay paths cannot silently become external.
+Reports are separate projections that omit frame and value data. Artifact writes use a temporary
+directory and final rename so interrupted runs do not look complete.
 
 Manifest contract 1 hash-binds every artifact file. Replay contract 1 represents one to three named
 inputs through a single `inputs` list; a single-frame case uses the reserved logical name `input`.

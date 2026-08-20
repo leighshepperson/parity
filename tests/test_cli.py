@@ -200,6 +200,10 @@ def test_version_and_init_are_runnable(tmp_path: Path) -> None:
     assert version.exit_code == 0
     assert version.stdout.strip() == __version__
 
+    version_option = runner.invoke(cli.app, ["--version"])
+    assert version_option.exit_code == 0
+    assert version_option.stdout.strip() == __version__
+
     config_path = tmp_path / "nested" / "parity.toml"
     created = runner.invoke(cli.app, ["init", str(config_path)])
     assert created.exit_code == 0

@@ -327,6 +327,7 @@ def write_project_config(
     candidate_adapter: str = "auto",
     reference_python: str | Path | None = None,
     candidate_python: str | Path | None = None,
+    target_workdir: str | Path | None = None,
     record_distributions: Sequence[str] = (),
     row_keys: Sequence[str] = (),
     force: bool = False,
@@ -353,6 +354,7 @@ def write_project_config(
         if os.name != "nt" and python_path is not None and not os.access(python_path, os.X_OK):
             raise ValueError(f"{label} Python executable is not executable")
 
+    effective_workdir = Path.cwd() if target_workdir is None else Path(target_workdir)
     content = render_project_config(
         reference=reference,
         candidate=candidate,
@@ -371,8 +373,8 @@ def write_project_config(
             else None
         ),
         workdir=(
-            _relative_config_path(Path.cwd(), destination)
-            if Path.cwd().resolve() != destination.parent.resolve()
+            _relative_config_path(effective_workdir, destination)
+            if effective_workdir.resolve() != destination.parent.resolve()
             else None
         ),
         record_distributions=record_distributions,

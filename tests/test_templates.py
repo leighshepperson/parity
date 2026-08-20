@@ -170,6 +170,24 @@ def test_project_writer_validates_fixture_and_preserves_relative_paths(tmp_path:
     assert not (config_path.parent / "parity_example.py").exists()
 
 
+def test_project_writer_can_anchor_targets_beside_a_nested_config(tmp_path: Path) -> None:
+    fixture = tmp_path / "input.parquet"
+    pq.write_table(pa.table({"id": [1]}), fixture)
+    config_path = tmp_path / "migrations" / "parity.toml"
+
+    write_project_config(
+        config_path,
+        reference="migration_adapters:transform",
+        candidate="migration_adapters:transform",
+        fixture=fixture,
+        target_workdir=config_path.parent,
+    )
+
+    case = tomllib.loads(config_path.read_text(encoding="utf-8"))["cases"][0]
+    assert "workdir" not in case["reference"]
+    assert "workdir" not in case["candidate"]
+
+
 def test_project_writer_preserves_distinct_virtualenv_python_symlinks(tmp_path: Path) -> None:
     fixture = tmp_path / "input.parquet"
     pq.write_table(pa.table({"id": [1]}), fixture)

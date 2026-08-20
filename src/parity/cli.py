@@ -58,6 +58,27 @@ def _print_path_status(label: str, path: Path, *, style: str = "green") -> None:
     console.print(rendered)
 
 
+def _version_option_callback(value: bool) -> None:
+    if value:
+        console.print(__version__)
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_version_option_callback,
+            is_eager=True,
+            help="Print the installed Parity version and exit",
+        ),
+    ] = False,
+) -> None:
+    """Verify that a changed computation still means the same thing."""
+
+
 def _atomic_write_output(path: Path, content: str) -> None:
     """Write one CLI output atomically, including missing parent directories."""
 
@@ -390,10 +411,10 @@ def _render_migration_result(result: MigrationResult) -> None:
 
 @migration_app.command("init")
 def migration_init(
-    reference: Annotated[
+    reference_package: Annotated[
         str | None,
         typer.Option(
-            "--reference",
+            "--reference-package",
             help="Exact released requirement, for example package==1.2.3",
         ),
     ] = None,
@@ -401,17 +422,29 @@ def migration_init(
         Path | None,
         typer.Option(
             "--reference-path",
-            help="Existing local reference checkout (mutually exclusive with --reference)",
+            help=(
+                "Existing local reference checkout (mutually exclusive with --reference-package)"
+            ),
         ),
     ] = None,
     workspace_path: Annotated[
         Path,
         typer.Option("--workspace", "-w", help="Workspace file to create"),
     ] = Path("migrations/parity.workspace.toml"),
-    candidate: Annotated[
-        Path,
-        typer.Option("--candidate", help="Existing local candidate checkout"),
-    ] = Path("."),
+    candidate_package: Annotated[
+        str | None,
+        typer.Option(
+            "--candidate-package",
+            help="Exact released requirement, for example package==2.0.0",
+        ),
+    ] = None,
+    candidate_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidate-path",
+            help="Existing local candidate checkout; defaults to the current directory",
+        ),
+    ] = None,
     python_version: Annotated[
         str | None,
         typer.Option(
@@ -452,12 +485,60 @@ def migration_init(
             help="Dependency lane as NAME or NAME=REQUIREMENTS; repeatable",
         ),
     ] = None,
+    target: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help="Import target used by both sides when scaffolding a new config",
+        ),
+    ] = None,
+    reference_target: Annotated[
+        str | None,
+        typer.Option(
+            "--reference-target",
+            help="Reference import target; overrides --target",
+        ),
+    ] = None,
+    candidate_target: Annotated[
+        str | None,
+        typer.Option(
+            "--candidate-target",
+            help="Candidate import target; overrides --target",
+        ),
+    ] = None,
+    fixture: Annotated[
+        Path | None,
+        typer.Option("--fixture", help="Fixture for a newly scaffolded migration case"),
+    ] = None,
+    case_name: Annotated[
+        str,
+        typer.Option("--case-name", help="Name for a newly scaffolded migration case"),
+    ] = "migration",
+    reference_adapter: Annotated[
+        str,
+        typer.Option("--reference-adapter", help="auto, pandas, polars or arrow"),
+    ] = "auto",
+    candidate_adapter: Annotated[
+        str,
+        typer.Option("--candidate-adapter", help="auto, pandas, polars or arrow"),
+    ] = "auto",
+    record_distribution: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--record-distribution",
+            help="Additional distribution version to record; repeatable",
+        ),
+    ] = None,
+    row_key: Annotated[
+        list[str] | None,
+        typer.Option("--row-key", help="Unique output key column; repeatable"),
+    ] = None,
     force: Annotated[
         bool,
         typer.Option("--force", help="Replace an existing workspace file"),
     ] = False,
 ) -> None:
-    """Declare one active released/local-reference to local-candidate migration."""
+    """Declare a managed migration and optionally scaffold its first case."""
 
     from parity.migration import (
         MigrationConfigError,
@@ -472,10 +553,15 @@ def migration_init(
         rebase_workspace_path,
         write_workspace,
     )
+    from parity.templates import write_project_config
 
     invocation = Path.cwd()
-    if (reference is None) == (reference_path is None):
-        _fail("set exactly one of --reference or --reference-path")
+    if (reference_package is None) == (reference_path is None):
+        _fail("set exactly one of --reference-package or --reference-path")
+    if candidate_package is not None and candidate_path is not None:
+        _fail("set exactly one of --candidate-package or --candidate-path")
+    if candidate_package is None and candidate_path is None:
+        candidate_path = Path(".")
     absolute_workspace = (
         workspace_path if workspace_path.is_absolute() else invocation / workspace_path
     )
@@ -484,9 +570,56 @@ def migration_init(
     if os.path.lexists(absolute_workspace) and not force:
         _fail(f"{workspace_path} already exists; pass --force to replace it")
 
+    scaffold_requested = any(
+        (
+            target is not None,
+            reference_target is not None,
+            candidate_target is not None,
+            fixture is not None,
+            case_name != "migration",
+            reference_adapter != "auto",
+            candidate_adapter != "auto",
+            bool(record_distribution),
+            bool(row_key),
+        )
+    )
+    generated_config = False
     generated_manifest = False
     try:
-        configured = load_config(absolute_config)
+        if os.path.lexists(absolute_config):
+            if scaffold_requested:
+                raise WorkspaceError(
+                    "the reviewed Parity config already exists; omit --target, --fixture and "
+                    "other case-scaffolding options"
+                )
+            configured = load_config(absolute_config)
+        else:
+            effective_reference_target = reference_target or target
+            effective_candidate_target = candidate_target or target
+            if (
+                fixture is None
+                or effective_reference_target is None
+                or effective_candidate_target is None
+            ):
+                raise WorkspaceError(
+                    "the Parity config is missing; supply --fixture and either --target or both "
+                    "--reference-target and --candidate-target to scaffold it"
+                )
+            absolute_fixture = fixture if fixture.is_absolute() else invocation / fixture
+            write_project_config(
+                absolute_config,
+                reference=effective_reference_target,
+                candidate=effective_candidate_target,
+                fixture=absolute_fixture,
+                case_name=case_name,
+                reference_adapter=reference_adapter,
+                candidate_adapter=candidate_adapter,
+                target_workdir=absolute_workspace.parent,
+                record_distributions=record_distribution or (),
+                row_keys=row_key or (),
+            )
+            generated_config = True
+            configured = load_config(absolute_config)
         if os.path.lexists(absolute_manifest):
             load_migration_manifest(absolute_manifest)
         else:
@@ -515,9 +648,10 @@ def migration_init(
             raise WorkspaceError("--report-dir must stay inside the workspace directory")
         created = write_workspace(
             workspace_path,
-            reference=reference,
+            reference_package=reference_package,
             reference_path=reference_path,
-            candidate=candidate,
+            candidate_package=candidate_package,
+            candidate_path=candidate_path,
             python_version=python_version,
             reference_python_version=reference_python_version,
             candidate_python_version=candidate_python_version,
@@ -531,35 +665,46 @@ def migration_init(
     except FileExistsError as exc:
         if generated_manifest:
             absolute_manifest.unlink(missing_ok=True)
+        if generated_config:
+            absolute_config.unlink(missing_ok=True)
         _fail(str(exc))
-    except (ConfigError, MigrationConfigError, WorkspaceError) as exc:
+    except (ConfigError, MigrationConfigError, WorkspaceError, ValueError) as exc:
         if generated_manifest:
             absolute_manifest.unlink(missing_ok=True)
+        if generated_config:
+            absolute_config.unlink(missing_ok=True)
         _fail(str(exc))
     except OSError as exc:
         if generated_manifest:
             absolute_manifest.unlink(missing_ok=True)
+        if generated_config:
+            absolute_config.unlink(missing_ok=True)
         _fail(f"migration workspace could not be written ({type(exc).__name__})")
     _print_path_status("created", created)
+    if generated_config:
+        _print_path_status("created migration contract; review", absolute_config)
     if generated_manifest:
         _print_path_status("created starter ledger; review", absolute_manifest)
-    if reference_path is None:
+    if reference_package is not None and candidate_package is not None:
+        console.print("released pair declared; setup will lock and verify both exact versions")
+    elif reference_path is not None and candidate_path is not None:
         console.print(
-            "active pair declared; setup will validate candidate packaging without modifying it"
+            "local pair declared; setup will verify both editable installs and source revisions"
         )
     else:
         console.print(
-            "local pair declared; setup will verify both editable installs and source revisions"
+            "active pair declared (mixed sources); setup will install the local checkout "
+            "without modifying it"
         )
     console.print(f"next: parity migration run --workspace {created}", markup=False)
 
 
 @migration_app.command("advance")
 def migration_advance(
-    reference: Annotated[
+    reference_package: Annotated[
         str,
         typer.Option(
-            "--reference",
+            "--reference-package",
             help="New exact released baseline, using the same distribution name",
         ),
     ],
@@ -573,7 +718,7 @@ def migration_advance(
     from parity.migration_workspace import WorkspaceError, advance_workspace
 
     try:
-        advanced = advance_workspace(workspace_path, reference=reference)
+        advanced = advance_workspace(workspace_path, reference_package=reference_package)
     except WorkspaceError as exc:
         _fail(str(exc))
     except OSError as exc:
