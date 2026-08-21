@@ -1571,7 +1571,11 @@ def replay(
         if result.status is Status.FAILED:
             raise typer.Exit(1)
         return
-    render_terminal(result, console=console)
+    render_terminal(
+        result,
+        console=console,
+        artifact_renderer=lambda path: _cli_path(path),
+    )
     if result.status is Status.ERROR:
         raise typer.Exit(2)
     if result.status is Status.FAILED:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.2
+
+### Replay UX
+
+- Render human `parity replay` artifact paths relative to the invocation directory, matching the
+  JSON contract and keeping the reported evidence directly usable from unrelated working
+  directories.
+
 ## 0.14.1
 
 ### Migration workflow UX

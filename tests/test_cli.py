@@ -909,6 +909,43 @@ def test_replay_preserves_exit_contract(tmp_path: Path, monkeypatch) -> None:
     assert "Parity ERROR" in result.stdout
 
 
+def test_replay_prints_artifact_path_relative_to_invocation(tmp_path: Path, monkeypatch) -> None:
+    artifact = tmp_path / "project/artifacts/orders/finding"
+    artifact.mkdir(parents=True)
+    invocation = tmp_path / "unrelated"
+    invocation.mkdir()
+    suite = SuiteResult(
+        status=Status.FAILED,
+        cases=[
+            CaseResult(
+                name="orders",
+                status=Status.FAILED,
+                examples_run=1,
+                failures=[
+                    ExampleResult(
+                        source="replay",
+                        status=Status.FAILED,
+                        artifact=artifact,
+                        finding_signature="ms3:" + "a" * 64,
+                    )
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr("parity.engine.replay_artifact", lambda _path: suite)
+    monkeypatch.chdir(invocation)
+
+    result = runner.invoke(
+        cli.app,
+        ["replay", "../project/artifacts/orders/finding"],
+    )
+
+    assert result.exit_code == 1
+    rendered = "../project/artifacts/orders/finding"
+    assert f"artifact: {rendered}" in result.stdout
+    assert (invocation / rendered).resolve() == artifact.resolve()
+
+
 def test_replay_json_is_one_data_safe_document_for_results_and_errors(
     tmp_path: Path, monkeypatch
 ) -> None:
