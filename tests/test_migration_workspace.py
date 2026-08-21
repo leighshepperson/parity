@@ -772,8 +772,9 @@ def test_local_lock_resolution_uses_each_sources_own_dependency_metadata(
         cwd: Path,
         operation: str,
         failure_log: Path,
+        environment: dict[str, str],
     ) -> subprocess.CompletedProcess[str]:
-        del cwd, operation, failure_log
+        del cwd, operation, failure_log, environment
         commands.append(command)
         output = Path(command[command.index("--output-file") + 1])
         output.write_text("pyarrow==20.0.0\n", encoding="utf-8")
@@ -788,6 +789,7 @@ def test_local_lock_resolution_uses_each_sources_own_dependency_metadata(
             uv="/tools/uv",
             state_root=state,
             refresh=False,
+            environment={},
         )
 
     assert str(reference / "pyproject.toml") in commands[0]
@@ -833,8 +835,9 @@ def test_released_pair_lock_inputs_pin_each_declared_package_version(
         cwd: Path,
         operation: str,
         failure_log: Path,
+        environment: dict[str, str],
     ) -> subprocess.CompletedProcess[str]:
-        del cwd, operation, failure_log
+        del cwd, operation, failure_log, environment
         commands.append(command)
         output = Path(command[command.index("--output-file") + 1])
         output.write_text("candidate-lib==1.9.0\n", encoding="utf-8")
@@ -849,6 +852,7 @@ def test_released_pair_lock_inputs_pin_each_declared_package_version(
             uv="/tools/uv",
             state_root=state,
             refresh=False,
+            environment={},
         )
 
     assert (
@@ -869,7 +873,9 @@ def test_released_pair_lock_inputs_pin_each_declared_package_version(
     os.environ.get("PARITY_WORKSPACE_FLOOR_SMOKE") != "1",
     reason="requires the exact managed-workspace tool floor installed by CI",
 )
-def test_generated_tox_config_runs_on_declared_tool_floor(tmp_path: Path) -> None:
+def test_generated_tox_config_runs_on_declared_tool_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     expected_versions = {
         "tox": "4.44.0",
         "tox-uv": "1.29.0",
@@ -916,7 +922,12 @@ def test_generated_tox_config_runs_on_declared_tool_floor(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    environment = os.environ.copy()
+    unusable_home = tmp_path / "unusable-home"
+    unusable_home.write_text("not a directory\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(unusable_home))
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    environment = migration_workspace_module._workspace_tool_environment(state_root)
+    assert environment["UV_CACHE_DIR"] == str(state_root / "cache")
     environment["UV_PYTHON_DOWNLOADS"] = "never"
     completed = subprocess.run(
         [
@@ -965,6 +976,8 @@ def test_setup_compiles_locks_runs_tox_and_queries_worker_interpreters(
     )
     tools = {"uv": "/tools/uv", "tox": "/tools/tox"}
     monkeypatch.setattr("parity.migration_workspace._tool", lambda name: (tools[name],))
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    monkeypatch.setenv("PARITY_TEST_INHERITED", "yes")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -1005,6 +1018,12 @@ def test_setup_compiles_locks_runs_tox_and_queries_worker_interpreters(
     assert len(tox_runs) == 1
     assert all(kwargs["capture_output"] is True for _, kwargs in calls)
     assert all(kwargs["check"] is False for _, kwargs in calls)
+    expected_cache = str(tmp_path / ".parity/workspace/cache")
+    environments = [cast(dict[str, str], kwargs["env"]) for _, kwargs in calls]
+    assert all(environment["UV_CACHE_DIR"] == expected_cache for environment in environments)
+    assert all(environment["PARITY_TEST_INHERITED"] == "yes" for environment in environments)
+    assert "UV_CACHE_DIR" not in os.environ
+    assert (tmp_path / ".parity/workspace/cache").is_dir()
     reference_input = (tmp_path / ".parity/workspace/inputs/release.reference.in").read_text(
         encoding="utf-8"
     )
@@ -1044,6 +1063,33 @@ def test_workspace_tools_use_the_controller_interpreter_instead_of_path(
 
     assert migration_workspace_module._tool("uv") == (sys.executable, "-I", "-m", "uv")
     assert migration_workspace_module._tool("tox") == (sys.executable, "-I", "-m", "tox")
+
+
+def test_workspace_tool_environment_defaults_cache_without_mutating_process_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_root = tmp_path / ".parity/workspace"
+    state_root.mkdir(parents=True)
+    unusable_home = tmp_path / "unusable-home"
+    unusable_home.write_text("not a directory\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(unusable_home))
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+
+    defaulted = migration_workspace_module._workspace_tool_environment(state_root)
+
+    assert defaulted["HOME"] == str(unusable_home)
+    assert defaulted["UV_CACHE_DIR"] == str(state_root / "cache")
+    assert (state_root / "cache").is_dir()
+    assert "UV_CACHE_DIR" not in os.environ
+
+    configured_cache = tmp_path / "approved-offline-cache"
+    monkeypatch.setenv("UV_CACHE_DIR", str(configured_cache))
+
+    configured = migration_workspace_module._workspace_tool_environment(state_root)
+
+    assert configured["UV_CACHE_DIR"] == str(configured_cache)
+    assert os.environ["UV_CACHE_DIR"] == str(configured_cache)
 
 
 def test_source_revision_tracks_head_dirty_state_and_worktree_content(tmp_path: Path) -> None:
@@ -1324,7 +1370,7 @@ def test_private_state_symlink_cannot_escape_workspace(tmp_path: Path, monkeypat
     assert not (outside / "workspace").exists()
 
 
-@pytest.mark.parametrize("child", ["inputs", "locks", "envs", "logs"])
+@pytest.mark.parametrize("child", ["inputs", "locks", "envs", "logs", "cache"])
 def test_private_state_child_symlink_cannot_escape_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
