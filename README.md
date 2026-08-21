@@ -183,7 +183,16 @@ command = ["./bin/new-adapter", "--mode", "compatibility"]
 ```
 
 Command targets implement the small versioned process protocol; they may be Python, Rust, Java,
-C/C++, Fortran or anything else that can read/write JSON and Arrow IPC. See the
+C/C++, Fortran or anything else that can read/write JSON and Arrow IPC. For a Python boundary around
+an external program, scaffold the protocol mechanics and implement only the project mapping:
+
+```bash
+parity adapter init adapters/legacy.py
+```
+
+The generated module uses the command-adapter SDK and is configured as
+`command = ["parity", "adapter", "serve", "adapters/legacy.py"]`. See the
+[adapter SDK guide](docs/TARGET_ADAPTER_SDK.md), the normative
 [target protocol](docs/TARGET_PROTOCOL.md) and the executable
 [single-container Fortran-to-Python proof](case_studies/fortran_python/README.md).
 
@@ -435,6 +444,7 @@ code in a container or hardened runner.
 - [User guide](docs/USER_GUIDE.md)
 - [Use cases and current boundaries](docs/USE_CASES.md)
 - [Configuration reference](docs/CONFIG_REFERENCE.md)
+- [Python command-adapter SDK](docs/TARGET_ADAPTER_SDK.md)
 - [External target protocol](docs/TARGET_PROTOCOL.md)
 - [Architecture and artifact contracts](docs/ARCHITECTURE.md)
 - [Migration completion protocol](docs/AGENT_MIGRATION.md)

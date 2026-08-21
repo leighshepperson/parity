@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import os
 import shlex
+import stat
+import sys
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -37,8 +40,13 @@ evidence_app = typer.Typer(
     help="Verify retained counterexamples referenced by a Parity report.",
     no_args_is_help=True,
 )
+adapter_app = typer.Typer(
+    help="Create and serve supported adapters for external command targets.",
+    no_args_is_help=True,
+)
 app.add_typer(migration_app, name="migration")
 app.add_typer(evidence_app, name="evidence")
+app.add_typer(adapter_app, name="adapter")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -255,6 +263,110 @@ def version_command() -> None:
     """Print the installed Parity version."""
 
     console.print(__version__)
+
+
+@adapter_app.command("init")
+def adapter_init(
+    path: Annotated[
+        Path,
+        typer.Argument(help="Python adapter module to create"),
+    ] = Path("target_adapter.py"),
+    program: Annotated[
+        str,
+        typer.Option("--program", help="Target executable path relative to the adapter"),
+    ] = "bin/legacy-target",
+    runtime_name: Annotated[
+        str,
+        typer.Option("--runtime", help="Stable name of the wrapped runtime"),
+    ] = "legacy-target",
+    runtime_version: Annotated[
+        str,
+        typer.Option("--runtime-version", help="Stable version of the wrapped runtime"),
+    ] = "1.0",
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Replace an existing adapter file"),
+    ] = False,
+) -> None:
+    """Create one deliberately incomplete, reviewable command adapter."""
+
+    from parity.templates import write_target_adapter
+
+    try:
+        created = write_target_adapter(
+            path,
+            force=force,
+            program=program,
+            runtime_name=runtime_name,
+            runtime_version=runtime_version,
+        )
+    except (FileExistsError, OSError, TypeError, ValueError) as exc:
+        _fail(str(exc))
+    shown = _written_path(created)
+    command_path = _cli_path(created)
+    _print_path_status("created", shown)
+    typer.echo("add this endpoint to parity.toml:")
+    typer.echo("[cases.reference]")
+    typer.echo(
+        "command = " + json.dumps(["parity", "adapter", "serve", command_path], ensure_ascii=False)
+    )
+    typer.echo("next: parity doctor --config parity.toml")
+
+
+def _load_command_adapter(path: Path) -> Any:
+    """Load one explicit regular Python file and return its exported adapter."""
+
+    source = path if path.is_absolute() else Path.cwd() / path
+    try:
+        metadata = source.lstat()
+    except OSError:
+        raise ValueError("adapter module is unavailable") from None
+    if (
+        source.suffix != ".py"
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or source.is_symlink()
+    ):
+        raise ValueError("adapter module must be a single-linked regular Python file")
+    source = source.resolve(strict=True)
+    specification = importlib.util.spec_from_file_location("_parity_command_adapter", source)
+    if specification is None or specification.loader is None:
+        raise ValueError("adapter module could not be loaded")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    old_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    parent = str(source.parent)
+    if parent not in sys.path:
+        sys.path.insert(0, parent)
+    try:
+        specification.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(specification.name, None)
+        raise ValueError("adapter module could not be loaded") from None
+    finally:
+        sys.dont_write_bytecode = old_dont_write_bytecode
+
+    from parity.target_adapter import CommandAdapter
+
+    adapter = getattr(module, "adapter", None)
+    if not isinstance(adapter, CommandAdapter):
+        raise ValueError("adapter module must export one CommandAdapter as 'adapter'")
+    return adapter
+
+
+@adapter_app.command("serve")
+def adapter_serve(
+    path: Annotated[Path, typer.Argument(help="Python adapter module")],
+    session_root: Annotated[Path, typer.Argument(help="Private protocol session root")],
+) -> None:
+    """Serve one generated adapter through target protocol v1."""
+
+    try:
+        adapter = _load_command_adapter(path)
+    except (OSError, TypeError, ValueError):
+        raise typer.Exit(1) from None
+    adapter.serve(session_root)
 
 
 @app.command("schema")

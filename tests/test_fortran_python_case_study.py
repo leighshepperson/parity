@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import stat
 from pathlib import Path
 from types import ModuleType
 
@@ -31,7 +30,12 @@ def test_fortran_python_case_study_has_replayable_local_boundaries() -> None:
         "naive-port-cancellation",
     ]
     for case in config.cases:
-        assert case.reference.command == ["./fortran_adapter.py"]
+        assert case.reference.command == [
+            "parity",
+            "adapter",
+            "serve",
+            "fortran_adapter.py",
+        ]
         assert case.reference.workdir == STUDY
         assert case.candidate.workdir == STUDY
         assert not case.performance.enabled
@@ -39,7 +43,8 @@ def test_fortran_python_case_study_has_replayable_local_boundaries() -> None:
         assert case.comparison.atol == 0
     assert config.cases[0].candidate.target == "candidate:correct_port"
     assert config.cases[1].candidate.target == "candidate:naive_port"
-    assert (STUDY / "fortran_adapter.py").stat().st_mode & stat.S_IXUSR
+    adapter_lines = (STUDY / "fortran_adapter.py").read_text(encoding="utf-8").splitlines()
+    assert len(adapter_lines) < 100
 
 
 def test_fortran_python_case_study_models_a_real_cancellation_defect() -> None:

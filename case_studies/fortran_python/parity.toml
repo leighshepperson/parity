@@ -30,7 +30,7 @@ tags = ["control", "cross-language", "fortran", "python"]
 timeout_seconds = 15
 
 [cases.reference]
-command = ["./fortran_adapter.py"]
+command = ["parity", "adapter", "serve", "fortran_adapter.py"]
 
 [cases.candidate]
 target = "candidate:correct_port"
@@ -54,7 +54,7 @@ tags = ["cross-language", "finding", "fortran", "python"]
 timeout_seconds = 15
 
 [cases.reference]
-command = ["./fortran_adapter.py"]
+command = ["parity", "adapter", "serve", "fortran_adapter.py"]
 
 [cases.candidate]
 target = "candidate:naive_port"

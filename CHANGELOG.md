@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.0
+
+### Supported command-adapter SDK
+
+- Add `parity.target_adapter`, a supported Python SDK that owns target protocol v1, secure bounded
+  Arrow/JSON transport, stable runtime provenance, natural input binding, atomic publication and
+  the deliberate distinction between semantic target rejections and adapter failures.
+- Add `parity adapter init` and `parity adapter serve`, so a project can scaffold one reviewable
+  domain adapter and configure it as a cross-platform command endpoint without maintaining a
+  protocol loop, shebang or executable bit.
+- Refactor the executable Fortran-to-Python proof onto the SDK. Its Python adapter now contains only
+  domain validation, compiled-program invocation and result parsing; the runtime image still needs
+  no compiler or environment manager.
+
 ## 0.15.0
 
 ### Cross-language migration proof

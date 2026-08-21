@@ -6,7 +6,7 @@ a compiler, environment manager or container orchestrator. One Docker image cont
 - the Parity controller;
 - a precompiled Fortran reference executable;
 - correct and deliberately defective Python candidates; and
-- one thin command-protocol adapter that maps Arrow input to the Fortran program's text contract.
+- one thin SDK command adapter that maps Arrow input to the Fortran program's text contract.
 
 The numerical contract is Neumaier compensated summation over an ordered `float64` vector. The
 correct Python port preserves the compensation. The defective port uses naive accumulation, a
@@ -24,6 +24,17 @@ The image uses a build stage to compile Fortran. The runtime image deliberately 
 compiler, Docker CLI, tox or uv. It runs a normal `parity doctor`, verifies the correct port over
 generated inputs, finds and shrinks the defective port's cancellation mismatch, then replays the
 same finding from an unrelated working directory.
+
+`fortran_adapter.py` uses `parity.target_adapter` for the target protocol lifecycle, private-file
+validation, Arrow/JSON transport and atomic responses. Its project-owned code is limited to
+checking the compiled executable, validating the canonical `value` column, invoking Fortran and
+parsing one canonical result. Start the same pattern in another project with:
+
+```bash
+parity adapter init adapters/reference.py
+```
+
+See the [command-adapter SDK guide](../../docs/TARGET_ADAPTER_SDK.md) for the generated API.
 
 Expected final output is:
 

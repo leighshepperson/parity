@@ -684,8 +684,28 @@ command = ["./bin/new-contract-adapter", "--compat"]
 and output canonicalisation, so it cannot also set `python`, `adapter`, `pandas_input` or
 `canonicalizer`. It receives private Arrow/JSON requests through target protocol v1 and returns
 strict Return/Raise/Error observations plus generic runtime identity. This is the first-class path
-for Fortran, C/C++, Rust, Java, legacy CLIs and other runtimes; see the
-[external target protocol](TARGET_PROTOCOL.md).
+for Fortran, C/C++, Rust, Java, legacy CLIs and other runtimes.
+
+When Python is a suitable boundary around the external program, scaffold an adapter rather than
+writing the protocol lifecycle by hand:
+
+```bash
+parity adapter init adapters/legacy.py
+```
+
+Implement the generated module's target inspection and `execute` mapping, then use its SDK runner:
+
+```toml
+[cases.reference]
+command = ["parity", "adapter", "serve", "adapters/legacy.py"]
+```
+
+The adapter process needs `parity-check`; the wrapped external target does not. The SDK handles
+private paths, Arrow/JSON transport, persistent sessions and atomic responses. It exposes explicit
+`Return`, `TargetRaised` and `AdapterError` outcomes so application rejection remains semantic while
+invocation or mapping failure remains infrastructure. See the
+[adapter SDK guide](TARGET_ADAPTER_SDK.md) or implement the language-neutral
+[external target protocol](TARGET_PROTOCOL.md) directly.
 
 Pandas callables receive Arrow-backed pandas dtypes by default because that preserves the canonical
 input's nullable integers and its distinction between null and IEEE NaN. Set
@@ -808,6 +828,8 @@ parity init [PATH] [--force]                  create a runnable starter
   [--reference-adapter NAME] [--candidate-adapter NAME]
   [--reference-python PATH] [--candidate-python PATH]
   [--record-distribution NAME] [--row-key COLUMN]
+parity adapter init PATH [--force]            scaffold a Python command adapter
+parity adapter serve PATH                     run an SDK adapter (controller-launched)
 parity inspect FIXTURE [--output PATH]        infer a portable schema
 parity check [--config PATH] [--case NAME]    run campaigns
              [--tag TAG] [--max-examples N]
@@ -851,6 +873,6 @@ and arbitrary local executables through the target protocol. Canonical returns, 
 mutation and process performance are first-class observations. A reviewed adapter can project a
 CLI, file or database result into that return contract, but Parity does not yet isolate and compare
 side effects such as filesystem changes, transactions, network calls or subprocesses itself.
-Target processes isolate failures; they do not securely sandbox hostile code. See
-[use cases and boundaries](USE_CASES.md), the [roadmap](ROADMAP.md),
-[architecture](ARCHITECTURE.md) and [threat model](THREAT_MODEL.md).
+Target processes isolate failures; they do not securely sandbox hostile code. See the
+[command-adapter SDK](TARGET_ADAPTER_SDK.md), [use cases and boundaries](USE_CASES.md), the
+[roadmap](ROADMAP.md), [architecture](ARCHITECTURE.md) and [threat model](THREAT_MODEL.md).
