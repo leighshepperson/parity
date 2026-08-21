@@ -154,3 +154,27 @@ jobs:
           stability-repeats: "2"
           performance: "false"
           artifact-name: parity-action-smoke
+
+  fortran-python-container:
+    name: Fortran to Python container proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build the migration image
+        run: >-
+          docker build
+          --file case_studies/fortran_python/Dockerfile
+          --tag parity-fortran-python:ci
+          .
+      - name: Verify the correct port, defect discovery and replay
+        run: >-
+          docker run --rm
+          --network none
+          --read-only
+          --tmpfs /tmp:rw,exec,nosuid,nodev,size=256m,mode=1777
+          --cap-drop ALL
+          --security-opt no-new-privileges
+          parity-fortran-python:ci

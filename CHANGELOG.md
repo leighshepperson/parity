@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0
+
+### Cross-language migration proof
+
+- Add an executable single-container Fortran-to-Python case study. It verifies a correct numerical
+  port, discovers and shrinks a lost-compensation defect, and replays the same finding from another
+  working directory.
+- Compile Fortran only in the image build stage and continuously prove that the runtime needs no
+  compiler, Docker CLI, tox or uv. Parity remains the behavioural controller rather than a build or
+  environment manager.
+
 ## 0.14.3
 
 ### Managed workspace UX
