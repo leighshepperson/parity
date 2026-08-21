@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from configparser import ConfigParser
 from configparser import Error as ConfigParserError
 from dataclasses import dataclass
@@ -1503,6 +1503,7 @@ def _run_checked(
     cwd: Path,
     operation: str,
     failure_log: Path | None = None,
+    environment: Mapping[str, str],
 ) -> subprocess.CompletedProcess[str]:
     """Run one fixed argv without a shell and with data-safe failures."""
 
@@ -1510,6 +1511,7 @@ def _run_checked(
         completed = subprocess.run(
             list(command),
             cwd=cwd,
+            env=environment,
             text=True,
             capture_output=True,
             check=False,
@@ -1556,6 +1558,15 @@ def _failure_log(state_root: Path, name: str) -> Path:
     return _private_state_directory(state_root, "logs") / f"{name}.log"
 
 
+def _workspace_tool_environment(state_root: Path) -> dict[str, str]:
+    """Return a copied tool environment with a writable managed uv cache."""
+
+    environment = os.environ.copy()
+    if not environment.get("UV_CACHE_DIR"):
+        environment["UV_CACHE_DIR"] = os.fspath(_private_state_directory(state_root, "cache"))
+    return environment
+
+
 def _package_dependency_input(source: Path) -> Path:
     """Return packaging metadata that uv can resolve without installing the project."""
 
@@ -1580,6 +1591,7 @@ def _compile_lane_lock(
     uv: ToolCommand,
     state_root: Path,
     refresh: bool,
+    environment: Mapping[str, str],
 ) -> Path:
     inputs_dir = _private_state_directory(state_root, "inputs")
     locks_dir = _private_state_directory(state_root, "locks")
@@ -1648,6 +1660,7 @@ def _compile_lane_lock(
             cwd=workspace.root,
             operation=f"dependency resolution for lane {lane.name!r} {side} worker",
             failure_log=_failure_log(state_root, f"resolve-{lane.name}-{side}"),
+            environment=environment,
         )
         try:
             rendered_lock = temporary.read_text(encoding="utf-8")
@@ -1690,6 +1703,7 @@ def _query_env_python(
     tox_config: Path,
     state_root: Path,
     env_name: str,
+    environment: Mapping[str, str],
 ) -> Path:
     completed = _run_checked(
         [
@@ -1703,6 +1717,7 @@ def _query_env_python(
         cwd=workspace.root,
         operation=f"interpreter discovery for environment {env_name!r}",
         failure_log=_failure_log(state_root, f"discover-{env_name}"),
+        environment=environment,
     )
     matches = _ENV_PYTHON.findall(completed.stdout)
     if len(matches) != 1:
@@ -1725,8 +1740,9 @@ def _setup_resolved_workspace(
     uv = _tool("uv")
     tox = _tool("tox")
     state_root = _state_root(workspace)
-    for child in ("inputs", "locks", "envs", "logs"):
+    for child in ("inputs", "locks", "envs", "logs", "cache"):
         _private_state_directory(state_root, child)
+    environment = _workspace_tool_environment(state_root)
     for lane in workspace.lanes:
         for side in ("reference", "candidate"):
             _compile_lane_lock(
@@ -1736,6 +1752,7 @@ def _setup_resolved_workspace(
                 uv=uv,
                 state_root=state_root,
                 refresh=refresh_locks,
+                environment=environment,
             )
     tox_config = state_root / "tox.toml"
     _atomic_write_text(
@@ -1751,6 +1768,7 @@ def _setup_resolved_workspace(
             "and locked requirements"
         ),
         failure_log=_failure_log(state_root, "setup-environments"),
+        environment=environment,
     )
     prepared_lanes: list[LaneEnvironment] = []
     for lane in workspace.lanes:
@@ -1760,6 +1778,7 @@ def _setup_resolved_workspace(
             tox_config,
             state_root,
             _lane_env_name(lane.name, "candidate"),
+            environment,
         )
         prepared_lanes.append(
             LaneEnvironment(
@@ -1772,6 +1791,7 @@ def _setup_resolved_workspace(
                     tox_config,
                     state_root,
                     _lane_env_name(lane.name, "reference"),
+                    environment,
                 ),
                 candidate_python=candidate_python,
             )

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.3
+
+### Managed workspace UX
+
+- Default uv's managed-workspace cache to `.parity/workspace/cache` when `UV_CACHE_DIR` is unset,
+  so dependency resolution and environment setup work without a writable user cache while
+  preserving explicit cache overrides.
+
 ## 0.14.2
 
 ### Replay UX

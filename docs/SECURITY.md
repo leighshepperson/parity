@@ -93,8 +93,10 @@ their approved registry.
 
 The optional migration workspace resolves hash-pinned requirements locks and creates isolated
 target environments. Resolution and installation may access configured package indexes and their
-normal caches. Either side's exact released requirement, each local checkout's packaging metadata,
-lane requirement files and every resolved dependency are supply-chain inputs. Use a trusted index,
+normal caches. When `UV_CACHE_DIR` is unset, Parity keeps uv's cache in
+`.parity/workspace/cache`; an explicit override is preserved for an approved shared or offline
+cache. Either side's exact released requirement, each local checkout's packaging metadata, lane
+requirement files and every resolved dependency are supply-chain inputs. Use a trusted index,
 review lock changes and keep `.parity/workspace` private because generated configuration can contain
 local paths. Managed setup rejects a workspace/import layout that exposes one editable checkout to
 the wrong target: otherwise a flat-layout package could shadow the intended installation while

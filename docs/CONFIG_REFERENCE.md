@@ -291,15 +291,17 @@ local/local declaration (using `migration init --force` when replacing the works
 choose the next reviewed `reference_path`.
 
 tox, tox-uv and uv implement this lifecycle behind the Parity commands. Generated locks,
-environments and tox configuration are private state under `.parity/workspace`; users do not need
-to author tox configuration. The `.parity` root is self-ignoring even when a consumer repository
-has no root `.gitignore`. Parity never clones a repository, selects or changes its revision,
-applies patches or edits either local source. Local packaging metadata and resolved
-dependencies are executable supply-chain inputs and must be trusted. Managed target environments
-contain the target package and the PyArrow transport; package metadata or lane requirements must
-supply pandas, Polars or any other selected adapter dependency. They do not install the Parity
-controller. Use explicit endpoint `python` paths in `parity.toml` when environments are provisioned
-elsewhere.
+environments, tox configuration and the default uv cache are private state under
+`.parity/workspace`; users do not need to author tox configuration. When `UV_CACHE_DIR` is unset,
+Parity uses `.parity/workspace/cache` so an unavailable user cache does not block setup. An explicit
+`UV_CACHE_DIR` is preserved for shared or offline caches. The `.parity` root is self-ignoring even
+when a consumer repository has no root `.gitignore`. Parity never clones a repository, selects or
+changes its revision, applies patches or edits either local source. Local packaging metadata and
+resolved dependencies are executable supply-chain inputs and must be trusted. Managed target
+environments contain the target package and the PyArrow transport; package metadata or lane
+requirements must supply pandas, Polars or any other selected adapter dependency. They do not
+install the Parity controller. Use explicit endpoint `python` paths in `parity.toml` when
+environments are provisioned elsewhere.
 
 Managed setup requires each local distribution name to match the shared subject name and to be
 declared statically as `project.name`, `tool.poetry.name`, or `setup.cfg` `[metadata] name`. It
