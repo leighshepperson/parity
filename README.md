@@ -184,7 +184,8 @@ command = ["./bin/new-adapter", "--mode", "compatibility"]
 
 Command targets implement the small versioned process protocol; they may be Python, Rust, Java,
 C/C++, Fortran or anything else that can read/write JSON and Arrow IPC. See the
-[target protocol](docs/TARGET_PROTOCOL.md).
+[target protocol](docs/TARGET_PROTOCOL.md) and the executable
+[single-container Fortran-to-Python proof](case_studies/fortran_python/README.md).
 
 ## Inputs and domain generation
 

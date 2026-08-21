@@ -1,0 +1,73 @@
+version = 1
+artifact_dir = ".parity-fortran"
+jobs = 1
+
+[case_defaults.reference]
+workdir = "."
+
+[case_defaults.candidate]
+adapter = "arrow"
+workdir = "."
+
+[case_defaults.comparison]
+rtol = 0.0
+atol = 0.0
+
+[case_defaults.generation]
+max_findings = 1
+stability_repeats = 2
+seed = 20260821
+derandomize = true
+adversarial_examples = false
+shrink = true
+
+[case_defaults.performance]
+enabled = false
+
+[[cases]]
+name = "correct-port"
+tags = ["control", "cross-language", "fortran", "python"]
+timeout_seconds = 15
+
+[cases.reference]
+command = ["./fortran_adapter.py"]
+
+[cases.candidate]
+target = "candidate:correct_port"
+
+[cases.schema]
+min_rows = 1
+max_rows = 6
+
+[[cases.schema.columns]]
+name = "value"
+dtype = "float64"
+nullable = false
+categories = [0.0, 1.0, -1.0, 9007199254740992.0, -9007199254740992.0]
+
+[cases.generation]
+max_examples = 100
+
+[[cases]]
+name = "naive-port-cancellation"
+tags = ["cross-language", "finding", "fortran", "python"]
+timeout_seconds = 15
+
+[cases.reference]
+command = ["./fortran_adapter.py"]
+
+[cases.candidate]
+target = "candidate:naive_port"
+
+[cases.schema]
+min_rows = 1
+max_rows = 6
+
+[[cases.schema.columns]]
+name = "value"
+dtype = "float64"
+nullable = false
+categories = [0.0, 1.0, -1.0, 9007199254740992.0, -9007199254740992.0]
+
+[cases.generation]
+max_examples = 500
