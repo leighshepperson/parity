@@ -20,6 +20,32 @@ command = ["./bin/candidate-adapter", "--compat"]
 `python`, `adapter`, `pandas_input` and `canonicalizer` do not apply. The command owns adaptation
 and output canonicalisation.
 
+## Python adapter SDK
+
+Most Python command adapters should use `parity.target_adapter` instead of implementing this wire
+format directly:
+
+```bash
+parity adapter init adapters/reference.py
+```
+
+The generated module exports a `CommandAdapter` named `adapter`. Configure the SDK runner as the
+endpoint; Parity appends its private session-root argument when it starts the command:
+
+```toml
+[cases.reference]
+command = ["parity", "adapter", "serve", "adapters/reference.py"]
+```
+
+The SDK handles the persistent session, strict path and request validation, Arrow/JSON transport,
+Return/Raise/Error responses and atomic publication. Project code supplies the runtime identity,
+optional target preflight and canonical-input-to-target-to-canonical-output function. See the
+[Python command-adapter SDK guide](TARGET_ADAPTER_SDK.md).
+
+The rest of this document is the normative language-neutral protocol. Implement it directly when
+the adapter itself cannot use Python or install `parity-check`; external target programs called by
+an SDK adapter still need neither.
+
 ## Session lifecycle
 
 Parity starts one persistent process per side and appends one final argument: the absolute path to
@@ -194,7 +220,9 @@ Every response carries the same path-free runtime object for the lifetime of a s
 - `runtime_name` and `runtime_version` identify the language/runtime or executable contract;
 - Python fields are optional for non-Python commands;
 - `platform_system` and `platform_machine` are bounded labels;
-- `parity_version` is `null` because Parity is not installed in the target;
+- `parity_version` is the installed SDK version when a command uses `parity.target_adapter`; a raw
+  adapter that does not install Parity reports `null`, and the controller records its own version
+  separately;
 - `distributions` is a sorted, bounded list of explicitly relevant package identities; and
 - `identities` may contain sorted `git-worktree-v1` source claims with a revision, dirty flag and
   content digest.
@@ -241,3 +269,7 @@ An adapter is ready when it can:
 
 Keep this adapter small. It should translate one shared behavioural contract, not reimplement
 Parity's generation, comparison, shrinking, finding or replay logic.
+
+The Python SDK owns checklist items 1, 5's response encoding, 6 and the protocol portions of 7.
+Its user still owns target inspection, the canonical mapping, correct semantic classification,
+stable provenance and application-state cleanup.

@@ -15,6 +15,9 @@ from parity.targets import is_import_target
 _CASE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _ADAPTERS = frozenset({"auto", "pandas", "polars", "arrow"})
 MIGRATION_ADAPTER_PLACEHOLDER_MESSAGE = "review and implement the migration contract"
+TARGET_ADAPTER_PLACEHOLDER_MESSAGE = (
+    "implement canonical input to target invocation to canonical output"
+)
 
 
 def _lexists(path: Path) -> bool:
@@ -447,6 +450,102 @@ def migration_contract(frame: pa.Table) -> pa.Table:
 '''
 
 
+def render_target_adapter(
+    *,
+    program: str = "bin/legacy-target",
+    runtime_name: str = "legacy-target",
+    runtime_version: str = "1.0",
+) -> str:
+    """Return one reviewable command-adapter module using the supported SDK."""
+
+    from parity.target_adapter import RuntimeInfo
+
+    program_path = Path(program)
+    if (
+        program_path.is_absolute()
+        or not program_path.parts
+        or program_path in {Path("."), Path("")}
+        or ".." in program_path.parts
+        or any(ord(character) < 32 for character in program)
+    ):
+        raise ValueError("program must be a non-empty relative path without '..'")
+    RuntimeInfo(runtime_name, runtime_version)
+    rendered_program = json.dumps(program_path.as_posix(), ensure_ascii=False)
+    rendered_runtime = json.dumps(runtime_name, ensure_ascii=False)
+    rendered_version = json.dumps(runtime_version, ensure_ascii=False)
+    rendered_placeholder = json.dumps(TARGET_ADAPTER_PLACEHOLDER_MESSAGE)
+    return f'''"""Domain adapter for one external Parity target.
+
+Keep application imports and target invocation inside ``inspect_target`` and
+``execute``. Importing this module must only describe the adapter.
+"""
+
+from pathlib import Path
+
+import pyarrow as pa
+from parity.target_adapter import (
+    AdapterError,
+    CommandAdapter,
+    RuntimeInfo,
+    TargetRaised,  # noqa: F401 - ready for an explicit domain-rejection path
+    require_executable,
+)
+
+PROGRAM = Path(__file__).resolve().parent / {rendered_program}
+
+
+def inspect_target() -> None:
+    """Check target availability without invoking its behaviour."""
+
+    require_executable(PROGRAM)
+
+
+def execute(frame: pa.Table):
+    """Translate canonical Arrow through the target and back to Arrow or JSON."""
+
+    # Validate the canonical domain, invoke PROGRAM, and parse only its stable
+    # machine-readable result. Raise TargetRaised for an explicit domain rejection.
+    raise AdapterError(
+        "adapter_not_implemented",
+        {rendered_placeholder},
+    )
+
+
+adapter = CommandAdapter(
+    runtime=RuntimeInfo(name={rendered_runtime}, version={rendered_version}),
+    inspect=inspect_target,
+    execute=execute,
+)
+
+
+if __name__ == "__main__":
+    adapter.serve()
+'''
+
+
+def write_target_adapter(
+    path: str | Path = "target_adapter.py",
+    *,
+    force: bool = False,
+    program: str = "bin/legacy-target",
+    runtime_name: str = "legacy-target",
+    runtime_version: str = "1.0",
+) -> Path:
+    """Atomically create one SDK adapter without silently replacing user work."""
+
+    destination = Path(path)
+    if destination.suffix != ".py":
+        raise ValueError("adapter destination must use a .py suffix")
+    _validate_replaceable_destination(destination)
+    content = render_target_adapter(
+        program=program,
+        runtime_name=runtime_name,
+        runtime_version=runtime_version,
+    )
+    _atomic_write_text(destination, content, force=force)
+    return destination
+
+
 def write_migration_scaffold(
     config_path: str | Path,
     *,
@@ -529,12 +628,15 @@ def write_starter(path: str | Path = "parity.toml", *, force: bool = False) -> l
 
 __all__ = [
     "MIGRATION_ADAPTER_PLACEHOLDER_MESSAGE",
+    "TARGET_ADAPTER_PLACEHOLDER_MESSAGE",
     "render_config_template",
     "render_example_module",
     "render_migration_adapter",
     "render_project_config",
+    "render_target_adapter",
     "write_config_template",
     "write_migration_scaffold",
     "write_project_config",
     "write_starter",
+    "write_target_adapter",
 ]
