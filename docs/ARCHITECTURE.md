@@ -233,15 +233,19 @@ inputs through a single `inputs` list; a single-frame case uses the reserved log
 Every automatic replay binds target runtime fingerprints and the data-safe effective-configuration
 hash. Replay preflights both target sessions and blocks both implementations on drift or incomplete
 provenance. Evidence without those bindings remains inspectable but is not executable through
-automatic replay. JSON report schema 3 carries data-free mismatch
-signatures and distinct-finding counts.
+automatic replay. JSON report schema 4 carries data-free mismatch signatures, approval state,
+compatibility-budget outcomes and distinct-finding counts.
 
-Distilled-contract manifest 1 is a separate candidate-only boundary. `contract distill` verifies
+Distilled-contract manifest 2 is a separate candidate-only boundary. `contract distill` verifies
 signed report artifacts, copies their minimized inputs and reference observations into a new atomic
 private directory, and removes the reference endpoint entirely. `contract verify` validates every
 bound file, reconstructs only the project-relative candidate, starts a fresh candidate process per
 example and compares the result with the stored observation. It does not generate inputs, benchmark
-or import a reference. See [Distilled contracts](DISTILLED_CONTRACTS.md).
+or import a reference. `contract retire` checks candidate differences against the report-bound
+compatibility budget, requires two exact stable candidate observations, and creates a second
+candidate-baseline contract bound to the prior contract digest. See
+[Distilled contracts](DISTILLED_CONTRACTS.md) and
+[Compatibility budgets](COMPATIBILITY_BUDGETS.md).
 
 The sanitized replay case stores the complete comparison policy, including keyed row alignment,
 and its effective-configuration hash. Replay therefore reconstructs the recorded contract instead
@@ -268,15 +272,17 @@ These seams make engine-neutral growth possible without turning the core into a 
 
 ## Versioning
 
-Seven independently versioned contracts matter:
+Nine independently versioned contracts matter:
 
 1. TOML configuration version.
 2. Migration-manifest version.
 3. Pydantic suite-result/report schema and package version.
 4. Migration-report schema version.
-5. Counterexample manifest/replay artifact version.
-6. Target process-protocol version.
-7. Mismatch-shape fingerprint version (`ms3`).
+5. Compatibility-budget version.
+6. Distilled-contract version.
+7. Counterexample manifest/replay artifact version.
+8. Target process-protocol version.
+9. Mismatch-shape fingerprint version (`ms3`).
 
 Before `1.0`, the latest minor release is the supported line and minor releases may change these
 contracts. Readers reject unsupported contract versions rather than guessing how to interpret

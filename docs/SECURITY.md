@@ -13,13 +13,14 @@ That property reduces exposure; it does not make every output non-sensitive.
 | Migration manifest | No dataframe/value payloads; contains unit IDs and exclusion reasons | User-selected repository path | Developers and reviewers |
 | Migration JSON/terminal report | No dataframe/value payloads; contains redacted inventory metadata | Console or requested path | Developers and CI |
 | Evidence-verification JSON | No dataframe/value payloads; contains redacted case/artifact labels and mismatch digests | User-selected path | Developers and CI |
+| Compatibility budget | No dataframe/value payloads; contains case names, finding digests and reviewer-authored rationales | User-selected repository path | Developers and reviewers |
 | Workspace locks and generated environment config | Package versions/hashes and local source/interpreter paths | `.parity/workspace/` | Developers and CI |
 | `input.arrow` or bundled `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
 | `manifest.json` | Metadata, paths and hashes | Counterexample directory | Restricted engineering team |
 | `result.json` in artifact | Structured mismatch evidence | Counterexample directory | Restricted engineering team |
 | `reference.json` and reference Arrow/JSON output | Yes for successful returns | Counterexample directory | Restricted engineering team |
 | `replay.json` | Command/config references | Counterexample directory | Restricted engineering team |
-| Distilled contract directory | Yes; minimized inputs and exact reference outputs | User-selected project-private path | Restricted engineering team |
+| Distilled/retired contract directory | Yes; minimized inputs and exact baseline outputs plus retirement rationale | User-selected project-private path | Restricted engineering team |
 | `parity doctor --json` | Executable, platform and working-directory paths | Console | Support after review |
 | `parity doctor --config ... --json` | Path-free allowlisted runtime versions | Console | Developers and CI |
 
@@ -42,6 +43,8 @@ Treat the entire artifact directory at the same classification as its source fix
    exclusion reasons, even though report projections apply ordinary diagnostic redaction.
 10. Review every local checkout and package index before a managed workspace installs either side;
     use an approved mirror or offline cache where policy requires it.
+11. Review compatibility-budget changes independently from candidate changes where assurance
+    matters; never treat an `ms3:` digest alone as proof that the underlying difference is safe.
 
 ## Secrets
 
@@ -147,9 +150,10 @@ evaluated. Unknown case names are rejected before a target starts.
 `parity migration run` additionally resolves and installs packages before executing the same union
 in every dependency lane. `parity evidence verify` checks local artifact integrity and replays every
 report-referenced finding. `parity contract verify` checks contract integrity and executes only its
-project-bound candidate; removing the reference does not make candidate code a sandbox. These
-commands must be run only against trusted source and packaging metadata, or inside the hardened
-environment described below.
+project-bound candidate. `parity contract retire` also executes only that candidate, twice per
+stored example, and persists its returned baseline values plus used approval rationales. Removing
+the reference does not make candidate code a sandbox. These commands must be run only against
+trusted source and packaging metadata, or inside the hardened environment described below.
 
 Configured runs and artifact replay execute the selected Python interpreter or command path. A
 configuration-local virtual-environment entry point may be a symlink to a host Python binary; Parity

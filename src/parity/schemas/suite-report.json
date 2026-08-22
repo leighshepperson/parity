@@ -40,6 +40,35 @@
       "title": "CaseProvenance",
       "type": "object"
     },
+    "CompatibilityResult": {
+      "additionalProperties": false,
+      "description": "Derived compatibility-budget outcome for one executed case.",
+      "properties": {
+        "approved_findings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Approved Findings",
+          "type": "array"
+        },
+        "unapproved_findings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unapproved Findings",
+          "type": "array"
+        },
+        "unused_approvals": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unused Approvals",
+          "type": "array"
+        }
+      },
+      "title": "CompatibilityResult",
+      "type": "object"
+    },
     "Diagnosis": {
       "additionalProperties": false,
       "description": "Evidence-based explanation for a class of observed difference.",
@@ -140,6 +169,10 @@
       "additionalProperties": false,
       "description": "One data-safe finding or operational error embedded in a suite report.",
       "properties": {
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
         "artifact": {
           "anyOf": [
             {
@@ -208,6 +241,7 @@
       "required": [
         "source",
         "status",
+        "approved",
         "mismatch_counts",
         "mismatches"
       ],
@@ -854,6 +888,16 @@
       "additionalProperties": false,
       "description": "Data-safe result projection for one configured case.",
       "properties": {
+        "compatibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompatibilityResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "deterministic_examples": {
           "minimum": 0,
           "title": "Deterministic Examples",
@@ -938,6 +982,7 @@
         "diagnoses",
         "performance",
         "provenance",
+        "compatibility",
         "elapsed_seconds"
       ],
       "title": "SuiteCaseReportContract",
@@ -971,7 +1016,7 @@
       "type": "object"
     }
   },
-  "$id": "https://parity-check.dev/schemas/suite-report/v3.json",
+  "$id": "https://parity-check.dev/schemas/suite-report/v4.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Data-eliding projection returned by :func:`parity.reporting.report_payload`.",
@@ -1004,7 +1049,7 @@
       "default": null
     },
     "schema_version": {
-      "const": 3,
+      "const": 4,
       "title": "Schema Version",
       "type": "integer"
     },
@@ -1022,5 +1067,5 @@
   "title": "SuiteReportContract",
   "type": "object",
   "x-parity-contract": "suite-report",
-  "x-parity-contract-version": 3
+  "x-parity-contract-version": 4
 }

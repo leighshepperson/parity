@@ -20,6 +20,8 @@ The current architecture establishes the core verification loop:
 - composable case files/defaults and side-specific arguments without hiding case identity or input
   contracts;
 - batch verification of retained mismatch evidence from suite and migration reports;
+- report-bound compatibility budgets for reviewed case/signature differences, plus stable
+  candidate-baseline promotion for reference retirement;
 - separately locked released/released, released/local, local/released and local/local migration
   workspaces, with target-side Git/content identity for every local source and paired driver
   provenance for local/local pairs; and

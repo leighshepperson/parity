@@ -30,6 +30,7 @@ from parity.execution import (
     ExceptionInfo,
     ExecutionOutcome,
     Observation,
+    _write_arrow,
     execute_isolated,
 )
 from parity.models import (
@@ -37,6 +38,8 @@ from parity.models import (
     CaseProvenance,
     CaseResult,
     ComparisonPolicy,
+    CompatibilityBudget,
+    CompatibilityDecision,
     ExampleResult,
     JsonValue,
     Mismatch,
@@ -248,16 +251,43 @@ class DistilledCase(StrictModel):
         return self
 
 
+class RetirementApproval(StrictModel):
+    """One reviewed difference consumed while promoting the candidate baseline."""
+
+    case: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_.-]+$")
+    finding_signature: str = Field(pattern=r"^ms3:[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class ContractRetirement(StrictModel):
+    """Audit record binding a retired contract to its prior reference baseline."""
+
+    retired_at: datetime
+    source_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stability_repeats: Literal[2] = 2
+    approvals: list[RetirementApproval] = Field(default_factory=list)
+
+    @field_validator("approvals")
+    @classmethod
+    def unique_approvals(cls, approvals: list[RetirementApproval]) -> list[RetirementApproval]:
+        identities = [(approval.case, approval.finding_signature) for approval in approvals]
+        if identities != sorted(set(identities)):
+            raise ValueError("retirement approvals must be sorted and unique")
+        return approvals
+
+
 class DistilledContractManifest(StrictModel):
     """Versioned, candidate-only distilled contract stored as ``contract.json``."""
 
-    version: Literal[1]
+    version: Literal[2]
     created_at: datetime
     parity_version: str
     source_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     path_base: ContractPathBase
     contains_input_data: Literal[True]
     contains_output_data: Literal[True]
+    baseline: Literal["reference", "candidate"]
+    retirement: ContractRetirement | None = None
     cases: list[DistilledCase] = Field(min_length=1)
     files: dict[str, ContractFile] = Field(min_length=1, max_length=1_024)
 
@@ -285,6 +315,10 @@ class DistilledContractManifest(StrictModel):
             raise ValueError("every private contract file must have one unique binding")
         if set(referenced) != set(self.files):
             raise ValueError("contract file manifest must exactly match its bound data files")
+        if self.baseline == "reference" and self.retirement is not None:
+            raise ValueError("a reference-baseline contract cannot contain retirement metadata")
+        if self.baseline == "candidate" and self.retirement is None:
+            raise ValueError("a candidate-baseline contract requires retirement metadata")
         return self
 
 
@@ -295,6 +329,16 @@ class DistillationResult(StrictModel):
     cases: int = Field(ge=1)
     examples: int = Field(ge=1)
     source_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RetirementResult(StrictModel):
+    """Summary returned after promoting a reviewed candidate baseline."""
+
+    path: Path
+    cases: int = Field(ge=1)
+    examples: int = Field(ge=1)
+    approvals: int = Field(ge=0)
+    source_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 def _sha256(path: Path) -> str:
@@ -630,13 +674,14 @@ def distill_contract(
             builder["examples"].append(contract_example.model_dump(mode="json"))
 
         manifest = DistilledContractManifest(
-            version=1,
+            version=2,
             created_at=datetime.now(UTC),
             parity_version=__version__,
             source_report_sha256=hashlib.sha256(raw_report).hexdigest(),
             path_base=ContractPathBase(kind="contract_ancestor", levels=levels),
             contains_input_data=True,
             contains_output_data=True,
+            baseline="reference",
             cases=[DistilledCase.model_validate(case) for case in case_builders.values()],
             files=files,
         )
@@ -694,8 +739,16 @@ def _load_contract(path: str | Path) -> tuple[Path, DistilledContractManifest, s
         raise ContractError("contract.json must be a regular file")
     try:
         raw = contract_path.read_text(encoding="utf-8")
-        manifest = DistilledContractManifest.model_validate_json(raw)
+        payload = json.loads(raw)
     except (OSError, ValueError) as exc:
+        raise ContractError("contract.json is missing or invalid") from exc
+    if not isinstance(payload, dict) or type(payload.get("version")) is not int:
+        raise ContractError("contract.json is missing or invalid")
+    if payload["version"] != 2:
+        raise ContractError("unsupported distilled contract version; rerun parity contract distill")
+    try:
+        manifest = DistilledContractManifest.model_validate(payload)
+    except ValueError as exc:
         raise ContractError("contract.json is missing or invalid") from exc
     for name, metadata in manifest.files.items():
         file_path = _contained_file(root, name)
@@ -881,6 +934,241 @@ def _verify_case(root: Path, project_root: Path, case: DistilledCase) -> CaseRes
     )
 
 
+def _resolved_candidate(project_root: Path, case: DistilledCase) -> CallableSpec:
+    from parity.engine import _resolve_replay_paths, _restore_environment
+
+    case_data: dict[str, Any] = {"candidate": case.candidate.model_dump(mode="json")}
+    try:
+        _restore_environment(case_data, sides=("candidate",))
+        _resolve_replay_paths(case_data, project_root, sides=("candidate",))
+        return CallableSpec.model_validate(case_data["candidate"])
+    except Exception as exc:
+        raise ContractError("candidate configuration cannot be reconstructed") from exc
+
+
+def _retirement_observations(
+    root: Path,
+    project_root: Path,
+    manifest: DistilledContractManifest,
+    budget: CompatibilityBudget | None,
+) -> tuple[dict[tuple[str, int], Observation], list[RetirementApproval]]:
+    from parity.engine import _infrastructure_error, _observation_changed
+
+    approved = {
+        (finding.case, finding.finding_signature): finding
+        for finding in (budget.findings if budget is not None else ())
+        if finding.decision is CompatibilityDecision.APPROVED
+    }
+    observed: dict[tuple[str, int], Observation] = {}
+    used_approvals: set[tuple[str, str]] = set()
+    unapproved: set[tuple[str, str]] = set()
+    for case in manifest.cases:
+        candidate = _resolved_candidate(project_root, case)
+        kwargs = {**case.static_kwargs, **case.candidate_kwargs}
+        for index, example in enumerate(case.examples):
+            expected = _expected_observation(root, example.expected)
+            first = execute_isolated(
+                candidate,
+                _bound_inputs(root, example, case.input_binding),
+                static_args=case.static_args,
+                static_kwargs=kwargs,
+                timeout_seconds=case.timeout_seconds,
+            )
+            second = execute_isolated(
+                candidate,
+                _bound_inputs(root, example, case.input_binding),
+                static_args=case.static_args,
+                static_kwargs=kwargs,
+                timeout_seconds=case.timeout_seconds,
+            )
+            if _infrastructure_error(first) or _infrastructure_error(second):
+                raise ContractError(
+                    f"reference retirement blocked because candidate case {case.name!r} "
+                    "could not be executed reliably"
+                )
+            if _observation_changed(first, second):
+                raise ContractError(
+                    f"reference retirement blocked because candidate case {case.name!r} "
+                    "is nondeterministic on a stored example"
+                )
+            if first.runtime is None:
+                raise ContractError("candidate runtime provenance is unavailable")
+            mismatches = compare_observations(expected, first, case.comparison)
+            if mismatches:
+                signature = mismatch_signature(mismatches)
+                identity = (case.name, signature)
+                if identity in approved:
+                    used_approvals.add(identity)
+                else:
+                    unapproved.add(identity)
+            observed[(case.name, index)] = first
+    if unapproved:
+        ordered = sorted(unapproved)
+        visible = ", ".join(f"{case}={signature}" for case, signature in ordered[:10])
+        remainder = len(ordered) - 10
+        suffix = f" (and {remainder} more)" if remainder else ""
+        raise ContractError(
+            "reference retirement blocked by unapproved finding(s): " + visible + suffix
+        )
+    approvals = [
+        RetirementApproval(
+            case=case,
+            finding_signature=signature,
+            reason=approved[(case, signature)].reason or "",
+        )
+        for case, signature in sorted(used_approvals)
+    ]
+    return observed, approvals
+
+
+def _write_observation(
+    root: Path,
+    prefix: str,
+    observation: Observation,
+) -> tuple[ContractExpectation, dict[str, ContractFile]]:
+    if observation.runtime is None:
+        raise ContractError("candidate runtime provenance is unavailable")
+    output: ContractOutput | None = None
+    files: dict[str, ContractFile] = {}
+    if observation.table is not None:
+        relative = f"{prefix}/expected.arrow"
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_arrow(observation.table, path)
+        output = ContractOutput(kind="arrow", file=relative)
+        files[relative] = ContractFile(sha256=_sha256(path), bytes=path.stat().st_size)
+    elif observation.has_value:
+        relative = f"{prefix}/expected.json"
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(observation.value, sort_keys=True, allow_nan=True) + "\n",
+            encoding="utf-8",
+        )
+        output = ContractOutput(kind="json", file=relative)
+        files[relative] = ContractFile(sha256=_sha256(path), bytes=path.stat().st_size)
+    payload = observation.to_metadata()
+    payload["output"] = output.model_dump(mode="json") if output is not None else None
+    try:
+        expected = ContractExpectation.model_validate(payload)
+    except ValueError as exc:
+        raise ContractError("candidate observation cannot form a retirement baseline") from exc
+    return expected, files
+
+
+def retire_contract(
+    contract: str | Path,
+    destination: str | Path,
+    *,
+    budget: str | Path | CompatibilityBudget | None = None,
+) -> RetirementResult:
+    """Promote a stable, reviewed candidate into a new reference-free baseline."""
+
+    root, manifest, _raw = _load_contract(contract)
+    source_contract_sha256 = _sha256(root / "contract.json")
+    if manifest.baseline != "reference":
+        raise ContractError("only a reference-baseline contract can be retired")
+    project_root = _execution_root(root, manifest.path_base)
+    destination_path, levels = _contract_destination(destination, project_root)
+    selected_budget: CompatibilityBudget | None
+    if isinstance(budget, CompatibilityBudget):
+        selected_budget = budget
+    elif budget is not None:
+        from parity.compatibility import CompatibilityBudgetError, load_compatibility_budget
+
+        try:
+            selected_budget = load_compatibility_budget(budget)
+        except CompatibilityBudgetError as exc:
+            raise ContractError(str(exc)) from exc
+    else:
+        selected_budget = None
+    if (
+        selected_budget is not None
+        and selected_budget.source_report_sha256 != manifest.source_report_sha256
+    ):
+        raise ContractError(
+            "compatibility budget was captured from a different report than this contract"
+        )
+
+    observations, approvals = _retirement_observations(
+        root,
+        project_root,
+        manifest,
+        selected_budget,
+    )
+    if _sha256(root / "contract.json") != source_contract_sha256:
+        raise ContractError("source contract changed while reference retirement was running")
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(
+        tempfile.mkdtemp(prefix=f".{destination_path.name}.pending-", dir=destination_path.parent)
+    )
+    try:
+        (temporary / ".gitignore").write_text("*\n", encoding="utf-8")
+        files: dict[str, ContractFile] = {}
+        retired_cases: list[DistilledCase] = []
+        for case_index, case in enumerate(manifest.cases):
+            examples: list[ContractExample] = []
+            for example_index, example in enumerate(case.examples):
+                inputs: list[ContractInput] = []
+                for item in example.inputs:
+                    metadata = manifest.files[item.file]
+                    files[item.file] = _copy_verified(
+                        _contained_file(root, item.file),
+                        temporary / item.file,
+                        metadata.model_dump(mode="json"),
+                    )
+                    inputs.append(item.model_copy())
+                prefix = f"cases/{case_index:03d}/examples/{example_index:03d}"
+                expected, output_files = _write_observation(
+                    temporary,
+                    prefix,
+                    observations[(case.name, example_index)],
+                )
+                files.update(output_files)
+                examples.append(
+                    ContractExample(
+                        finding_signature=example.finding_signature,
+                        inputs=inputs,
+                        expected=expected,
+                    )
+                )
+            retired_cases.append(case.model_copy(update={"examples": examples}))
+        retired_manifest = DistilledContractManifest(
+            version=2,
+            created_at=datetime.now(UTC),
+            parity_version=__version__,
+            source_report_sha256=manifest.source_report_sha256,
+            path_base=ContractPathBase(kind="contract_ancestor", levels=levels),
+            contains_input_data=True,
+            contains_output_data=True,
+            baseline="candidate",
+            retirement=ContractRetirement(
+                retired_at=datetime.now(UTC),
+                source_contract_sha256=source_contract_sha256,
+                approvals=approvals,
+            ),
+            cases=retired_cases,
+            files=files,
+        )
+        (temporary / "contract.json").write_text(
+            retired_manifest.model_dump_json(indent=2) + "\n",
+            encoding="utf-8",
+        )
+        if destination_path.exists() or destination_path.is_symlink():
+            raise ContractError("contract destination already exists")
+        temporary.rename(destination_path)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return RetirementResult(
+        path=destination_path,
+        cases=len(retired_manifest.cases),
+        examples=sum(len(case.examples) for case in retired_manifest.cases),
+        approvals=len(approvals),
+        source_contract_sha256=source_contract_sha256,
+    )
+
+
 def verify_contract(path: str | Path) -> SuiteResult:
     """Execute only the candidate against every stored reference expectation."""
 
@@ -909,8 +1197,11 @@ def verify_contract(path: str | Path) -> SuiteResult:
 
 __all__ = [
     "ContractError",
+    "ContractRetirement",
     "DistillationResult",
     "DistilledContractManifest",
+    "RetirementResult",
     "distill_contract",
+    "retire_contract",
     "verify_contract",
 ]

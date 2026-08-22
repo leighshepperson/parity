@@ -46,6 +46,8 @@ from parity.models import (
     CaseProvenance,
     CaseResult,
     ComparisonPolicy,
+    CompatibilityFinding,
+    CompatibilityResult,
     ExampleResult,
     FrameSchema,
     GenerationConfig,
@@ -221,7 +223,9 @@ def _store_failure(
 def _status_for(failures: list[ExampleResult], performance: PerformanceResult | None) -> Status:
     if any(failure.status is Status.ERROR for failure in failures):
         return Status.ERROR
-    if failures or (performance is not None and performance.regression):
+    if any(not failure.approved for failure in failures) or (
+        performance is not None and performance.regression
+    ):
         return Status.FAILED
     return Status.PASSED
 
@@ -341,6 +345,7 @@ def _campaign(
     expected_provenance: CaseProvenance | None = None,
     observed_provenance: CaseProvenance | None = None,
     config_sha256: str | None = None,
+    compatibility_findings: Sequence[CompatibilityFinding] | None = None,
 ) -> CaseResult:
     started = time.perf_counter()
     failures: list[ExampleResult] = []
@@ -626,6 +631,7 @@ def _campaign(
                 )
                 failures.append(failure)
                 seen_signatures.add(signature)
+                remember_representative(value)
             if len(seen_signatures) >= generation.max_findings:
                 break
 
@@ -833,9 +839,30 @@ def _campaign(
         )
         failures.append(failure)
         seen_signatures.add(signature)
+        remember_representative(counterexample_value)
 
+    approved_by_signature = {
+        finding.finding_signature: finding
+        for finding in compatibility_findings or ()
+        if finding.decision.value == "approved"
+    }
+    for failure in failures:
+        if failure.finding_signature in approved_by_signature:
+            failure.approved = True
+    observed_signatures = {
+        failure.finding_signature for failure in failures if failure.finding_signature is not None
+    }
+    compatibility = (
+        CompatibilityResult(
+            approved_findings=sorted(observed_signatures & approved_by_signature.keys()),
+            unapproved_findings=sorted(observed_signatures - approved_by_signature.keys()),
+            unused_approvals=sorted(approved_by_signature.keys() - observed_signatures),
+        )
+        if compatibility_findings is not None
+        else None
+    )
     performance: PerformanceResult | None = None
-    semantics_passed = not failures
+    semantics_passed = not any(not failure.approved for failure in failures)
     if not exact_only and semantics_passed and performance_config.enabled:
         if benchmark is None or representative is None:
             failures.append(
@@ -885,7 +912,7 @@ def _campaign(
     diagnostic_mismatches = [
         mismatch
         for failure in failures
-        if failure.status is Status.FAILED
+        if failure.status is Status.FAILED and not failure.approved
         for mismatch in failure.mismatches
     ]
     status = _status_for(failures, None)
@@ -913,6 +940,7 @@ def _campaign(
             candidate=candidate_runtime,
             verification=verification,
         ),
+        compatibility=compatibility,
         elapsed_seconds=time.perf_counter() - started,
     )
 
@@ -924,6 +952,7 @@ def _configured_case(
     exact_only: bool = False,
     expected_provenance: CaseProvenance | None = None,
     config_sha256: str | None = None,
+    compatibility_findings: Sequence[CompatibilityFinding] | None = None,
 ) -> CaseResult:
     configured_started = time.perf_counter()
     input_bundle = case.input_bundle
@@ -1171,6 +1200,7 @@ def _configured_case(
                 verification="verified" if expected_provenance is not None else "captured",
             ),
             config_sha256=config_sha256,
+            compatibility_findings=compatibility_findings,
         )
 
 
@@ -1201,6 +1231,14 @@ def run_suite(
     selected = [
         case for case in config.cases if selected_cases is None or case.name in selected_cases
     ]
+    if config.compatibility_budget is not None:
+        for case in selected:
+            approvals = config.compatibility_budget.approved_for(case.name)
+            if len(approvals) >= case.generation.max_findings:
+                raise ValueError(
+                    f"case {case.name!r} generation.max_findings must exceed its approved "
+                    "compatibility findings so new differences remain discoverable"
+                )
 
     def configured_case(case: CaseConfig) -> CaseResult:
         effective_case = case.model_copy(deep=True)
@@ -1210,6 +1248,18 @@ def run_suite(
             if effective_case.candidate.native_threads is None:
                 effective_case.candidate.native_threads = config.native_threads
         try:
+            budget_findings = (
+                [
+                    finding
+                    for finding in config.compatibility_budget.findings
+                    if finding.case == case.name
+                ]
+                if config.compatibility_budget is not None
+                and any(
+                    finding.case == case.name for finding in config.compatibility_budget.findings
+                )
+                else None
+            )
             return _configured_case(
                 effective_case,
                 ArtifactStore(
@@ -1217,6 +1267,7 @@ def run_suite(
                     invocation_directory=config._base_directory or Path.cwd(),
                 ),
                 config_sha256=config_sha256,
+                compatibility_findings=budget_findings,
             )
         except Exception as error:
             return CaseResult(

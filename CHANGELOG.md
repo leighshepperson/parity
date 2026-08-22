@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.18.0
+
+### Compatibility budgets and reference retirement
+
+- Add `parity budget init` and `parity budget approve` plus a strict, report-hash-bound
+  `compatibility.toml` contract. Approvals are exact case/`ms3:` pairs with required rationale;
+  approved findings remain visible while new, review-state or rejected differences still fail.
+- Add top-level `compatibility_budget` configuration. Enforce that each case's finding limit leaves
+  room for a new class, keep performance evidence running when all semantic differences are
+  approved, and report approved/unapproved/no-longer-observed outcomes in terminal, Markdown,
+  JSON and JUnit.
+- Add `parity contract retire SOURCE DESTINATION [--budget FILE]`. It runs only the candidate twice
+  per stored example, blocks operational errors, nondeterminism, foreign budgets and unapproved
+  findings, then atomically freezes the candidate observations as the final reference-free
+  baseline with approval rationale and the prior contract SHA-256.
+- Publish typed budget/retirement APIs and the frozen `compatibility-budget` schema. Deliberately
+  replace suite-report schema 3 with 4 and distilled-contract manifest 1 with 2; regenerate reports
+  and re-distill contracts with this release.
+
 ## 0.17.0
 
 ### Reference-free distilled contracts

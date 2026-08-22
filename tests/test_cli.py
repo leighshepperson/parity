@@ -959,7 +959,7 @@ def test_replay_json_is_one_data_safe_document_for_results_and_errors(
     payload = json.loads(failed.stdout)
     assert payload["command"] == "replay"
     assert payload["status"] == "failed"
-    assert payload["result"]["schema_version"] == 3
+    assert payload["result"]["schema_version"] == 4
 
     def unavailable(_path: Path) -> SuiteResult:
         raise RuntimeError("artifact is unavailable")

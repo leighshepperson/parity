@@ -574,6 +574,64 @@ class GenerationConfig(StrictModel):
         return generator
 
 
+class CompatibilityDecision(StrEnum):
+    """Review decision for one observed behavioural difference class."""
+
+    REVIEW = "review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class CompatibilityFinding(StrictModel):
+    """One case-scoped finding decision in a reviewable compatibility budget."""
+
+    case: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_.-]+$")
+    finding_signature: str = Field(pattern=r"^ms3:[0-9a-f]{64}$")
+    decision: CompatibilityDecision = CompatibilityDecision.REVIEW
+    reason: str | None = Field(default=None, max_length=2_000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def require_review_rationale(self) -> CompatibilityFinding:
+        if self.decision is not CompatibilityDecision.REVIEW and self.reason is None:
+            raise ValueError("approved or rejected findings require a non-blank reason")
+        return self
+
+
+class CompatibilityBudget(StrictModel):
+    """Versioned decisions defining which known differences may remain."""
+
+    version: Literal[1] = 1
+    source_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    findings: list[CompatibilityFinding] = Field(min_length=1, max_length=1_000)
+
+    @field_validator("findings")
+    @classmethod
+    def unique_case_findings(
+        cls, findings: list[CompatibilityFinding]
+    ) -> list[CompatibilityFinding]:
+        identities = [(finding.case, finding.finding_signature) for finding in findings]
+        if len(identities) != len(set(identities)):
+            raise ValueError("compatibility budget findings must be unique per case")
+        return findings
+
+    def approved_for(self, case: str) -> dict[str, CompatibilityFinding]:
+        """Return exact reviewed approvals for one case, keyed by signature."""
+
+        return {
+            finding.finding_signature: finding
+            for finding in self.findings
+            if finding.case == case and finding.decision is CompatibilityDecision.APPROVED
+        }
+
+
 class PerformanceConfig(StrictModel):
     """Benchmark policy applied after semantic verification."""
 
@@ -667,6 +725,7 @@ class ParityConfig(StrictModel):
     fail_fast: bool = False
     jobs: int = Field(default=1, ge=1, le=256)
     native_threads: int | None = Field(default=None, ge=1, le=256)
+    compatibility_budget: CompatibilityBudget | None = None
     _base_directory: Path | None = PrivateAttr(default=None)
 
     @field_validator("cases")
@@ -688,6 +747,20 @@ class ParityConfig(StrictModel):
                 "enforced performance gates require jobs=1 to avoid concurrent benchmark "
                 "contention; use jobs=1 or set performance.fail_on_regression=false"
             )
+        if self.compatibility_budget is not None:
+            known = {case.name for case in self.cases}
+            budget_cases = {finding.case for finding in self.compatibility_budget.findings}
+            if unknown := budget_cases - known:
+                raise ValueError(
+                    "compatibility budget references unknown case(s): " + ", ".join(sorted(unknown))
+                )
+            for case in self.cases:
+                approvals = self.compatibility_budget.approved_for(case.name)
+                if len(approvals) >= case.generation.max_findings:
+                    raise ValueError(
+                        f"case {case.name!r} generation.max_findings must exceed its "
+                        "approved compatibility findings so new differences remain discoverable"
+                    )
         return self
 
 
@@ -737,6 +810,45 @@ class ExampleResult(StrictModel):
     reference_metrics: RunMetrics | None = None
     candidate_metrics: RunMetrics | None = None
     finding_signature: str | None = Field(default=None, pattern=r"^ms3:[0-9a-f]{64}$")
+    approved: bool = False
+
+    @model_validator(mode="after")
+    def validate_approval(self) -> ExampleResult:
+        if self.approved and (self.status is not Status.FAILED or self.finding_signature is None):
+            raise ValueError("only a signed semantic finding can be approved")
+        return self
+
+
+class CompatibilityResult(StrictModel):
+    """Derived compatibility-budget outcome for one executed case."""
+
+    approved_findings: list[str] = Field(default_factory=list)
+    unapproved_findings: list[str] = Field(default_factory=list)
+    unused_approvals: list[str] = Field(default_factory=list)
+
+    @field_validator("approved_findings", "unapproved_findings", "unused_approvals")
+    @classmethod
+    def sorted_unique_signatures(cls, values: list[str]) -> list[str]:
+        if any(re.fullmatch(r"ms3:[0-9a-f]{64}", value) is None for value in values):
+            raise ValueError("compatibility results require finding signatures")
+        if values != sorted(set(values)):
+            raise ValueError("compatibility result signatures must be sorted and unique")
+        return values
+
+    @model_validator(mode="after")
+    def disjoint_outcomes(self) -> CompatibilityResult:
+        groups = (
+            set(self.approved_findings),
+            set(self.unapproved_findings),
+            set(self.unused_approvals),
+        )
+        if any(groups[left] & groups[right] for left, right in ((0, 1), (0, 2), (1, 2))):
+            raise ValueError("compatibility result signature groups must be disjoint")
+        return self
+
+    @property
+    def within_budget(self) -> bool:
+        return not self.unapproved_findings
 
 
 class CaseProvenance(StrictModel):
@@ -758,6 +870,7 @@ class CaseResult(StrictModel):
     diagnoses: list[Diagnosis] = Field(default_factory=list)
     performance: PerformanceResult | None = None
     provenance: CaseProvenance | None = None
+    compatibility: CompatibilityResult | None = None
     elapsed_seconds: float = Field(default=0, ge=0)
 
     @model_validator(mode="before")

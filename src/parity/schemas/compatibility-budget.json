@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "CompatibilityDecision": {
+      "description": "Review decision for one observed behavioural difference class.",
+      "enum": [
+        "review",
+        "approved",
+        "rejected"
+      ],
+      "title": "CompatibilityDecision",
+      "type": "string"
+    },
+    "CompatibilityFinding": {
+      "additionalProperties": false,
+      "description": "One case-scoped finding decision in a reviewable compatibility budget.",
+      "properties": {
+        "case": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Case",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/CompatibilityDecision",
+          "default": "review"
+        },
+        "finding_signature": {
+          "pattern": "^ms3:[0-9a-f]{64}$",
+          "title": "Finding Signature",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "case",
+        "finding_signature"
+      ],
+      "title": "CompatibilityFinding",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/compatibility-budget/v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned decisions defining which known differences may remain.",
+  "properties": {
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/CompatibilityFinding"
+      },
+      "maxItems": 1000,
+      "minItems": 1,
+      "title": "Findings",
+      "type": "array"
+    },
+    "source_report_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Report Sha256",
+      "type": "string"
+    },
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "source_report_sha256",
+    "findings"
+  ],
+  "title": "CompatibilityBudget",
+  "type": "object",
+  "x-parity-contract": "compatibility-budget",
+  "x-parity-contract-version": 1
+}

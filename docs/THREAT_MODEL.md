@@ -8,8 +8,8 @@ a trusted engineering repository running reviewed internal code. Reference/candi
 expected; actively malicious targets require an external sandbox.
 
 This model covers the local controller, target processes, configuration, fixtures, reports,
-counterexample artifacts, distilled contracts, the composite GitHub Action and package supply
-chain. Hosted coordinators are outside the current trust boundary.
+counterexample artifacts, compatibility budgets, distilled/retired contracts, the composite
+GitHub Action and package supply chain. Hosted coordinators are outside the current trust boundary.
 
 ## Assets
 
@@ -17,6 +17,7 @@ chain. Hosted coordinators are outside the current trust boundary.
 - Fixture and generated dataframe values.
 - Credentials inherited by the process or CI job.
 - Integrity of pass/fail evidence, policies and replay artifacts.
+- Integrity and review provenance of compatibility approvals and retired baselines.
 - Availability of the developer machine or runner.
 - Release credentials and published packages.
 
@@ -36,6 +37,7 @@ chain. Hosted coordinators are outside the current trust boundary.
 | Threat | Existing controls | Residual risk / operator action |
 |---|---|---|
 | A misspelt policy silently weakens a check | Strict models reject unknown fields and invalid ranges. | A valid but inappropriate policy still passes; require code review. |
+| An approval hides a new or broader defect | Approvals are exact case/signature pairs, remain reported, require rationale and cannot consume the full finding limit. Retirement rechecks the pair against the report-bound budget. | A mismatch signature describes shape, not magnitude or intent. Inspect private evidence and protect policy review. |
 | Candidate tampers with controller state | Separate target process and canonical serialized input. | Target retains OS-user access; use a container for hostile code. |
 | Target hangs or crashes | Per-invocation timeout and structured process outcomes. | Child processes/native hangs can outlive naive termination; enforce cgroup/job limits. |
 | Candidate mutates its input | Before/after input fingerprint and mutation mismatch. | External state and files are not transactionally monitored. |
@@ -53,6 +55,8 @@ chain. Hosted coordinators are outside the current trust boundary.
 ## Security invariants
 
 - A semantic mismatch must not be converted into a pass by reporting failure.
+- Only an exact reviewed case/signature approval may make a semantic finding non-blocking; discovery must retain capacity for a new class.
+- Reference retirement must reject operational errors, unstable observations, foreign budgets and unapproved differences.
 - Configuration errors and target/infrastructure uncertainty must produce `ERROR`, never `PASSED`.
 - Report projections must not include input-frame or mismatched scalar payloads.
 - A replay artifact must be bound to the input hash and original case identity.

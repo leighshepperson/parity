@@ -186,6 +186,24 @@ invalid generated domain or unresolved decision. Never make a run green by widen
 ignoring order or dtypes, removing hostile inputs, reducing the domain, or converting an in-scope
 unit into an exclusion without an explicit reviewed decision.
 
+For an explicitly reviewed intentional change, capture rather than improvise the exception:
+
+```bash
+parity budget init .parity/report.json compatibility.toml
+parity budget approve compatibility.toml CASE ms3:... --reason "reviewed rationale"
+```
+
+An agent may capture the ledger and present the exact finding, but must not invent the approval or
+rationale. Add `compatibility_budget = "compatibility.toml"` to the root configuration and rerun the
+complete gate. The approved finding remains reported; any new signature still fails and the engine
+reserves discovery capacity beyond the allow-list.
+
+At final acceptance, distill the report and use `parity contract retire ... --budget
+compatibility.toml` to promote the stable candidate observations. Retirement executes no reference
+code, observes each candidate example twice and records the used rationale plus the prior contract
+digest. Verify the retired contract before deleting the old implementation. These contracts retain
+only discovered finding examples, not the whole declared migration surface.
+
 ## 4. Exercise supported environments
 
 Run the original upstream tests and focused Parity cases against the supported dependency floor and
@@ -269,6 +287,8 @@ contain fixture-derived or generated input data and require restricted storage.
 - Do not invent unsupported behaviour or silently narrow the migration scope.
 - Do not mark an item complete from source inspection alone; require executable evidence.
 - Do not weaken an equivalence policy solely because it reports a difference.
+- Do not approve a compatibility-budget finding or invent its rationale without an explicit
+  reviewed decision.
 - Do not treat matching exceptions as proof of a successful business result.
 - Do not publish raw counterexamples or production-shaped fixtures.
 - Do not let environment tooling clone, patch or otherwise obscure reviewed local sources.

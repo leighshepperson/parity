@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from parity.models import ParityConfig
+from parity.models import CompatibilityBudget, ParityConfig
 from parity.provenance import normalize_distribution_requirements
 
 
@@ -112,6 +112,7 @@ class _ConfigDocument(_StrictDocumentModel):
     fail_fast: bool = False
     jobs: int = Field(default=1, ge=1, le=256)
     native_threads: int | None = Field(default=None, ge=1, le=256)
+    compatibility_budget: Path | None = None
 
     @model_validator(mode="after")
     def require_one_case_source(self) -> _ConfigDocument:
@@ -216,6 +217,29 @@ def _read_cases_file(config_path: Path, declared: Path) -> list[dict[str, Any]]:
         raise ConfigError(f"invalid Parity cases file: {exc}") from exc
 
 
+def _read_compatibility_budget(config_path: Path, declared: Path) -> CompatibilityBudget:
+    """Load one budget contained by the configuration directory."""
+
+    if declared.is_absolute():
+        raise ConfigError("compatibility_budget must be a relative path")
+    base = config_path.parent.resolve()
+    budget_path = (base / declared).resolve()
+    try:
+        budget_path.relative_to(base)
+    except ValueError as exc:
+        raise ConfigError(
+            "compatibility_budget must stay within the configuration directory"
+        ) from exc
+    if not budget_path.is_file():
+        raise ConfigError(f"compatibility budget not found: {budget_path}")
+    from parity.compatibility import CompatibilityBudgetError, load_compatibility_budget
+
+    try:
+        return load_compatibility_budget(budget_path)
+    except CompatibilityBudgetError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def _expand_document(document: _ConfigDocument, config_path: Path) -> dict[str, Any]:
     if document.cases_file is not None:
         cases = _read_cases_file(config_path, document.cases_file)
@@ -234,6 +258,11 @@ def _expand_document(document: _ConfigDocument, config_path: Path) -> dict[str, 
         "fail_fast": document.fail_fast,
         "jobs": document.jobs,
         "native_threads": document.native_threads,
+        "compatibility_budget": (
+            _read_compatibility_budget(config_path, document.compatibility_budget)
+            if document.compatibility_budget is not None
+            else None
+        ),
         "cases": [
             _merge_mappings(defaults, _canonicalize_required_distributions(case)) for case in cases
         ],

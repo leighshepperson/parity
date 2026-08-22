@@ -69,7 +69,7 @@ def _report(
     artifact: str, *, migration: bool = False, signature: str = SIGNATURE
 ) -> dict[str, object]:
     suite: dict[str, object] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "failed",
         "cases": [
             {
@@ -220,11 +220,11 @@ def test_tampered_report_signature_is_an_error_without_replay(
     "payload",
     [
         {"schema_version": 2},
-        {"schema_version": True, "parity": {"schema_version": 3, "cases": []}},
-        {"schema_version": 3.0, "cases": []},
-        {"schema_version": 3, "cases": []},
+        {"schema_version": True, "parity": {"schema_version": 4, "cases": []}},
+        {"schema_version": 4.0, "cases": []},
+        {"schema_version": 4, "cases": []},
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "cases": [{"name": "orders", "failures": [{"status": "failed"}]}],
         },
     ],

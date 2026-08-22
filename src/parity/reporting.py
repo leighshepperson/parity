@@ -338,6 +338,7 @@ def _failure_payload(failure: ExampleResult) -> dict[str, Any]:
         "source": redact_text(failure.source),
         "status": failure.status.value,
         "finding_signature": failure.finding_signature,
+        "approved": failure.approved,
         "mismatch_counts": dict(sorted(kinds.items())),
         "mismatches": _mismatch_summaries(failure),
         # Values and verbose mismatch details are intentionally artifact-only.
@@ -433,6 +434,9 @@ def _case_payload(case: CaseResult) -> dict[str, Any]:
         ],
         "performance": _performance_payload(case),
         "provenance": case.provenance.model_dump(mode="json") if case.provenance else None,
+        "compatibility": (
+            case.compatibility.model_dump(mode="json") if case.compatibility else None
+        ),
         "elapsed_seconds": case.elapsed_seconds,
     }
 
@@ -441,7 +445,7 @@ def report_payload(result: SuiteResult) -> dict[str, Any]:
     """Return the stable, data-eliding JSON report contract."""
 
     payload = {
-        "schema_version": 3,
+        "schema_version": 4,
         "status": result.status.value,
         "cases": [_case_payload(case) for case in result.cases],
         "elapsed_seconds": result.elapsed_seconds,
@@ -506,8 +510,8 @@ def render_markdown(result: SuiteResult) -> str:
         f"**{result.status.value.upper()}** — {passed}/{len(result.cases)} cases passed "
         f"in {result.elapsed_seconds:.3f}s.",
         "",
-        "| Case | Status | Examples | Findings | Runtime ratio | Memory ratio |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Case | Status | Examples | Findings | Approved | Runtime ratio | Memory ratio |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for case in result.cases:
         performance = case.performance
@@ -519,6 +523,7 @@ def render_markdown(result: SuiteResult) -> str:
                     case.status.value,
                     str(case.examples_run),
                     str(_finding_count(case)),
+                    str(sum(failure.approved for failure in case.failures)),
                     _ratio(
                         performance.speed_ratio if performance else None,
                         performance.speed_ratio_ci if performance else None,
@@ -564,10 +569,21 @@ def render_markdown(result: SuiteResult) -> str:
             )
             for reason in performance.reasons:
                 lines.append(f"  - gate reason: {_safe_performance_reason(reason)}")
-    failed_cases = [case for case in result.cases if case.status is not Status.PASSED]
-    if failed_cases:
-        lines.extend(["", "## Results", ""])
-        for case in failed_cases:
+    budget_cases = [case for case in result.cases if case.compatibility is not None]
+    if budget_cases:
+        lines.extend(["", "## Compatibility budget", ""])
+        for case in budget_cases:
+            assert case.compatibility is not None
+            compatibility = case.compatibility
+            lines.append(
+                f"- **{case.name}**: {len(compatibility.approved_findings)} approved, "
+                f"{len(compatibility.unapproved_findings)} unapproved, "
+                f"{len(compatibility.unused_approvals)} no longer observed"
+            )
+    finding_cases = [case for case in result.cases if case.failures]
+    if finding_cases:
+        lines.extend(["", "## Findings", ""])
+        for case in finding_cases:
             counts = Counter(
                 mismatch.kind.value
                 for failure in _ordered_failures(case)
@@ -592,7 +608,8 @@ def render_markdown(result: SuiteResult) -> str:
             lines.append(f"- **{case.name}**: {finding}{signature_label}")
             for failure in _ordered_failures(case):
                 label = (
-                    f"finding `{failure.finding_signature}`"
+                    ("approved " if failure.approved else "")
+                    + f"finding `{failure.finding_signature}`"
                     if failure.finding_signature is not None
                     else "execution error"
                 )
@@ -647,6 +664,9 @@ def render_terminal(
         operational_errors = sum(failure.status is Status.ERROR for failure in case.failures)
         line = f"  {status(case.status):<10} {case.name}  {case.examples_run} example(s), "
         line += f"{finding_count} finding(s)"
+        approved_count = sum(failure.approved for failure in case.failures)
+        if approved_count:
+            line += f", {approved_count} approved"
         if operational_errors:
             line += f", {operational_errors} execution error(s)"
         if case.performance and case.performance.speed_ratio is not None:
@@ -669,6 +689,12 @@ def render_terminal(
             )
         if warning := _provenance_warning(case):
             lines.append(f"             warning: {warning}")
+        if case.compatibility and case.compatibility.unused_approvals:
+            lines.append(
+                "             note: "
+                f"{len(case.compatibility.unused_approvals)} approved finding(s) "
+                "are no longer observed"
+            )
         kinds = Counter(
             mismatch.kind.value
             for failure in _ordered_failures(case)
@@ -681,7 +707,7 @@ def render_terminal(
             )
         for failure in _ordered_failures(case):
             label = (
-                f"finding {failure.finding_signature}"
+                ("approved " if failure.approved else "") + f"finding {failure.finding_signature}"
                 if failure.finding_signature is not None
                 else "execution error"
             )
@@ -767,6 +793,15 @@ def render_junit(result: SuiteResult) -> str:
             )
         elif case.status is Status.SKIPPED:
             ET.SubElement(testcase, "skipped", {"message": "case skipped"})
+        approved = [
+            failure.finding_signature
+            for failure in _ordered_failures(case)
+            if failure.approved and failure.finding_signature is not None
+        ]
+        if approved:
+            ET.SubElement(testcase, "system-out").text = (
+                "approved compatibility findings: " + ", ".join(approved)
+            )
     ET.indent(suite, space="  ")
     return ET.tostring(suite, encoding="unicode", xml_declaration=False) + "\n"
 
