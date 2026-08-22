@@ -16,6 +16,7 @@ import pytest
 import parity.engine as engine
 from parity.artifacts import ArtifactStore
 from parity.config import load_config
+from parity.custom_generation import CustomGenerator
 from parity.engine import replay_artifact, run_live
 from parity.execution import (
     ExceptionInfo,
@@ -30,6 +31,8 @@ from parity.models import (
     CaseResult,
     ColumnSchema,
     ComparisonPolicy,
+    CompatibilityDecision,
+    CompatibilityFinding,
     ExampleResult,
     FrameSchema,
     GenerationConfig,
@@ -304,6 +307,82 @@ def test_generated_only_campaign_runs_enforced_performance_gate(tmp_path: Path) 
     assert 1 <= benchmark_inputs[0].num_rows <= 3
     assert result.failures[-1].source == "performance"
     assert result.failures[-1].status is Status.FAILED
+
+
+def test_approved_exception_does_not_replace_benchmarkable_representative(
+    tmp_path: Path,
+) -> None:
+    small = pa.table({"x": [1]})
+    large = pa.table({"x": [1, 2]})
+
+    def returned(value: pa.Table) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RETURNED,
+            table=value,
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def raised(message: str) -> Observation:
+        return Observation(
+            outcome=ExecutionOutcome.RAISED,
+            exception=ExceptionInfo("builtins", "ValueError", message),
+            metrics=RunMetrics(duration_seconds=0),
+        )
+
+    def reference(value: pa.Table) -> Observation:
+        return raised("legacy timestamp parse position") if value.num_rows == 2 else returned(value)
+
+    def candidate(value: pa.Table) -> Observation:
+        return raised("candidate timestamp parse") if value.num_rows == 2 else returned(value)
+
+    mismatches = engine.compare_observations(reference(large), candidate(large), ComparisonPolicy())
+    signature = engine.mismatch_signature(mismatches)
+    measured = PerformanceResult(
+        reference=RunMetrics(duration_seconds=0.01, iterations=5),
+        candidate=RunMetrics(duration_seconds=0.01, iterations=5),
+    )
+    benchmark_inputs: list[pa.Table] = []
+
+    def benchmark(value: Any) -> PerformanceResult:
+        assert isinstance(value, pa.Table)
+        benchmark_inputs.append(value)
+        return measured
+
+    result = engine._campaign(
+        name="approved-exception-performance",
+        schema=None,
+        fixture=None,
+        custom_generator=CustomGenerator(examples=(small, large)),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(
+            max_examples=2,
+            adversarial_examples=False,
+            stability_repeats=1,
+        ),
+        performance_config=PerformanceConfig(enabled=True),
+        artifact_store=ArtifactStore(tmp_path),
+        reference_runner=reference,
+        candidate_runner=candidate,
+        artifact_case="approved-exception-performance",
+        benchmark=benchmark,
+        compatibility_findings=[
+            CompatibilityFinding(
+                case="approved-exception-performance",
+                finding_signature=signature,
+                decision=CompatibilityDecision.APPROVED,
+                reason="The exception wording is not part of the contract.",
+            )
+        ],
+    )
+
+    assert result.status is Status.PASSED
+    assert result.performance == measured
+    assert result.compatibility is not None
+    assert result.compatibility.approved_findings == [signature]
+    assert len(result.failures) == 1
+    assert result.failures[0].approved
+    assert len(benchmark_inputs) == 1
+    assert benchmark_inputs[0].num_rows == 1
 
 
 def test_enabled_performance_without_validated_input_is_an_error(
