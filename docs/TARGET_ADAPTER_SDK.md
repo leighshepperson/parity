@@ -166,4 +166,7 @@ The project or CI remains responsible for compiling the target, building the ima
 dependencies and pinning the executable. Parity remains responsible for generating inputs,
 executing both endpoints, comparing outcomes, shrinking differences and retaining replay evidence.
 The [Fortran-to-Python case study](../case_studies/fortran_python/README.md) demonstrates this split
-in one multi-stage Docker image.
+in one multi-stage Docker image. The
+[C++-to-Python order-book study](../case_studies/cpp_python_orderbook/README.md) extends it to a
+stateful, multi-table contract with domain exceptions, multi-finding replay and a persistent
+adapter soak.

@@ -129,6 +129,18 @@ for raw_token in sys.stdin.buffer:
         with open(temporary, "wb") as stream:
             stream.write(b"x" * (1024 * 1024 + 1))
         os.replace(temporary, destination)
+    elif fault == "response-link-delay":
+        temporary = destination + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(response, stream, sort_keys=True)
+        os.link(temporary, destination)
+        time.sleep(0.05)
+        os.unlink(temporary)
+    elif fault == "response-hardlink":
+        outside = os.path.join(root, "outside-" + token + ".json")
+        with open(outside, "w", encoding="utf-8") as stream:
+            json.dump(response, stream, sort_keys=True)
+        os.link(outside, destination)
     else:
         temporary = destination + ".tmp"
         with open(temporary, "w", encoding="utf-8") as stream:
@@ -234,6 +246,28 @@ def test_command_protocol_rejects_non_regular_response(tmp_path: Path) -> None:
 def test_command_protocol_hard_bounds_response_read(tmp_path: Path) -> None:
     with IsolatedExecutionSession(
         _spec(tmp_path, fault="response-oversized"), timeout_seconds=5
+    ) as session:
+        observation = session.inspect_runtime()
+
+    assert observation.outcome is ExecutionOutcome.CRASHED
+    assert observation.exception is not None
+    assert observation.exception.type == "WorkerProtocolError"
+
+
+def test_command_protocol_waits_for_atomic_hard_link_publication(tmp_path: Path) -> None:
+    with IsolatedExecutionSession(
+        _spec(tmp_path, fault="response-link-delay"), timeout_seconds=5
+    ) as session:
+        observation = session.inspect_runtime()
+
+    assert observation.outcome is ExecutionOutcome.RETURNED
+    assert observation.runtime is not None
+    assert observation.runtime.runtime_name == "test-command"
+
+
+def test_command_protocol_still_rejects_a_stable_hard_link(tmp_path: Path) -> None:
+    with IsolatedExecutionSession(
+        _spec(tmp_path, fault="response-hardlink"), timeout_seconds=1
     ) as session:
         observation = session.inspect_runtime()
 

@@ -427,6 +427,24 @@ def _read_target_arrow(call_root: Path, path: Path) -> pa.Table:
     return ipc.open_file(pa.BufferReader(payload)).read_all()
 
 
+def _response_publication_finished(path: Path) -> bool:
+    """Distinguish a completed response from the SDK's atomic link window.
+
+    The command-adapter SDK publishes without overwriting by linking a complete
+    temporary inode to ``response.json`` and then unlinking the temporary name.
+    During that short interval the response is complete but deliberately has
+    two links, so the strict protocol reader must not inspect it yet. Other
+    non-regular or multiply-linked responses remain invalid and are passed to
+    the reader for fail-closed validation.
+    """
+
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    return not (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 2)
+
+
 def _arrow_bytes(table: pa.Table) -> bytes:
     sink = pa.BufferOutputStream()
     with ipc.new_stream(sink, table.schema) as writer:
@@ -1474,7 +1492,7 @@ class IsolatedExecutionSession:
 
                 deadline = time.monotonic() + timeout
                 with _MemorySampler(process.pid) as memory:
-                    while not os.path.lexists(response_path):
+                    while not _response_publication_finished(response_path):
                         returncode = process.poll()
                         if returncode is not None:
                             self._fail_closed()
@@ -1494,6 +1512,11 @@ class IsolatedExecutionSession:
                             )
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
+                            if os.path.lexists(response_path):
+                                # A stable hard link is invalid rather than an
+                                # absent-response timeout. Let the strict reader
+                                # classify it below.
+                                break
                             self._fail_closed()
                             return Observation(
                                 outcome=ExecutionOutcome.TIMED_OUT,

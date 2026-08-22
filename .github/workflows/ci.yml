@@ -178,3 +178,28 @@ jobs:
           --cap-drop ALL
           --security-opt no-new-privileges
           parity-fortran-python:ci
+
+  cpp-python-orderbook:
+    name: Stateful C++ to Python proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e .
+      - name: Compile the project-owned C++ reference
+        working-directory: case_studies/cpp_python_orderbook
+        run: |
+          g++ --version
+          mkdir -p bin
+          g++ -std=c++17 -O2 -Wall -Wextra -pedantic \
+            reference.cpp -o bin/legacy_orderbook
+      - name: Verify generation, findings, regressions and replay
+        working-directory: case_studies/cpp_python_orderbook
+        run: python verify.py --profile quick
