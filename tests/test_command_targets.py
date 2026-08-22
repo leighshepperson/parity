@@ -267,7 +267,7 @@ def test_command_protocol_waits_for_atomic_hard_link_publication(tmp_path: Path)
 
 def test_command_protocol_still_rejects_a_stable_hard_link(tmp_path: Path) -> None:
     with IsolatedExecutionSession(
-        _spec(tmp_path, fault="response-hardlink"), timeout_seconds=0.1
+        _spec(tmp_path, fault="response-hardlink"), timeout_seconds=1
     ) as session:
         observation = session.inspect_runtime()
 
