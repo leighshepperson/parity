@@ -597,8 +597,12 @@ def check(
         ),
     ] = None,
     performance: Annotated[
-        bool, typer.Option("--performance/--no-performance", help="Run performance checks")
-    ] = True,
+        bool | None,
+        typer.Option(
+            "--performance/--no-performance",
+            help="Override configured performance checks",
+        ),
+    ] = None,
     json_output: Annotated[Path | None, typer.Option("--json")] = None,
     junit_output: Annotated[Path | None, typer.Option("--junit")] = None,
     markdown_output: Annotated[Path | None, typer.Option("--markdown")] = None,
@@ -634,8 +638,8 @@ def check(
             item.generation.max_findings = max_findings
         if stability_repeats is not None:
             item.generation.stability_repeats = stability_repeats
-        if not performance:
-            item.performance.enabled = False
+        if performance is not None:
+            item.performance.enabled = performance
 
     try:
         if jobs is not None:

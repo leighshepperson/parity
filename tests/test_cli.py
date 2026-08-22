@@ -858,6 +858,28 @@ def test_check_applies_filters_overrides_and_writes_safe_outputs(
     assert "wrote reports/summary.md" in result.stdout
 
 
+def test_check_performance_flag_enables_a_disabled_config(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    config.cases[0].performance.enabled = False
+    observed: list[bool] = []
+
+    monkeypatch.setattr(cli, "load_config", lambda _path: config)
+
+    def run_suite(selected_config, *, selected_cases=None):
+        assert selected_cases is None
+        observed.append(selected_config.cases[0].performance.enabled)
+        return _suite(Status.PASSED)
+
+    monkeypatch.setattr("parity.engine.run_suite", run_suite)
+
+    configured = runner.invoke(cli.app, ["check"])
+    overridden = runner.invoke(cli.app, ["check", "--performance"])
+
+    assert configured.exit_code == 0, configured.output
+    assert overridden.exit_code == 0, overridden.output
+    assert observed == [False, True]
+
+
 def test_check_markdown_alone_creates_parents_and_write_failures_exit_two(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.1
+
+### Performance override and compatible benchmark inputs
+
+- Make explicit `parity check --performance` and `--no-performance` flags override each case's
+  configured performance setting instead of silently leaving a disabled benchmark disabled.
+- Keep matching or approved exception outcomes as semantic evidence without selecting their inputs
+  for benchmarking. Performance now uses the largest validated input that both targets returned
+  from, avoiding a warm-up execution error after an approved exception-message difference.
+
 ## 0.18.0
 
 ### Compatibility budgets and reference retirement

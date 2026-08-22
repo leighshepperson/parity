@@ -401,10 +401,19 @@ def _campaign(
             confirmation_pair_runner,
         )
 
-    def remember_representative(value: CampaignInput) -> None:
-        """Retain the largest validated input observed by this campaign."""
+    def remember_representative(
+        value: CampaignInput,
+        reference: Observation,
+        candidate: Observation,
+    ) -> None:
+        """Retain the largest input that both targets can benchmark."""
 
         nonlocal representative
+        if (
+            reference.outcome is not ExecutionOutcome.RETURNED
+            or candidate.outcome is not ExecutionOutcome.RETURNED
+        ):
+            return
         if representative is None or _input_row_count(value) > _input_row_count(representative):
             # Arrow tables are immutable. Copy only the bundle container so a
             # custom strategy cannot later rebind one of its logical inputs.
@@ -514,7 +523,7 @@ def _campaign(
                 break
             if operational_error:
                 break
-            remember_representative(value)
+            remember_representative(value, reference, candidate)
         if status is Status.FAILED:
             if exact_only:
                 failure = _example_result(source, reference, candidate, mismatches, status)
@@ -631,7 +640,7 @@ def _campaign(
                 )
                 failures.append(failure)
                 seen_signatures.add(signature)
-                remember_representative(value)
+                remember_representative(value, repeated_reference, repeated_candidate)
             if len(seen_signatures) >= generation.max_findings:
                 break
 
@@ -658,7 +667,7 @@ def _campaign(
                 # BaseException prevents Hypothesis from retrying or shrinking.
                 raise _StopGeneratedCampaign
             if latest[3] is Status.PASSED:
-                remember_representative(value)
+                remember_representative(value, latest[0], latest[1])
                 return None
             return mismatch_signature(latest[2])
 
@@ -839,7 +848,7 @@ def _campaign(
         )
         failures.append(failure)
         seen_signatures.add(signature)
-        remember_representative(counterexample_value)
+        remember_representative(counterexample_value, second_reference, second_candidate)
 
     approved_by_signature = {
         finding.finding_signature: finding
