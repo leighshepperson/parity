@@ -1,0 +1,4 @@
+/.parity-orderbook/
+/bin/
+/reports/
+__pycache__/

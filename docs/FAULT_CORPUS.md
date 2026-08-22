@@ -85,5 +85,9 @@ daylight-saving gaps/folds, rolling-window boundaries, resampling labels, index 
 three-valued boolean logic, integer division, duplicate column names, string Unicode normalization,
 aggregation identity on empty groups and non-associative parallel reductions.
 
+The separate [stateful C++-to-Python order-book proof](../case_studies/cpp_python_orderbook/README.md)
+extends this standard across a compiled boundary. It combines priority ordering, residual state,
+cross-table unit conversion and Return/Raise differences in one generated migration campaign.
+
 The corpus is not a performance leaderboard and must not be padded with trivial syntax errors. Its
 purpose is to make semantic migration risk concrete and prevent detector regressions.

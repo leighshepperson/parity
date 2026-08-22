@@ -1,0 +1,57 @@
+name: Cross-language soak
+
+on:
+  schedule:
+    - cron: "53 4 * * 6"
+  workflow_dispatch:
+    inputs:
+      calls:
+        description: Paired return/exception calls for the persistent-adapter soak
+        required: true
+        default: "2000"
+        type: choice
+        options:
+          - "500"
+          - "2000"
+          - "5000"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-language-soak-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  cpp-python-orderbook:
+    name: Extended C++ to Python order-book proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SOAK_CALLS: ${{ inputs.calls || '2000' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e .
+      - name: Compile the project-owned C++ reference
+        working-directory: case_studies/cpp_python_orderbook
+        run: |
+          g++ --version
+          mkdir -p bin
+          g++ -std=c++17 -O2 -Wall -Wextra -pedantic \
+            reference.cpp -o bin/legacy_orderbook
+      - name: Run the extended generated migration proof
+        working-directory: case_studies/cpp_python_orderbook
+        run: python verify.py --profile full
+      - name: Soak persistent command and Python targets
+        working-directory: case_studies/cpp_python_orderbook
+        run: python soak.py --calls "$SOAK_CALLS"

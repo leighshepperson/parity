@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.0
+
+### Stateful cross-language migration proof
+
+- Add a maintained C++-to-Python order-book case study covering stateful event streams, named
+  Arrow input bundles, price-time priority, partial fills, domain exceptions and instrument
+  metadata. The deliberately flawed port produces five distinct minimized findings, every finding
+  replays exactly, and the corrected port retains all five as passing regressions.
+- Run a bounded generated campaign in normal CI. Add a scheduled/manual extended workflow that
+  runs 750 generated control streams, multi-finding discovery, performance evidence and a
+  2,000-call persistent command-adapter soak alternating returns and semantic exceptions.
+- Treat the command-adapter SDK's brief two-link atomic publication state as in-progress rather
+  than an invalid response, eliminating intermittent `WorkerProtocolError` failures during long
+  persistent sessions without accepting stable hard-linked protocol files.
+
 ## 0.18.1
 
 ### Performance override and compatible benchmark inputs

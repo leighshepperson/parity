@@ -198,6 +198,9 @@ The generated module uses the command-adapter SDK and is configured as
 [adapter SDK guide](docs/TARGET_ADAPTER_SDK.md), the normative
 [target protocol](docs/TARGET_PROTOCOL.md) and the executable
 [single-container Fortran-to-Python proof](case_studies/fortran_python/README.md).
+The [stateful C++-to-Python order-book proof](case_studies/cpp_python_orderbook/README.md) adds
+multi-table generation, native domain exceptions, five independently minimized findings and a
+persistent-adapter soak.
 
 ## Inputs and domain generation
 
@@ -476,6 +479,7 @@ code in a container or hardened runner.
 - [Configuration reference](docs/CONFIG_REFERENCE.md)
 - [Python command-adapter SDK](docs/TARGET_ADAPTER_SDK.md)
 - [External target protocol](docs/TARGET_PROTOCOL.md)
+- [Stateful C++-to-Python migration proof](case_studies/cpp_python_orderbook/README.md)
 - [Architecture and artifact contracts](docs/ARCHITECTURE.md)
 - [Migration completion protocol](docs/AGENT_MIGRATION.md)
 - [Security and privacy](docs/SECURITY.md) and [threat model](docs/THREAT_MODEL.md)
