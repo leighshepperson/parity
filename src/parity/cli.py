@@ -44,9 +44,14 @@ adapter_app = typer.Typer(
     help="Create and serve supported adapters for external command targets.",
     no_args_is_help=True,
 )
+contract_app = typer.Typer(
+    help="Distill findings and verify candidates without running the reference.",
+    no_args_is_help=True,
+)
 app.add_typer(migration_app, name="migration")
 app.add_typer(evidence_app, name="evidence")
 app.add_typer(adapter_app, name="adapter")
+app.add_typer(contract_app, name="contract")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -1642,6 +1647,68 @@ def evidence_verify(
             _fail(f"evidence report could not be written ({type(exc).__name__})")
         _print_path_status("wrote", _written_path(written))
     _render_evidence_result(result)
+    if result.status is Status.ERROR:
+        raise typer.Exit(2)
+    if result.status is Status.FAILED:
+        raise typer.Exit(1)
+
+
+@contract_app.command("distill")
+def contract_distill(
+    report: Annotated[Path, typer.Argument(help="Suite or migration JSON report")],
+    destination: Annotated[Path, typer.Argument(help="New private contract directory")],
+    artifact_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--artifact-root",
+            help="Actual artifact_dir when it is not directly below the current directory",
+        ),
+    ] = None,
+) -> None:
+    """Capture signed findings as a candidate-only semantic contract."""
+
+    from parity.distilled import ContractError, distill_contract
+
+    try:
+        result = distill_contract(
+            report,
+            destination,
+            artifact_root=artifact_root,
+        )
+    except ContractError as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"contract could not be distilled ({type(exc).__name__})")
+    _print_path_status("wrote", _written_path(result.path))
+    console.print(f"{result.examples} example(s) across {result.cases} case(s)")
+
+
+@contract_app.command("verify")
+def contract_verify(
+    contract: Annotated[Path, typer.Argument(help="Distilled contract directory")],
+    json_output: Annotated[
+        Path | None,
+        typer.Option("--json", help="Write the data-safe verification report"),
+    ] = None,
+) -> None:
+    """Verify only the candidate against captured reference expectations."""
+
+    from parity.distilled import ContractError, verify_contract
+    from parity.reporting import render_terminal, write_report
+
+    try:
+        result = verify_contract(contract)
+    except ContractError as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"contract verification could not run ({type(exc).__name__})")
+    if json_output is not None:
+        try:
+            written = write_report(result, "json", json_output)
+        except (OSError, ValueError) as exc:
+            _fail(f"verification report could not be written ({type(exc).__name__})")
+        _print_path_status("wrote", _written_path(written))
+    render_terminal(result, console=console)
     if result.status is Status.ERROR:
         raise typer.Exit(2)
     if result.status is Status.FAILED:

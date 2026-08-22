@@ -2,6 +2,12 @@
 
 from parity._version import __version__
 from parity.api import check, verify
+from parity.distilled import (
+    DistillationResult,
+    DistilledContractManifest,
+    distill_contract,
+    verify_contract,
+)
 from parity.evidence import EvidenceResult, verify_evidence
 from parity.migration import (
     MigrationManifest,
@@ -41,6 +47,8 @@ __all__ = [
     "CaseProvenance",
     "CaseResult",
     "ComparisonPolicy",
+    "DistillationResult",
+    "DistilledContractManifest",
     "DistributionProvenance",
     "EqualRowCount",
     "EvidenceResult",
@@ -65,6 +73,8 @@ __all__ = [
     "__version__",
     "check",
     "check_migration",
+    "distill_contract",
     "verify",
+    "verify_contract",
     "verify_evidence",
 ]

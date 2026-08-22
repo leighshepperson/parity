@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.17.0
+
+### Reference-free distilled contracts
+
+- Persist each finding's exact reference Return/Raise expectation as private, manifest-bound
+  evidence alongside its minimized Arrow input.
+- Add `parity contract distill REPORT DESTINATION` to turn distinct signed findings into an atomic,
+  candidate-only contract without executing the reference.
+- Add `parity contract verify CONTRACT` to execute only the candidate in fresh processes and reuse
+  Parity's comparison policy, terminal/JSON reports and `0`/`1`/`2` exit contract after the old
+  implementation, package or runtime has been removed.
+- Support Arrow and JSON returns, normalized exceptions, mutation semantics, single and multi-input
+  bindings, Python and command candidates, project-relative runtimes and inherited environment
+  values. Reject older artifacts and incomplete/redacted candidate contracts with a rerun hint.
+- Publish typed Python APIs and a frozen Draft 2020-12 `distilled-contract` schema, with explicit
+  integrity, privacy and coverage boundaries.
+
 ## 0.16.0
 
 ### Supported command-adapter SDK

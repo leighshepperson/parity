@@ -162,6 +162,18 @@ format can represent the input schema. A diagnosis is a deterministic hypothesis
 repair instruction. Add the artifact input (or an appropriately sanitized equivalent) to your own
 unit-test corpus before fixing the candidate.
 
+### Retire the reference with a distilled contract
+
+When a report contains confirmed findings, `parity contract distill REPORT DESTINATION` can retain
+those minimized inputs and exact reference outcomes as a candidate-only regression gate. After
+distillation, fix the candidate and run `parity contract verify DESTINATION`; the reference target,
+package, executable and runtime may all be absent. The contract intentionally contains no
+reference endpoint.
+
+Contracts are private, integrity-bound data directories and must stay inside the recorded project
+root. They cover distinct signed findings, not every passing campaign example. See
+[Distilled contracts](DISTILLED_CONTRACTS.md) for the complete workflow, privacy boundary and API.
+
 ### 5. Separate correctness from speed
 
 Enable performance only after the semantic campaign passes. Benchmarking interleaves paired

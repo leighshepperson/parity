@@ -97,6 +97,7 @@ differed, and exit `2` means `ERROR` because Parity could not perform a reliable
 - Isolated reference and candidate processes, timeouts, mutation tracking and runtime/dependency
   provenance.
 - Replayable Arrow inputs, integrity-bound manifests and the effective comparison contract.
+- Candidate-only distilled contracts that retain found regressions after the reference is removed.
 - Ordered case-level parallelism without parallel Hypothesis shrinking.
 - Median performance ratios with deterministic bootstrap confidence intervals and optional gates.
 - Terminal, JSON, Markdown, JUnit and GitHub step-summary output.
@@ -242,6 +243,8 @@ A mismatch creates an isolated directory:
 ├── input.arrow
 ├── input.parquet        # when the schema is representable
 ├── manifest.json
+├── reference.json
+├── reference.arrow      # or reference-value.json; absent for a raised outcome
 ├── replay.json
 └── result.json
 ```
@@ -258,6 +261,19 @@ parity evidence verify .parity/report.json --json .parity/evidence-status.json
 `parity replay` preserves the finding's semantic status: a successfully reproduced
 incompatibility is still `FAILED` and exits `1`. Use `parity evidence verify` when the question is
 whether report-referenced findings reproduced; that command exits `0` when every one did.
+
+Once findings have been reviewed, preserve them without preserving or executing the old
+implementation:
+
+```bash
+parity contract distill .parity/report.json .parity/contracts/upgrade
+# Fix the candidate, then remove the reference code/package/runtime.
+parity contract verify .parity/contracts/upgrade --json .parity/contract-status.json
+```
+
+The private contract contains minimized inputs and exact reference outcomes but no reference
+endpoint. It is a focused regression corpus for signed findings, not a recording of every passing
+example. See the [distilled-contract guide](docs/DISTILLED_CONTRACTS.md).
 
 Replay v2 binds interpreter, workdir and path-like command locations to an ancestor of the artifact
 itself, so the same artifact command works from the project root, a sibling directory or an
@@ -442,6 +458,7 @@ code in a container or hardened runner.
 ## Documentation
 
 - [User guide](docs/USER_GUIDE.md)
+- [Reference-free distilled contracts](docs/DISTILLED_CONTRACTS.md)
 - [Use cases and current boundaries](docs/USE_CASES.md)
 - [Configuration reference](docs/CONFIG_REFERENCE.md)
 - [Python command-adapter SDK](docs/TARGET_ADAPTER_SDK.md)
