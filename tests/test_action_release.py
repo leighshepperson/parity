@@ -227,7 +227,7 @@ def test_release_and_bootstrap_workflows_share_the_guarded_promoter() -> None:
     bootstrap = (ROOT / ".github" / "workflows" / "promote-action-major.yml").read_text(
         encoding="utf-8"
     )
-    assert "needs: publish" in release
+    assert "needs: [prepare, publish]" in release
     assert "--skip-non-final" in release
     assert "python scripts/promote_action_major.py" in release
     assert "workflow_dispatch:" in bootstrap
@@ -239,6 +239,22 @@ def test_release_and_bootstrap_workflows_share_the_guarded_promoter() -> None:
     assert "parity-action-major-${{ github.repository }}" in bootstrap
     assert re.search(r"actions/checkout@[0-9a-f]{40} # v", release) is not None
     assert re.search(r"actions/checkout@[0-9a-f]{40} # v", bootstrap) is not None
+
+
+def test_release_waits_for_successful_main_ci_and_tags_only_missing_versions() -> None:
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert 'workflows: ["CI"]' in release
+    assert "branches: [main]" in release
+    assert "github.event.workflow_run.conclusion == 'success'" in release
+    assert "github.event.workflow_run.head_branch == 'main'" in release
+    assert "github.event.workflow_run.head_sha || github.sha" in release
+    assert 'git ls-remote --exit-code --refs origin "refs/tags/$release_tag"' in release
+    assert 'git tag --annotate "$release_tag" "$RELEASE_SHA"' in release
+    assert 'git push origin "refs/tags/$release_tag"' in release
+    assert "should_release=false" in release
+    assert "if: needs.prepare.outputs.should_release == 'true'" in release
+    assert "tree = ast.parse(source)" in release
 
 
 def test_build_gates_exclude_managed_candidate_checkouts() -> None:
