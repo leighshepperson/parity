@@ -14,6 +14,7 @@ def test_every_public_schema_is_self_describing_and_deterministic() -> None:
         "artifact-manifest",
         "checklist",
         "config",
+        "distilled-contract",
         "finding",
         "migration-manifest",
         "migration-report",

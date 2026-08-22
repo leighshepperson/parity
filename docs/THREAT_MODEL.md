@@ -7,9 +7,9 @@ Targets may be Python callables or arbitrary protocol-speaking commands. The pri
 a trusted engineering repository running reviewed internal code. Reference/candidate defects are
 expected; actively malicious targets require an external sandbox.
 
-This model covers the local controller, target processes, configuration, fixtures, reports, counterexample artifacts,
-the composite GitHub Action and package supply chain. Hosted coordinators are outside the current
-trust boundary.
+This model covers the local controller, target processes, configuration, fixtures, reports,
+counterexample artifacts, distilled contracts, the composite GitHub Action and package supply
+chain. Hosted coordinators are outside the current trust boundary.
 
 ## Assets
 
@@ -42,7 +42,7 @@ trust boundary.
 | Crafted config imports unexpected code | Restricted target syntax; user explicitly owns config. | Import itself executes module code. Review changes to config and wrappers. |
 | Custom generator compromises the driver | Explicit import target and bounded consumed examples. | The factory and strategy execute in-process without a timeout; review them or sandbox the entire command. |
 | Path traversal overwrites unrelated files | Case names are constrained, safe artifact names and config-relative path resolution. | User-selected artifact/config paths remain trusted operator input. |
-| Counterexample leaks private values | Local default, self-ignoring private root, report redaction, configurable Action upload/retention. | Artifacts contain values. Apply source data classification and access controls. |
+| Counterexample or distilled contract leaks private values | Local default, self-ignoring private roots, report redaction, configurable Action upload/retention. | Artifacts and contracts contain input/reference-output values. Apply source data classification and access controls. |
 | Logs leak values or secrets | Parity reports omit frame values and does not enumerate environment variables. | User callables can print arbitrary content; use clean test credentials and protected logs. |
 | Forged/stale evidence is accepted | Hash-bound artifacts written to new timestamped directories plus replay metadata. | Local users can alter files; signed attestations would be needed across trust domains. |
 | Dependency/package compromise | Audit, dependency review, CodeQL, protected trusted publishing and build attestation. | Consumers must pin/verify and control their dependency mirror. |

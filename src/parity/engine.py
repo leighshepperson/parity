@@ -213,6 +213,7 @@ def _store_failure(
             reference=reference_observation.runtime,
             candidate=candidate_observation.runtime,
         ),
+        reference_observation=reference_observation,
         config_sha256=config_sha256,
     )
 
@@ -1717,8 +1718,12 @@ def _missing_replay_target(side: str) -> ReplayError:
     )
 
 
-def _restore_environment(case_data: dict[str, Any]) -> None:
-    for side in ("reference", "candidate"):
+def _restore_environment(
+    case_data: dict[str, Any],
+    *,
+    sides: tuple[str, ...] = ("reference", "candidate"),
+) -> None:
+    for side in sides:
         spec = case_data.get(side)
         if not isinstance(spec, dict):
             raise _missing_replay_target(side)
@@ -1766,11 +1771,16 @@ def _replay_execution_root(replay: dict[str, Any], artifact_root: Path) -> Path:
     return base
 
 
-def _resolve_replay_paths(case_data: dict[str, Any], execution_root: Path) -> None:
+def _resolve_replay_paths(
+    case_data: dict[str, Any],
+    execution_root: Path,
+    *,
+    sides: tuple[str, ...] = ("reference", "candidate"),
+) -> None:
     """Resolve sanitized paths from the artifact-bound configuration directory."""
 
     base = execution_root.resolve()
-    for side in ("reference", "candidate"):
+    for side in sides:
         spec = case_data.get(side)
         if not isinstance(spec, dict):
             raise _missing_replay_target(side)

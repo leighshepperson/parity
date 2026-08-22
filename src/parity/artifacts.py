@@ -312,6 +312,34 @@ def _result_payload(result: ExampleResult | BaseModel | Observation | dict[str, 
     return _sanitize_json(result)
 
 
+def _write_reference_observation(root: Path, observation: Observation) -> list[Path]:
+    """Persist the exact reference expectation beside one private finding witness."""
+
+    metadata = observation.to_metadata()
+    output: dict[str, str] | None = None
+    paths: list[Path] = []
+    if observation.table is not None:
+        output_path = root / "reference.arrow"
+        _write_arrow(observation.table, output_path)
+        output = {"kind": "arrow", "file": output_path.name}
+        paths.append(output_path)
+    elif observation.has_value:
+        output_path = root / "reference-value.json"
+        output_path.write_text(
+            json.dumps(observation.value, sort_keys=True, allow_nan=True) + "\n",
+            encoding="utf-8",
+        )
+        output = {"kind": "json", "file": output_path.name}
+        paths.append(output_path)
+    metadata["output"] = output
+    metadata_path = root / "reference.json"
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True, allow_nan=True) + "\n",
+        encoding="utf-8",
+    )
+    return [metadata_path, *paths]
+
+
 class ArtifactStore:
     """Write and inspect Parity failure campaigns beneath one root."""
 
@@ -339,6 +367,7 @@ class ArtifactStore:
         source: str | None = None,
         seed: int | None = None,
         runtime_provenance: CaseProvenance | None = None,
+        reference_observation: Observation | None = None,
         config_sha256: str | None = None,
     ) -> Path:
         """Persist one minimal failing input bundle and return its campaign directory."""
@@ -406,6 +435,11 @@ class ArtifactStore:
                 json.dumps(_result_payload(result), indent=2, sort_keys=True, allow_nan=True)
                 + "\n",
                 encoding="utf-8",
+            )
+            reference_paths = (
+                _write_reference_observation(temporary, reference_observation)
+                if reference_observation is not None
+                else []
             )
             complete_runtime = bool(
                 runtime_provenance is not None
@@ -494,7 +528,13 @@ class ArtifactStore:
                 "contains_input_data": True,
                 "files": {},
             }
-            evidence_paths = [*arrow_paths, *parquet_paths, result_path, replay_path]
+            evidence_paths = [
+                *arrow_paths,
+                *parquet_paths,
+                result_path,
+                replay_path,
+                *reference_paths,
+            ]
             for path in evidence_paths:
                 manifest["files"][path.name] = {
                     "sha256": _sha256(path),

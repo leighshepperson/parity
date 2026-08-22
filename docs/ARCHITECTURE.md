@@ -200,6 +200,8 @@ existing directory:
   input.parquet  # present when representable
   # or input-000.arrow, input-001.arrow, ... for a bundle
   manifest.json
+  reference.json
+  reference.arrow  # or reference-value.json for a JSON-compatible return
   result.json
   replay.json
 ```
@@ -217,6 +219,9 @@ replaced with a potentially different same-named module or runtime. An optional 
 `replay_blockers` map preserves a bounded per-side `live_callable`, `external_python`,
 `external_workdir`, `external_command` or `missing_command` reason without preserving an external
 path, so replay can give an actionable repair.
+Confirmed semantic findings additionally bind the complete reference observation in private
+`reference.json` plus an Arrow or JSON output file. This is the source for contract distillation;
+it is never projected into a data-safe report.
 Managed wrappers import from the workspace directory, and that directory plus its generated
 environments must be contained by the configured `parity.toml` directory. Other managed layouts
 are rejected before setup so automatic replay paths cannot silently become external.
@@ -230,6 +235,13 @@ hash. Replay preflights both target sessions and blocks both implementations on 
 provenance. Evidence without those bindings remains inspectable but is not executable through
 automatic replay. JSON report schema 3 carries data-free mismatch
 signatures and distinct-finding counts.
+
+Distilled-contract manifest 1 is a separate candidate-only boundary. `contract distill` verifies
+signed report artifacts, copies their minimized inputs and reference observations into a new atomic
+private directory, and removes the reference endpoint entirely. `contract verify` validates every
+bound file, reconstructs only the project-relative candidate, starts a fresh candidate process per
+example and compares the result with the stored observation. It does not generate inputs, benchmark
+or import a reference. See [Distilled contracts](DISTILLED_CONTRACTS.md).
 
 The sanitized replay case stores the complete comparison policy, including keyed row alignment,
 and its effective-configuration hash. Replay therefore reconstructs the recorded contract instead

@@ -17,7 +17,9 @@ That property reduces exposure; it does not make every output non-sensitive.
 | `input.arrow` or bundled `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
 | `manifest.json` | Metadata, paths and hashes | Counterexample directory | Restricted engineering team |
 | `result.json` in artifact | Structured mismatch evidence | Counterexample directory | Restricted engineering team |
+| `reference.json` and reference Arrow/JSON output | Yes for successful returns | Counterexample directory | Restricted engineering team |
 | `replay.json` | Command/config references | Counterexample directory | Restricted engineering team |
+| Distilled contract directory | Yes; minimized inputs and exact reference outputs | User-selected project-private path | Restricted engineering team |
 | `parity doctor --json` | Executable, platform and working-directory paths | Console | Support after review |
 | `parity doctor --config ... --json` | Path-free allowlisted runtime versions | Console | Developers and CI |
 
@@ -144,8 +146,10 @@ evaluated. Unknown case names are rejected before a target starts.
 
 `parity migration run` additionally resolves and installs packages before executing the same union
 in every dependency lane. `parity evidence verify` checks local artifact integrity and replays every
-report-referenced finding. Both commands must be run only against trusted source and packaging
-metadata, or inside the hardened environment described below.
+report-referenced finding. `parity contract verify` checks contract integrity and executes only its
+project-bound candidate; removing the reference does not make candidate code a sandbox. These
+commands must be run only against trusted source and packaging metadata, or inside the hardened
+environment described below.
 
 Configured runs and artifact replay execute the selected Python interpreter or command path. A
 configuration-local virtual-environment entry point may be a symlink to a host Python binary; Parity

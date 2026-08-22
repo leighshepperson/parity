@@ -1,0 +1,866 @@
+{
+  "$defs": {
+    "CallableSpec": {
+      "additionalProperties": false,
+      "description": "One Python or protocol-command implementation and its environment.",
+      "properties": {
+        "adapter": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "pandas",
+            "polars",
+            "arrow"
+          ],
+          "title": "Adapter",
+          "type": "string"
+        },
+        "canonicalizer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonicalizer"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "environment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Environment",
+          "type": "object"
+        },
+        "native_threads": {
+          "anyOf": [
+            {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Threads"
+        },
+        "pandas_input": {
+          "default": "arrow",
+          "enum": [
+            "arrow",
+            "native"
+          ],
+          "title": "Pandas Input",
+          "type": "string"
+        },
+        "python": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python"
+        },
+        "record_distributions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Record Distributions",
+          "type": "array"
+        },
+        "required_distributions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "title": "Required Distributions",
+          "type": "object"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "workdir": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workdir"
+        }
+      },
+      "title": "CallableSpec",
+      "type": "object"
+    },
+    "ComparisonPolicy": {
+      "additionalProperties": false,
+      "description": "Explicit definition of semantic equivalence.",
+      "properties": {
+        "atol": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Atol",
+          "type": "number"
+        },
+        "check_exceptions": {
+          "default": true,
+          "title": "Check Exceptions",
+          "type": "boolean"
+        },
+        "check_input_mutation": {
+          "default": true,
+          "title": "Check Input Mutation",
+          "type": "boolean"
+        },
+        "column_order": {
+          "default": "strict",
+          "enum": [
+            "strict",
+            "ignore"
+          ],
+          "title": "Column Order",
+          "type": "string"
+        },
+        "datetime_tolerance_ns": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Datetime Tolerance Ns",
+          "type": "integer"
+        },
+        "dtype": {
+          "default": "compatible",
+          "enum": [
+            "strict",
+            "compatible",
+            "ignore"
+          ],
+          "title": "Dtype",
+          "type": "string"
+        },
+        "ignored_columns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Ignored Columns",
+          "type": "array"
+        },
+        "names": {
+          "default": "strict",
+          "enum": [
+            "strict",
+            "case_insensitive"
+          ],
+          "title": "Names",
+          "type": "string"
+        },
+        "nan_equal": {
+          "default": true,
+          "title": "Nan Equal",
+          "type": "boolean"
+        },
+        "null_equal": {
+          "default": true,
+          "title": "Null Equal",
+          "type": "boolean"
+        },
+        "null_nan_equal": {
+          "default": false,
+          "title": "Null Nan Equal",
+          "type": "boolean"
+        },
+        "row_keys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Row Keys",
+          "type": "array"
+        },
+        "row_order": {
+          "default": "strict",
+          "enum": [
+            "strict",
+            "ignore",
+            "keyed"
+          ],
+          "title": "Row Order",
+          "type": "string"
+        },
+        "rtol": {
+          "default": 1e-07,
+          "minimum": 0,
+          "title": "Rtol",
+          "type": "number"
+        },
+        "signed_zero_equal": {
+          "default": true,
+          "title": "Signed Zero Equal",
+          "type": "boolean"
+        }
+      },
+      "title": "ComparisonPolicy",
+      "type": "object"
+    },
+    "ContractExample": {
+      "additionalProperties": false,
+      "description": "One minimized input and its immutable reference expectation.",
+      "properties": {
+        "expected": {
+          "$ref": "#/$defs/ContractExpectation"
+        },
+        "finding_signature": {
+          "pattern": "^ms3:[0-9a-f]{64}$",
+          "title": "Finding Signature",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/ContractInput"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Inputs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "finding_signature",
+        "inputs",
+        "expected"
+      ],
+      "title": "ContractExample",
+      "type": "object"
+    },
+    "ContractException": {
+      "additionalProperties": false,
+      "description": "Portable exception semantics captured from the reference.",
+      "properties": {
+        "details": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "message_fingerprint": {
+          "anyOf": [
+            {
+              "pattern": "^ex1:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message Fingerprint"
+        },
+        "module": {
+          "minLength": 1,
+          "title": "Module",
+          "type": "string"
+        },
+        "type": {
+          "minLength": 1,
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "module",
+        "type",
+        "message"
+      ],
+      "title": "ContractException",
+      "type": "object"
+    },
+    "ContractExpectation": {
+      "additionalProperties": false,
+      "description": "Exact semantic observation captured from the retired reference.",
+      "properties": {
+        "exception": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContractException"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "has_table": {
+          "title": "Has Table",
+          "type": "boolean"
+        },
+        "has_value": {
+          "title": "Has Value",
+          "type": "boolean"
+        },
+        "metrics": {
+          "$ref": "#/$defs/RunMetrics"
+        },
+        "mutated_inputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Mutated Inputs",
+          "type": "array"
+        },
+        "outcome": {
+          "enum": [
+            "returned",
+            "raised"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContractOutput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "return_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Return Type"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeProvenance"
+        }
+      },
+      "required": [
+        "outcome",
+        "metrics",
+        "has_table",
+        "has_value",
+        "runtime"
+      ],
+      "title": "ContractExpectation",
+      "type": "object"
+    },
+    "ContractFile": {
+      "additionalProperties": false,
+      "description": "Integrity metadata for one private contract data file.",
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "bytes"
+      ],
+      "title": "ContractFile",
+      "type": "object"
+    },
+    "ContractInput": {
+      "additionalProperties": false,
+      "description": "One ordered Arrow input in a distilled example.",
+      "properties": {
+        "file": {
+          "minLength": 1,
+          "title": "File",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "file"
+      ],
+      "title": "ContractInput",
+      "type": "object"
+    },
+    "ContractOutput": {
+      "additionalProperties": false,
+      "description": "Private serialized output belonging to one reference expectation.",
+      "properties": {
+        "file": {
+          "minLength": 1,
+          "title": "File",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "arrow",
+            "json"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "file"
+      ],
+      "title": "ContractOutput",
+      "type": "object"
+    },
+    "ContractPathBase": {
+      "additionalProperties": false,
+      "description": "Portable project-root binding for one contract directory.",
+      "properties": {
+        "kind": {
+          "const": "contract_ancestor",
+          "title": "Kind",
+          "type": "string"
+        },
+        "levels": {
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Levels",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "levels"
+      ],
+      "title": "ContractPathBase",
+      "type": "object"
+    },
+    "DistilledCase": {
+      "additionalProperties": false,
+      "description": "Candidate-only invocation contract for a set of minimized examples.",
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/CallableSpec"
+        },
+        "candidate_kwargs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Candidate Kwargs",
+          "type": "object"
+        },
+        "comparison": {
+          "$ref": "#/$defs/ComparisonPolicy"
+        },
+        "examples": {
+          "items": {
+            "$ref": "#/$defs/ContractExample"
+          },
+          "minItems": 1,
+          "title": "Examples",
+          "type": "array"
+        },
+        "input_binding": {
+          "enum": [
+            "single",
+            "keyword",
+            "positional"
+          ],
+          "title": "Input Binding",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Name",
+          "type": "string"
+        },
+        "static_args": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Static Args",
+          "type": "array"
+        },
+        "static_kwargs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Static Kwargs",
+          "type": "object"
+        },
+        "timeout_seconds": {
+          "default": 30.0,
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Timeout Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "candidate",
+        "input_binding",
+        "examples"
+      ],
+      "title": "DistilledCase",
+      "type": "object"
+    },
+    "DistributionProvenance": {
+      "additionalProperties": false,
+      "description": "Version status for one normalized Python distribution name.",
+      "properties": {
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "installed",
+            "missing",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "title": "DistributionProvenance",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "RunMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_seconds": {
+          "minimum": 0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "iterations": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Iterations",
+          "type": "integer"
+        },
+        "peak_rss_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Rss Bytes"
+        }
+      },
+      "required": [
+        "duration_seconds"
+      ],
+      "title": "RunMetrics",
+      "type": "object"
+    },
+    "RuntimeIdentity": {
+      "additionalProperties": false,
+      "description": "One optional path-free identity claim supplied by a target runtime.",
+      "properties": {
+        "dirty": {
+          "title": "Dirty",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "git-worktree-v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "revision",
+        "dirty",
+        "sha256"
+      ],
+      "title": "RuntimeIdentity",
+      "type": "object"
+    },
+    "RuntimeProvenance": {
+      "additionalProperties": false,
+      "description": "Bounded, path-free identity reported by one target executor.",
+      "properties": {
+        "distributions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DistributionProvenance"
+          },
+          "title": "Distributions",
+          "type": "array"
+        },
+        "executor": {
+          "default": "parity-python",
+          "enum": [
+            "parity-python",
+            "portable-python",
+            "command"
+          ],
+          "title": "Executor",
+          "type": "string"
+        },
+        "identities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RuntimeIdentity"
+          },
+          "title": "Identities",
+          "type": "array"
+        },
+        "parity_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parity Version"
+        },
+        "platform_machine": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Platform Machine",
+          "type": "string"
+        },
+        "platform_system": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Platform System",
+          "type": "string"
+        },
+        "python_implementation": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python Implementation"
+        },
+        "python_version": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python Version"
+        },
+        "runtime_name": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Name"
+        },
+        "runtime_version": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Version"
+        }
+      },
+      "required": [
+        "platform_system",
+        "platform_machine"
+      ],
+      "title": "RuntimeProvenance",
+      "type": "object"
+    }
+  },
+  "$id": "https://parity-check.dev/schemas/distilled-contract/v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned, candidate-only distilled contract stored as ``contract.json``.",
+  "properties": {
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/DistilledCase"
+      },
+      "minItems": 1,
+      "title": "Cases",
+      "type": "array"
+    },
+    "contains_input_data": {
+      "const": true,
+      "title": "Contains Input Data",
+      "type": "boolean"
+    },
+    "contains_output_data": {
+      "const": true,
+      "title": "Contains Output Data",
+      "type": "boolean"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "files": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ContractFile"
+      },
+      "maxProperties": 1024,
+      "minProperties": 1,
+      "title": "Files",
+      "type": "object"
+    },
+    "parity_version": {
+      "title": "Parity Version",
+      "type": "string"
+    },
+    "path_base": {
+      "$ref": "#/$defs/ContractPathBase"
+    },
+    "source_report_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Report Sha256",
+      "type": "string"
+    },
+    "version": {
+      "const": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "version",
+    "created_at",
+    "parity_version",
+    "source_report_sha256",
+    "path_base",
+    "contains_input_data",
+    "contains_output_data",
+    "cases",
+    "files"
+  ],
+  "title": "DistilledContractManifest",
+  "type": "object",
+  "x-parity-contract": "distilled-contract",
+  "x-parity-contract-version": 1
+}

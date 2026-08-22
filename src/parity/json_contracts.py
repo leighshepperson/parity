@@ -11,6 +11,7 @@ from pydantic import Field, JsonValue, model_validator
 
 from parity.agent_output import AgentCommandOutput, ContractChecklist
 from parity.config import _CaseDefaults
+from parity.distilled import DistilledContractManifest
 from parity.migration import (
     MigrationCaseStatus,
     MigrationManifest,
@@ -227,6 +228,7 @@ _CONTRACTS: dict[str, tuple[type[Any], int]] = {
     "artifact-manifest": (ArtifactManifestContract, 2),
     "checklist": (ContractChecklist, 1),
     "config": (ConfigContract, 1),
+    "distilled-contract": (DistilledContractManifest, 1),
     "finding": (FindingContract, 1),
     "migration-manifest": (MigrationManifest, 1),
     "migration-report": (MigrationReportContract, 1),
