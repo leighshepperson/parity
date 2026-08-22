@@ -3,21 +3,106 @@ name: Release
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: parity-release-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: Resolve and tag release
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      release_sha: ${{ steps.release.outputs.release_sha }}
+      should_release: ${{ steps.release.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Resolve and create the immutable release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSHED_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          package_version="$(python - <<'PY'
+          import ast
+          import re
+          from pathlib import Path
+
+          source = Path("src/parity/_version.py").read_text(encoding="utf-8")
+          tree = ast.parse(source)
+          values = []
+          for statement in tree.body:
+              if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+                  continue
+              target = statement.targets[0]
+              if isinstance(target, ast.Name) and target.id == "__version__":
+                  values.append(ast.literal_eval(statement.value))
+          if len(values) != 1 or not isinstance(values[0], str):
+              raise SystemExit("expected one literal __version__ assignment")
+          version = values[0]
+          if re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version) is None:
+              raise SystemExit(f"package version {version!r} is not MAJOR.MINOR.PATCH")
+          print(version)
+          PY
+          )"
+          release_tag="v${package_version}"
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            if [[ "$PUSHED_TAG" != "$release_tag" ]]; then
+              echo "release tag '$PUSHED_TAG' must equal '$release_tag'" >&2
+              exit 1
+            fi
+            should_release=true
+          elif git ls-remote --exit-code --refs origin "refs/tags/$release_tag" >/dev/null 2>&1; then
+            echo "$release_tag already exists; no release is required."
+            should_release=false
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$release_tag" "$RELEASE_SHA" --message "Release $release_tag"
+            git push origin "refs/tags/$release_tag"
+            should_release=true
+          fi
+
+          {
+            echo "release_tag=$release_tag"
+            echo "release_sha=$RELEASE_SHA"
+            echo "should_release=$should_release"
+          } >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Verify tag matches package version
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           python - <<'PY'
           import os
@@ -83,7 +168,7 @@ jobs:
           PY
       - name: Smoke-test built wheel
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           python -m pip install --force-reinstall --no-deps dist/*.whl
           installed_version="$(parity version)"
@@ -117,7 +202,7 @@ jobs:
 
   promote-action-major:
     name: Promote stable Action major tag
-    needs: publish
+    needs: [prepare, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -128,9 +213,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
       - name: Promote Action major tag after publication
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: >-
           python scripts/promote_action_major.py
           --release-tag "$RELEASE_TAG"
