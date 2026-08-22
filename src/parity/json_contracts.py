@@ -21,6 +21,8 @@ from parity.migration_workspace import MigrationWorkspace
 from parity.models import (
     CaseConfig,
     CaseProvenance,
+    CompatibilityBudget,
+    CompatibilityResult,
     Diagnosis,
     MismatchKind,
     PerformanceResult,
@@ -42,6 +44,7 @@ class ConfigContract(StrictModel):
     fail_fast: bool = False
     jobs: int = Field(default=1, ge=1, le=256)
     native_threads: int | None = Field(default=None, ge=1, le=256)
+    compatibility_budget: Path | None = None
 
     @model_validator(mode="after")
     def require_one_case_source(self) -> ConfigContract:
@@ -111,11 +114,18 @@ class FindingContract(StrictModel):
     source: str
     status: Status
     finding_signature: str | None = Field(default=None, pattern=r"^ms3:[0-9a-f]{64}$")
+    approved: bool
     mismatch_counts: MismatchCountsContract
     mismatches: list[MismatchSummaryContract]
     artifact: str | None = None
     reference_metrics: RunMetrics | None = None
     candidate_metrics: RunMetrics | None = None
+
+    @model_validator(mode="after")
+    def validate_approval(self) -> FindingContract:
+        if self.approved and (self.status is not Status.FAILED or self.finding_signature is None):
+            raise ValueError("only a signed semantic finding can be approved")
+        return self
 
 
 class SuiteCaseReportContract(StrictModel):
@@ -132,13 +142,14 @@ class SuiteCaseReportContract(StrictModel):
     diagnoses: list[Diagnosis]
     performance: PerformanceResult | None
     provenance: CaseProvenance | None
+    compatibility: CompatibilityResult | None
     elapsed_seconds: float = Field(ge=0)
 
 
 class SuiteReportContract(StrictModel):
     """Data-eliding projection returned by :func:`parity.reporting.report_payload`."""
 
-    schema_version: Literal[3]
+    schema_version: Literal[4]
     status: Status
     cases: list[SuiteCaseReportContract]
     elapsed_seconds: float = Field(ge=0)
@@ -227,13 +238,14 @@ _CONTRACTS: dict[str, tuple[type[Any], int]] = {
     "agent-result": (AgentCommandOutput, 1),
     "artifact-manifest": (ArtifactManifestContract, 2),
     "checklist": (ContractChecklist, 1),
+    "compatibility-budget": (CompatibilityBudget, 1),
     "config": (ConfigContract, 1),
-    "distilled-contract": (DistilledContractManifest, 1),
+    "distilled-contract": (DistilledContractManifest, 2),
     "finding": (FindingContract, 1),
     "migration-manifest": (MigrationManifest, 1),
     "migration-report": (MigrationReportContract, 1),
     "replay": (ReplayContract, 2),
-    "suite-report": (SuiteReportContract, 3),
+    "suite-report": (SuiteReportContract, 4),
     "workspace": (MigrationWorkspace, 3),
 }
 

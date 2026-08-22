@@ -13,6 +13,7 @@ def test_every_public_schema_is_self_describing_and_deterministic() -> None:
         "agent-result",
         "artifact-manifest",
         "checklist",
+        "compatibility-budget",
         "config",
         "distilled-contract",
         "finding",
@@ -37,10 +38,16 @@ def test_breaking_contract_versions_are_exposed_in_their_schemas() -> None:
     workspace = contract_schema("workspace")
     replay = contract_schema("replay")
     artifact = contract_schema("artifact-manifest")
+    compatibility = contract_schema("compatibility-budget")
+    distilled = contract_schema("distilled-contract")
+    suite = contract_schema("suite-report")
 
     assert workspace["properties"]["version"]["const"] == 3
     assert replay["properties"]["version"]["const"] == 2
     assert artifact["properties"]["version"]["const"] == 2
+    assert compatibility["properties"]["version"]["const"] == 1
+    assert distilled["properties"]["version"]["const"] == 2
+    assert suite["properties"]["schema_version"]["const"] == 4
     assert replay["$id"].endswith("/v2.json")
 
 
@@ -75,6 +82,7 @@ def test_finding_contract_rejects_unknown_nested_fields_and_mismatch_kinds() -> 
         "source": "generated",
         "status": "failed",
         "finding_signature": "ms3:" + "a" * 64,
+        "approved": False,
         "mismatch_counts": {"value": 1},
         "mismatches": [{"kind": "value", "summary": "values differ", "path": "$"}],
         "artifact": None,

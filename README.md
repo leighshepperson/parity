@@ -98,6 +98,8 @@ differed, and exit `2` means `ERROR` because Parity could not perform a reliable
   provenance.
 - Replayable Arrow inputs, integrity-bound manifests and the effective comparison contract.
 - Candidate-only distilled contracts that retain found regressions after the reference is removed.
+- Reviewable compatibility budgets that allow known case/signature differences without hiding a
+  new class, plus stable candidate-baseline promotion for final reference retirement.
 - Ordered case-level parallelism without parallel Hypothesis shrinking.
 - Median performance ratios with deterministic bootstrap confidence intervals and optional gates.
 - Terminal, JSON, Markdown, JUnit and GitHub step-summary output.
@@ -266,14 +268,23 @@ Once findings have been reviewed, preserve them without preserving or executing 
 implementation:
 
 ```bash
+parity budget init .parity/report.json compatibility.toml
+parity budget approve compatibility.toml CASE ms3:... \
+  --reason "reviewed intentional contract change"
+# Add compatibility_budget = "compatibility.toml" to parity.toml, then rerun parity check.
 parity contract distill .parity/report.json .parity/contracts/upgrade
-# Fix the candidate, then remove the reference code/package/runtime.
-parity contract verify .parity/contracts/upgrade --json .parity/contract-status.json
+parity contract retire .parity/contracts/upgrade .parity/contracts/retired \
+  --budget compatibility.toml
+# The old reference code/package/runtime can now be removed.
+parity contract verify .parity/contracts/retired --json .parity/contract-status.json
 ```
 
-The private contract contains minimized inputs and exact reference outcomes but no reference
-endpoint. It is a focused regression corpus for signed findings, not a recording of every passing
-example. See the [distilled-contract guide](docs/DISTILLED_CONTRACTS.md).
+The budget approves only exact case/signature pairs and never hides a new difference class.
+Retirement observes the candidate twice, rejects unapproved or unstable behaviour, and freezes its
+reviewed outputs as the new baseline with an audit digest of the prior contract. The private
+contract is a focused regression corpus for signed findings, not a recording of every passing
+example. See the [compatibility-budget](docs/COMPATIBILITY_BUDGETS.md) and
+[distilled-contract](docs/DISTILLED_CONTRACTS.md) guides.
 
 Replay v2 binds interpreter, workdir and path-like command locations to an ancestor of the artifact
 itself, so the same artifact command works from the project root, a sibling directory or an
@@ -372,8 +383,9 @@ See the
 emit exactly one versioned, data-safe document to stdout while preserving exit codes `0`/`1`/`2`.
 Suggested commands are argv arrays, not shell strings. Discover every authored/output contract with
 `parity schema list` and print one Draft 2020-12 schema with, for example,
-`parity schema workspace`, `parity schema finding` or `parity schema agent-result`. Published schema
-bytes are frozen with their contract version and do not depend on the installed Pydantic release.
+`parity schema compatibility-budget`, `parity schema distilled-contract` or
+`parity schema agent-result`. Published schema bytes are frozen with their contract version and do
+not depend on the installed Pydantic release.
 
 Migrations are one active adjacent pair. Keep reusable controls/core cases, replace
 transition-specific cases, and advance after promoting the candidate:
@@ -459,6 +471,7 @@ code in a container or hardened runner.
 
 - [User guide](docs/USER_GUIDE.md)
 - [Reference-free distilled contracts](docs/DISTILLED_CONTRACTS.md)
+- [Compatibility budgets and reference retirement](docs/COMPATIBILITY_BUDGETS.md)
 - [Use cases and current boundaries](docs/USE_CASES.md)
 - [Configuration reference](docs/CONFIG_REFERENCE.md)
 - [Python command-adapter SDK](docs/TARGET_ADAPTER_SDK.md)

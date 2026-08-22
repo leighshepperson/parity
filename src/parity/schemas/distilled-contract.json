@@ -485,6 +485,41 @@
       "title": "ContractPathBase",
       "type": "object"
     },
+    "ContractRetirement": {
+      "additionalProperties": false,
+      "description": "Audit record binding a retired contract to its prior reference baseline.",
+      "properties": {
+        "approvals": {
+          "items": {
+            "$ref": "#/$defs/RetirementApproval"
+          },
+          "title": "Approvals",
+          "type": "array"
+        },
+        "retired_at": {
+          "format": "date-time",
+          "title": "Retired At",
+          "type": "string"
+        },
+        "source_contract_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Contract Sha256",
+          "type": "string"
+        },
+        "stability_repeats": {
+          "const": 2,
+          "default": 2,
+          "title": "Stability Repeats",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "retired_at",
+        "source_contract_sha256"
+      ],
+      "title": "ContractRetirement",
+      "type": "object"
+    },
     "DistilledCase": {
       "additionalProperties": false,
       "description": "Candidate-only invocation contract for a set of minimized examples.",
@@ -598,6 +633,36 @@
       "type": "object"
     },
     "JsonValue": {},
+    "RetirementApproval": {
+      "additionalProperties": false,
+      "description": "One reviewed difference consumed while promoting the candidate baseline.",
+      "properties": {
+        "case": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Case",
+          "type": "string"
+        },
+        "finding_signature": {
+          "pattern": "^ms3:[0-9a-f]{64}$",
+          "title": "Finding Signature",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case",
+        "finding_signature",
+        "reason"
+      ],
+      "title": "RetirementApproval",
+      "type": "object"
+    },
     "RunMetrics": {
       "additionalProperties": false,
       "properties": {
@@ -793,11 +858,19 @@
       "type": "object"
     }
   },
-  "$id": "https://parity-check.dev/schemas/distilled-contract/v1.json",
+  "$id": "https://parity-check.dev/schemas/distilled-contract/v2.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Versioned, candidate-only distilled contract stored as ``contract.json``.",
   "properties": {
+    "baseline": {
+      "enum": [
+        "reference",
+        "candidate"
+      ],
+      "title": "Baseline",
+      "type": "string"
+    },
     "cases": {
       "items": {
         "$ref": "#/$defs/DistilledCase"
@@ -837,13 +910,24 @@
     "path_base": {
       "$ref": "#/$defs/ContractPathBase"
     },
+    "retirement": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContractRetirement"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "source_report_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Source Report Sha256",
       "type": "string"
     },
     "version": {
-      "const": 1,
+      "const": 2,
       "title": "Version",
       "type": "integer"
     }
@@ -856,11 +940,12 @@
     "path_base",
     "contains_input_data",
     "contains_output_data",
+    "baseline",
     "cases",
     "files"
   ],
   "title": "DistilledContractManifest",
   "type": "object",
   "x-parity-contract": "distilled-contract",
-  "x-parity-contract-version": 1
+  "x-parity-contract-version": 2
 }

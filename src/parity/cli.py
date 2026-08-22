@@ -48,10 +48,15 @@ contract_app = typer.Typer(
     help="Distill findings and verify candidates without running the reference.",
     no_args_is_help=True,
 )
+budget_app = typer.Typer(
+    help="Capture and review intentional compatibility differences.",
+    no_args_is_help=True,
+)
 app.add_typer(migration_app, name="migration")
 app.add_typer(evidence_app, name="evidence")
 app.add_typer(adapter_app, name="adapter")
 app.add_typer(contract_app, name="contract")
+app.add_typer(budget_app, name="budget")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -640,7 +645,10 @@ def check(
     except ValueError as exc:
         _fail(str(exc))
 
-    result = run_suite(config, selected_cases=selected or None)
+    try:
+        result = run_suite(config, selected_cases=selected or None)
+    except ValueError as exc:
+        _fail(str(exc))
     written: list[Path] = []
     try:
         if json_output is not None:
@@ -1653,6 +1661,106 @@ def evidence_verify(
         raise typer.Exit(1)
 
 
+@budget_app.command("init")
+def budget_init(
+    report: Annotated[Path, typer.Argument(help="Suite or migration JSON report")],
+    destination: Annotated[Path, typer.Argument(help="New compatibility budget TOML")],
+    force: Annotated[bool, typer.Option("--force", help="Replace an existing budget")] = False,
+) -> None:
+    """Capture every signed finding into an explicit review ledger."""
+
+    from parity.compatibility import (
+        CompatibilityBudgetError,
+        capture_compatibility_budget,
+        load_compatibility_budget,
+    )
+
+    try:
+        result = capture_compatibility_budget(report, destination, force=force)
+        budget = load_compatibility_budget(result.path)
+    except FileExistsError:
+        _fail(f"{destination} already exists; pass --force to replace it")
+    except CompatibilityBudgetError as exc:
+        _fail(str(exc))
+    except OSError as exc:
+        _fail(f"compatibility budget could not be written ({type(exc).__name__})")
+    _print_path_status("created", _written_path(result.path))
+    console.print(f"{result.findings} finding(s) require review")
+    first = budget.findings[0]
+    console.print(
+        "next: "
+        + shlex.join(
+            [
+                "parity",
+                "budget",
+                "approve",
+                str(result.path),
+                first.case,
+                first.finding_signature,
+                "--reason",
+                "why this difference is acceptable",
+            ]
+        ),
+        markup=False,
+    )
+
+
+@budget_app.command("approve")
+def budget_approve(
+    budget: Annotated[Path, typer.Argument(help="Compatibility budget TOML")],
+    case: Annotated[str, typer.Argument(help="Exact case name")],
+    finding_signature: Annotated[str, typer.Argument(help="Exact ms3 finding signature")],
+    reason: Annotated[
+        str,
+        typer.Option("--reason", help="Reviewed rationale for accepting this difference"),
+    ],
+) -> None:
+    """Approve one report-captured finding with a required rationale."""
+
+    from parity.compatibility import CompatibilityBudgetError, approve_compatibility_finding
+    from parity.models import CompatibilityDecision
+
+    try:
+        updated = approve_compatibility_finding(
+            budget,
+            case,
+            finding_signature,
+            reason=reason,
+        )
+    except CompatibilityBudgetError as exc:
+        _fail(str(exc))
+    except OSError as exc:
+        _fail(f"compatibility budget could not be updated ({type(exc).__name__})")
+    _print_path_status("approved", _written_path(budget))
+    remaining = [
+        finding for finding in updated.findings if finding.decision is CompatibilityDecision.REVIEW
+    ]
+    if remaining:
+        console.print(f"{len(remaining)} finding(s) still require review")
+        next_finding = remaining[0]
+        console.print(
+            "next: "
+            + shlex.join(
+                [
+                    "parity",
+                    "budget",
+                    "approve",
+                    str(budget),
+                    next_finding.case,
+                    next_finding.finding_signature,
+                    "--reason",
+                    "why this difference is acceptable",
+                ]
+            ),
+            markup=False,
+        )
+    else:
+        console.print(
+            f"next: set compatibility_budget = {json.dumps(_cli_path(budget))} in parity.toml",
+            markup=False,
+        )
+
+
 @contract_app.command("distill")
 def contract_distill(
     report: Annotated[Path, typer.Argument(help="Suite or migration JSON report")],
@@ -1681,6 +1789,36 @@ def contract_distill(
         _fail(f"contract could not be distilled ({type(exc).__name__})")
     _print_path_status("wrote", _written_path(result.path))
     console.print(f"{result.examples} example(s) across {result.cases} case(s)")
+
+
+@contract_app.command("retire")
+def contract_retire(
+    contract: Annotated[Path, typer.Argument(help="Reference-baseline contract directory")],
+    destination: Annotated[Path, typer.Argument(help="New retired contract directory")],
+    budget: Annotated[
+        Path | None,
+        typer.Option("--budget", help="Reviewed compatibility budget for intentional differences"),
+    ] = None,
+) -> None:
+    """Freeze the stable, reviewed candidate as the new reference-free baseline."""
+
+    from parity.distilled import ContractError, retire_contract
+
+    try:
+        result = retire_contract(contract, destination, budget=budget)
+    except ContractError as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"reference could not be retired ({type(exc).__name__})")
+    _print_path_status("retired", _written_path(result.path))
+    console.print(
+        f"{result.examples} stable example(s) across {result.cases} case(s); "
+        f"{result.approvals} approved difference(s) promoted"
+    )
+    console.print(
+        "next: " + shlex.join(["parity", "contract", "verify", str(result.path)]),
+        markup=False,
+    )
 
 
 @contract_app.command("verify")

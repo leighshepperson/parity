@@ -88,7 +88,8 @@ def _suite(tmp_path: Path) -> SuiteResult:
 def test_json_report_is_machine_readable_and_elides_values(tmp_path: Path) -> None:
     rendered = render_json(_suite(tmp_path))
     payload = json.loads(rendered)
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
+    assert payload["cases"][0]["failures"][0]["approved"] is False
     assert payload["status"] == "failed"
     assert payload["cases"][0]["findings_discovered"] == 1
     assert payload["cases"][0]["failures"][0]["finding_signature"] == "ms3:" + "b" * 64

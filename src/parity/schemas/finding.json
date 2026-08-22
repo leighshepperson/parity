@@ -378,6 +378,10 @@
   "additionalProperties": false,
   "description": "One data-safe finding or operational error embedded in a suite report.",
   "properties": {
+    "approved": {
+      "title": "Approved",
+      "type": "boolean"
+    },
     "artifact": {
       "anyOf": [
         {
@@ -446,6 +450,7 @@
   "required": [
     "source",
     "status",
+    "approved",
     "mismatch_counts",
     "mismatches"
   ],

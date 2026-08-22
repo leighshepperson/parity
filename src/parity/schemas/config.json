@@ -1788,6 +1788,19 @@
       "default": null,
       "title": "Cases File"
     },
+    "compatibility_budget": {
+      "anyOf": [
+        {
+          "format": "path",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Compatibility Budget"
+    },
     "fail_fast": {
       "default": false,
       "title": "Fail Fast",

@@ -10,10 +10,15 @@ import pytest
 from typer.testing import CliRunner
 
 from parity import cli
+from parity.compatibility import (
+    approve_compatibility_finding,
+    capture_compatibility_budget,
+)
 from parity.distilled import (
     ContractError,
     DistilledContractManifest,
     distill_contract,
+    retire_contract,
     verify_contract,
 )
 from parity.engine import run_suite
@@ -123,6 +128,203 @@ def candidate(table):
     assert result.status is Status.PASSED
     assert result.cases[0].examples_run == 1
     assert result.cases[0].failures == []
+
+
+@pytest.mark.integration
+def test_retirement_promotes_an_approved_candidate_and_reference_can_be_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = _finding_report(tmp_path, monkeypatch)
+    source = tmp_path / "reference-contract"
+    distill_contract(report, source)
+    source_manifest = DistilledContractManifest.model_validate_json(
+        (source / "contract.json").read_text(encoding="utf-8")
+    )
+    signature = source_manifest.cases[0].examples[0].finding_signature
+    budget_path = tmp_path / "compatibility.toml"
+    capture_compatibility_budget(report, budget_path)
+    approve_compatibility_finding(
+        budget_path,
+        "upgrade",
+        signature,
+        reason="The replacement deliberately adopts zero-based output.",
+    )
+
+    retired = tmp_path / "retired-contract"
+    result = retire_contract(source, retired, budget=budget_path)
+
+    assert result.approvals == 1
+    manifest = DistilledContractManifest.model_validate_json(
+        (retired / "contract.json").read_text(encoding="utf-8")
+    )
+    assert manifest.baseline == "candidate"
+    assert manifest.retirement is not None
+    assert manifest.retirement.source_contract_sha256 == result.source_contract_sha256
+    assert manifest.retirement.approvals[0].reason == (
+        "The replacement deliberately adopts zero-based output."
+    )
+
+    (tmp_path / "upgrade_target.py").write_text(
+        """
+def candidate(table):
+    return table.column("value")[0].as_py()
+""",
+        encoding="utf-8",
+    )
+    _clear_import_cache(tmp_path)
+    assert verify_contract(retired).status is Status.PASSED
+
+    (tmp_path / "upgrade_target.py").write_text(
+        """
+def candidate(table):
+    return table.column("value")[0].as_py() + 7
+""",
+        encoding="utf-8",
+    )
+    _clear_import_cache(tmp_path)
+    assert verify_contract(retired).status is Status.FAILED
+
+
+@pytest.mark.integration
+def test_retirement_blocks_unapproved_and_nondeterministic_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = _finding_report(tmp_path, monkeypatch)
+    source = tmp_path / "reference-contract"
+    distill_contract(report, source)
+
+    unapproved = tmp_path / "unapproved"
+    with pytest.raises(ContractError, match="unapproved finding"):
+        retire_contract(source, unapproved)
+    assert not unapproved.exists()
+
+    (tmp_path / "upgrade_target.py").write_text(
+        """
+import time
+
+def candidate(table):
+    return time.time_ns()
+""",
+        encoding="utf-8",
+    )
+    _clear_import_cache(tmp_path)
+    unstable = tmp_path / "unstable"
+    with pytest.raises(ContractError, match="nondeterministic"):
+        retire_contract(source, unstable)
+    assert not unstable.exists()
+
+
+@pytest.mark.integration
+def test_retirement_needs_no_budget_after_candidate_is_fixed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = _finding_report(tmp_path, monkeypatch)
+    source = tmp_path / "reference-contract"
+    distill_contract(report, source)
+    (tmp_path / "upgrade_target.py").write_text(
+        """
+def candidate(table):
+    return table.column("value")[0].as_py() + 1
+""",
+        encoding="utf-8",
+    )
+    _clear_import_cache(tmp_path)
+
+    retired = tmp_path / "retired-contract"
+    result = retire_contract(source, retired)
+
+    assert result.approvals == 0
+    assert verify_contract(retired).status is Status.PASSED
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("source", "candidate_only"),
+    [
+        (
+            """
+def reference(table):
+    return table.append_column("legacy", table.column("value"))
+
+def candidate(table):
+    return table
+""",
+            """
+def candidate(table):
+    return table
+""",
+        ),
+        (
+            """
+def reference(table):
+    raise ValueError("legacy rejection 41")
+
+def candidate(table):
+    raise TypeError("replacement rejection 99")
+""",
+            """
+def candidate(table):
+    raise TypeError("replacement rejection 812")
+""",
+        ),
+    ],
+)
+def test_retirement_preserves_candidate_arrow_and_exception_baselines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    candidate_only: str,
+) -> None:
+    report = _finding_report(tmp_path, monkeypatch, source=source)
+    contract = tmp_path / "reference-contract"
+    distill_contract(report, contract)
+    manifest = DistilledContractManifest.model_validate_json(
+        (contract / "contract.json").read_text(encoding="utf-8")
+    )
+    signature = manifest.cases[0].examples[0].finding_signature
+    budget = tmp_path / "compatibility.toml"
+    capture_compatibility_budget(report, budget)
+    approve_compatibility_finding(
+        budget,
+        "upgrade",
+        signature,
+        reason="Reviewed replacement semantics.",
+    )
+
+    retired = tmp_path / "retired-contract"
+    retire_contract(contract, retired, budget=budget)
+    (tmp_path / "upgrade_target.py").write_text(candidate_only, encoding="utf-8")
+    _clear_import_cache(tmp_path)
+
+    assert verify_contract(retired).status is Status.PASSED
+
+
+@pytest.mark.integration
+def test_retirement_rejects_a_budget_from_another_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = _finding_report(tmp_path, monkeypatch)
+    source = tmp_path / "reference-contract"
+    distill_contract(report, source)
+    budget = tmp_path / "compatibility.toml"
+    capture_compatibility_budget(report, budget)
+    content = budget.read_text(encoding="utf-8")
+    budget.write_text(
+        content.replace(
+            DistilledContractManifest.model_validate_json(
+                (source / "contract.json").read_text(encoding="utf-8")
+            ).source_report_sha256,
+            "f" * 64,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ContractError, match="different report"):
+        retire_contract(source, tmp_path / "retired", budget=budget)
 
 
 @pytest.mark.integration
@@ -366,10 +568,17 @@ def candidate(table):
         encoding="utf-8",
     )
     _clear_import_cache(tmp_path)
+    retired = tmp_path / "retired-contract"
+    promoted = runner.invoke(
+        cli.app,
+        ["contract", "retire", str(destination), str(retired)],
+    )
+    assert promoted.exit_code == 0, promoted.output
+    assert "0 approved difference(s) promoted" in promoted.output
     output = tmp_path / "verification.json"
     verified = runner.invoke(
         cli.app,
-        ["contract", "verify", str(destination), "--json", str(output)],
+        ["contract", "verify", str(retired), "--json", str(output)],
     )
 
     assert verified.exit_code == 0, verified.output

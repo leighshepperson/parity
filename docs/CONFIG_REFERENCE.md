@@ -12,6 +12,7 @@ fall back to a default. Paths are resolved relative to the configuration file.
 | `fail_fast` | boolean | `false` | Stop the suite after the first failed/error case. |
 | `jobs` | integer | `1` | Independent cases to run concurrently, 1 through 256. Values above 1 are incompatible with `fail_fast`. |
 | `native_threads` | integer/null | none | Opt-in default for common BLAS/OpenMP thread pools in each worker, 1 through 256. |
+| `compatibility_budget` | relative path/null | none | Contained version 1 budget of reviewed case/finding approvals. |
 | `cases` | array of tables | conditional | One or more uniquely named campaigns, mutually exclusive with `cases_file`. |
 | `cases_file` | relative path | conditional | Contained file holding the campaigns, mutually exclusive with inline `cases`. |
 | `case_defaults` | table | none | Bounded defaults expanded into every declared case. |
@@ -76,6 +77,38 @@ Case identity, targets/commands, fixtures/schemas, input bundles, custom generat
 Nested tables merge recursively; scalars and lists replace the inherited value. Parity validates
 and fingerprints the fully expanded configuration, so an extracted/defaulted config has the same
 effective model and hash as equivalent inline declarations.
+
+## Compatibility budget
+
+Create a review ledger from a current suite or migration report, approve exact findings with a
+rationale, then reference it from `parity.toml`:
+
+```bash
+parity budget init .parity/report.json compatibility.toml
+parity budget approve compatibility.toml orders ms3:... \
+  --reason "Reviewed intentional change"
+```
+
+```toml
+version = 1
+compatibility_budget = "compatibility.toml"
+```
+
+The version 1 budget contains `source_report_sha256` and one or more `[[findings]]` entries:
+
+| Key | Type | Meaning |
+|---|---:|---|
+| `case` | string | Exact configured case name. |
+| `finding_signature` | string | Exact `ms3:` behavioural-class signature from the captured report. |
+| `decision` | `review` / `approved` / `rejected` | Only `approved` permits the finding. |
+| `reason` | string/null | Required non-blank rationale for approved or rejected decisions. |
+
+Approved findings remain in every report but do not block the case. Review/rejected entries and
+all new signatures still fail. Fixed approvals are reported as no longer observed. The budget file
+must resolve inside the configuration directory and its validated content participates in the
+effective-configuration hash. For each case, `generation.max_findings` must exceed the number of
+approvals so discovery always has capacity for at least one new difference class. See
+[Compatibility budgets and reference retirement](COMPATIBILITY_BUDGETS.md).
 
 ## Migration manifest
 
@@ -148,7 +181,7 @@ Invalid configuration and error/incomplete execution evidence return exit `2`.
 | `summary` | Derived `total`, `passed`, `failed`, `error`, `excluded` and `uncovered` counts. |
 | `units` | Unit ID/status, redacted exclusion reason and mapped case name/status/example count. |
 | `manifest_sha256` | Canonical fingerprint of the effective migration inventory. |
-| `parity` | Data-safe Parity report schema version 3 for the mapped-case union. |
+| `parity` | Data-safe Parity report schema version 4 for the mapped-case union. |
 
 The nested Parity report's provenance contains its effective `config_sha256`. Unit IDs, case names
 and exclusion reasons pass through report redaction. No report contains compared dataframe or scalar
@@ -163,9 +196,10 @@ references, argv-array next commands and only data-safe report projections. Exit
 
 Run `parity schema list` to enumerate public contracts and `parity schema NAME` to emit a
 self-describing Draft 2020-12 schema. Published names include `config`, `workspace`,
-`migration-manifest`, `suite-report`, `finding`, `migration-report`, `replay`, `artifact-manifest`,
-`checklist` and `agent-result`. These are frozen package resources: a contract version's schema
-bytes do not vary with the installed Pydantic release.
+`migration-manifest`, `compatibility-budget`, `distilled-contract`, `suite-report`, `finding`,
+`migration-report`, `replay`, `artifact-manifest`, `checklist` and `agent-result`. These are frozen
+package resources: a contract version's schema bytes do not vary with the installed Pydantic
+release.
 
 This manifest is a reviewed declaration, not an API-discovery mechanism. Parity cannot detect a
 public API omitted from `units` or prove that a mapped case exercises the behaviour its unit ID
@@ -320,7 +354,7 @@ adding source roots manually. The workspace directory must also remain inside th
 ## Retained evidence verification
 
 `parity evidence verify REPORT [--artifact-root PATH] [--json PATH]` accepts a suite JSON report
-(schema 3) or migration JSON report (schema 1 with its nested suite). Every failure entry must name
+(schema 4) or migration JSON report (schema 1 with its nested suite). Every failure entry must name
 a replayable artifact and carry an `ms3:...` mismatch signature. Duplicate report entries are
 verified once in report order.
 

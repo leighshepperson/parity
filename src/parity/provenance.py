@@ -518,6 +518,17 @@ def effective_config_sha256(
             for case in cases
             if isinstance(case, Mapping) and case.get("name") in selected_cases
         ]
+        budget = raw.get("compatibility_budget")
+        if isinstance(budget, Mapping) and isinstance(budget.get("findings"), list):
+            selected_findings = [
+                finding
+                for finding in budget["findings"]
+                if isinstance(finding, Mapping) and finding.get("case") in selected_cases
+            ]
+            if selected_findings:
+                raw["compatibility_budget"] = {**budget, "findings": selected_findings}
+            else:
+                raw["compatibility_budget"] = None
 
     base = Path(base_directory) if base_directory is not None else _common_config_base(raw)
     canonical = _canonical_value(raw, base_directory=base)

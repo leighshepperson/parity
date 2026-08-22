@@ -2,10 +2,19 @@
 
 from parity._version import __version__
 from parity.api import check, verify
+from parity.compatibility import (
+    BudgetCaptureResult,
+    approve_compatibility_finding,
+    capture_compatibility_budget,
+    load_compatibility_budget,
+)
 from parity.distilled import (
+    ContractRetirement,
     DistillationResult,
     DistilledContractManifest,
+    RetirementResult,
     distill_contract,
+    retire_contract,
     verify_contract,
 )
 from parity.evidence import EvidenceResult, verify_evidence
@@ -22,6 +31,10 @@ from parity.models import (
     CaseProvenance,
     CaseResult,
     ComparisonPolicy,
+    CompatibilityBudget,
+    CompatibilityDecision,
+    CompatibilityFinding,
+    CompatibilityResult,
     EqualRowCount,
     ForeignKey,
     FrameConstraint,
@@ -42,11 +55,17 @@ from parity.provenance import DistributionProvenance, RuntimeProvenance
 
 __all__ = [
     "AdapterName",
+    "BudgetCaptureResult",
     "Cardinality",
     "CaseConfig",
     "CaseProvenance",
     "CaseResult",
     "ComparisonPolicy",
+    "CompatibilityBudget",
+    "CompatibilityDecision",
+    "CompatibilityFinding",
+    "CompatibilityResult",
+    "ContractRetirement",
     "DistillationResult",
     "DistilledContractManifest",
     "DistributionProvenance",
@@ -65,15 +84,20 @@ __all__ = [
     "PandasInput",
     "ParityConfig",
     "Relationship",
+    "RetirementResult",
     "RowComparison",
     "RuntimeProvenance",
     "SortedBy",
     "SuiteProvenance",
     "SuiteResult",
     "__version__",
+    "approve_compatibility_finding",
+    "capture_compatibility_budget",
     "check",
     "check_migration",
     "distill_contract",
+    "load_compatibility_budget",
+    "retire_contract",
     "verify",
     "verify_contract",
     "verify_evidence",

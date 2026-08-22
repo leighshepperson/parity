@@ -166,13 +166,17 @@ unit-test corpus before fixing the candidate.
 
 When a report contains confirmed findings, `parity contract distill REPORT DESTINATION` can retain
 those minimized inputs and exact reference outcomes as a candidate-only regression gate. After
-distillation, fix the candidate and run `parity contract verify DESTINATION`; the reference target,
-package, executable and runtime may all be absent. The contract intentionally contains no
-reference endpoint.
+distillation, fix the candidate and run `parity contract verify DESTINATION`. If a difference is
+intentional, capture it with `parity budget init`, approve its exact case/signature pair with a
+reason, then run `parity contract retire SOURCE DESTINATION --budget compatibility.toml`.
+Retirement executes the candidate twice, blocks new or unstable behaviour, and promotes the final
+candidate observations into the new baseline. The reference target, package, executable and
+runtime may then all be absent. Neither contract contains a reference endpoint.
 
 Contracts are private, integrity-bound data directories and must stay inside the recorded project
 root. They cover distinct signed findings, not every passing campaign example. See
 [Distilled contracts](DISTILLED_CONTRACTS.md) for the complete workflow, privacy boundary and API.
+See [Compatibility budgets](COMPATIBILITY_BUDGETS.md) for approval and retirement semantics.
 
 ### 5. Separate correctness from speed
 
@@ -869,6 +873,15 @@ parity migration run [--workspace PATH]       prepare and run every dependency l
                      [--refresh-locks] [--json]
 parity evidence verify REPORT                 replay report-referenced findings
                        [--artifact-root PATH] [--json PATH]
+parity budget init REPORT DESTINATION         capture findings for explicit review
+                   [--force]
+parity budget approve BUDGET CASE SIGNATURE  approve one exact finding with rationale
+                      --reason TEXT
+parity contract distill REPORT DESTINATION    create a reference-baseline contract
+                        [--artifact-root PATH]
+parity contract retire CONTRACT DESTINATION  promote the stable candidate baseline
+                       [--budget FILE]
+parity contract verify CONTRACT [--json PATH] run only the candidate against the baseline
 parity replay ARTIFACT [--json]               reproduce a counterexample from any cwd
 parity schema list                            list published machine contracts
 parity schema NAME [--output PATH]            emit one versioned JSON Schema

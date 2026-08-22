@@ -135,7 +135,7 @@ class EvidenceResult(StrictModel):
 
 def _suite_payload(payload: dict[str, Any]) -> dict[str, Any]:
     schema_version = payload.get("schema_version")
-    if type(schema_version) is int and schema_version == 3:
+    if type(schema_version) is int and schema_version == 4:
         suite = payload
     elif (
         type(schema_version) is int
@@ -144,8 +144,8 @@ def _suite_payload(payload: dict[str, Any]) -> dict[str, Any]:
     ):
         suite = payload["parity"]
     else:
-        raise EvidenceError("report must be Parity suite schema 3 or migration schema 1")
-    if type(suite.get("schema_version")) is not int or suite.get("schema_version") != 3:
+        raise EvidenceError("report must be Parity suite schema 4 or migration schema 1")
+    if type(suite.get("schema_version")) is not int or suite.get("schema_version") != 4:
         raise EvidenceError("report contains an unsupported Parity result payload")
     if not isinstance(suite.get("cases"), list):
         raise EvidenceError("report contains an unsupported Parity result payload")
