@@ -1,15 +1,16 @@
 """Atomic, replayable failure campaigns.
 
-Artifacts are the sole place where Parity persists input frame data.  Each
-campaign is first completed in a private sibling directory and then atomically
-renamed into place, so interrupted runs never leave a plausible partial result.
+Artifacts are the sole place where Parity persists invocation data. Frame leaves
+remain private files; safe JSON arguments are retained in the replay document.
+Each campaign is first completed in a private sibling directory and then
+atomically renamed into place, so interrupted runs never leave a plausible
+partial result.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import keyword
 import os
 import re
 import shutil
@@ -24,33 +25,49 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 
 from parity.execution import Observation, _write_arrow, redact_text
+from parity.invocation import FrameSequence, Invocation, InvocationValue, iter_frames
 from parity.models import CallableSpec, CaseConfig, CaseProvenance, ExampleResult
 
 _SECRET_KEY = re.compile(
     r"(?i)(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|credential)"
 )
 
-ArtifactInput: TypeAlias = pa.Table | Mapping[str, pa.Table]
+ArtifactInput: TypeAlias = Invocation
 
 
-def _normalize_inputs(value: ArtifactInput) -> tuple[list[tuple[str, pa.Table]], bool]:
-    """Return ordered, validated inputs and whether this is a single-table campaign."""
+def _normalize_inputs(value: ArtifactInput) -> list[tuple[str, pa.Table]]:
+    """Return every validated Arrow leaf in invocation order."""
 
-    if isinstance(value, pa.Table):
-        return [("input", value)], True
-    if isinstance(value, Mapping):
-        items = list(value.items())
-        if any(
-            not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name)
-            for name, _ in items
-        ):
-            raise TypeError("input bundle names must be valid Python identifiers")
-        if any(not isinstance(table, pa.Table) for _, table in items):
-            raise TypeError("every bundled input must be a pyarrow.Table")
-        if not 2 <= len(items) <= 3:
-            raise ValueError("an input bundle must contain two or three named tables")
-        return items, False
-    raise TypeError("input must be an Arrow table or a map of two or three named tables")
+    if not isinstance(value, Invocation):
+        raise TypeError("artifact input must be a parity.Invocation")
+    return [(item.path, item.table) for item in iter_frames(value)]
+
+
+def _invocation_document(
+    invocation: Invocation,
+    input_files: Mapping[str, str],
+) -> dict[str, Any]:
+    """Serialize invocation shape while replacing Arrow leaves with artifact files."""
+
+    def encode(value: InvocationValue, path: str) -> dict[str, Any]:
+        if isinstance(value, pa.Table):
+            return {"kind": "arrow", "file": input_files[path]}
+        if isinstance(value, FrameSequence):
+            return {
+                "kind": "frames",
+                "container": value.container,
+                "items": [
+                    encode(table, f"{path}/{index}") for index, table in enumerate(value.items)
+                ],
+            }
+        return {"kind": "json", "value": _sanitize_json(value)}
+
+    return {
+        "args": [encode(value, f"args/{index}") for index, value in enumerate(invocation.args)],
+        "kwargs": {
+            name: encode(value, f"kwargs/{name}") for name, value in invocation.kwargs.items()
+        },
+    }
 
 
 def _safe_name(name: str) -> str:
@@ -92,29 +109,12 @@ def _contains_redaction(value: Any) -> bool:
     return False
 
 
-def _case_supports_automatic_replay(
-    case: Mapping[str, Any], *, input_files: Mapping[str, str], single_input: bool
-) -> bool:
+def _case_supports_automatic_replay(case: Mapping[str, Any]) -> bool:
     if not all(isinstance(case.get(side), dict) for side in ("reference", "candidate")):
         return False
     if any(_contains_redaction(case.get(side)) for side in ("reference", "candidate")):
         return False
-    invocation_arguments = (
-        case.get("static_args"),
-        case.get("static_kwargs"),
-        case.get("reference_kwargs"),
-        case.get("candidate_kwargs"),
-    )
-    if any(_contains_redaction(value) for value in invocation_arguments):
-        return False
-    if single_input:
-        return case.get("fixture") == next(iter(input_files.values()))
-    bundle = case.get("input_bundle")
-    return (
-        isinstance(bundle, dict)
-        and isinstance(bundle.get("inputs"), dict)
-        and set(bundle["inputs"]) == set(input_files)
-    )
+    return isinstance(case.get("invocation"), dict)
 
 
 def _spec_for_replay(
@@ -232,8 +232,6 @@ def _case_for_replay(
     candidate: CallableSpec | None,
     *,
     invocation_directory: Path,
-    input_files: Mapping[str, str],
-    single_input: bool,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     if isinstance(case, CaseConfig):
         config = case.model_dump(mode="json", by_alias=True)
@@ -242,35 +240,10 @@ def _case_for_replay(
             # The exact Arrow witness replaces project code as the replay input
             # authority. Replaying must not import or run the generator again.
             generation["generator"] = None
-        if single_input:
-            config["fixture"] = next(iter(input_files.values()))
-            config["schema"] = None
-            config["input_bundle"] = None
-        else:
-            bundle = config.get("input_bundle")
-            if bundle is None and case.generation.generator is not None:
-                bundle = {
-                    "binding": "keyword",
-                    "inputs": {
-                        name: {"fixture": filename} for name, filename in input_files.items()
-                    },
-                    "relationships": [],
-                }
-                config["fixture"] = None
-                config["schema"] = None
-                config["input_bundle"] = bundle
-            if not isinstance(bundle, dict) or not isinstance(bundle.get("inputs"), dict):
-                # A direct ArtifactStore caller can persist a bundle without a
-                # configured campaign. Keep the evidence, but make the replay
-                # contract visibly non-reconstructable instead of guessing.
-                config["input_bundle"] = None
-            else:
-                for name, filename in input_files.items():
-                    input_spec = bundle["inputs"].get(name)
-                    if not isinstance(input_spec, dict):
-                        config["input_bundle"] = None
-                        break
-                    input_spec["fixture"] = filename
+        # The artifact's separately integrity-bound invocation is authoritative.
+        # An empty declaration keeps CaseConfig structurally valid without
+        # re-running project generation or loading the original fixtures.
+        config["invocation"] = {}
         reference_config, candidate_config, blockers = _specs_for_replay(
             case.reference,
             case.candidate,
@@ -278,10 +251,6 @@ def _case_for_replay(
         )
         config["reference"] = reference_config
         config["candidate"] = candidate_config
-        config["static_kwargs"] = _sanitize_json(config.get("static_kwargs", {}))
-        config["reference_kwargs"] = _sanitize_json(config.get("reference_kwargs", {}))
-        config["candidate_kwargs"] = _sanitize_json(config.get("candidate_kwargs", {}))
-        config["static_args"] = _sanitize_json(config.get("static_args", []))
         return config, blockers
     reference_config, candidate_config, blockers = _specs_for_replay(
         reference,
@@ -293,14 +262,7 @@ def _case_for_replay(
         "reference": reference_config,
         "candidate": candidate_config,
     }
-    if single_input:
-        replay_case["fixture"] = next(iter(input_files.values()))
-    else:
-        replay_case["input_bundle"] = {
-            "binding": "keyword",
-            "inputs": {name: {"fixture": filename} for name, filename in input_files.items()},
-            "relationships": [],
-        }
+    replay_case["invocation"] = {}
     return replay_case, blockers
 
 
@@ -370,7 +332,7 @@ class ArtifactStore:
         reference_observation: Observation | None = None,
         config_sha256: str | None = None,
     ) -> Path:
-        """Persist one minimal failing input bundle and return its campaign directory."""
+        """Persist one minimal failing invocation and return its campaign directory."""
 
         if config_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", config_sha256):
             raise ValueError("config_sha256 must be a lowercase SHA-256 digest")
@@ -393,28 +355,12 @@ class ArtifactStore:
         case_root.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=".pending-", dir=case_root))
         try:
-            normalized, single_input = _normalize_inputs(input_table)
-            if isinstance(case, CaseConfig):
-                if single_input and case.input_bundle is not None:
-                    raise ValueError("a bundled case requires all configured input tables")
-                if (
-                    not single_input
-                    and case.input_bundle is None
-                    and case.generation.generator is None
-                ):
-                    raise ValueError("a single-input case cannot store an input bundle")
-                if case.input_bundle is not None:
-                    expected_names = tuple(case.input_bundle.inputs)
-                    supplied_names = tuple(name for name, _ in normalized)
-                    if supplied_names != expected_names:
-                        raise ValueError(
-                            "artifact input names and order must exactly match the configured bundle"
-                        )
+            normalized = _normalize_inputs(input_table)
             input_files: dict[str, str] = {}
             arrow_paths: list[Path] = []
             parquet_paths: list[Path] = []
             for index, (input_name, table) in enumerate(normalized):
-                stem = "input" if single_input else f"input-{index:03d}"
+                stem = f"input-{index:03d}"
                 arrow_path = temporary / f"{stem}.arrow"
                 parquet_path = temporary / f"{stem}.parquet"
                 _write_arrow(table, arrow_path)
@@ -452,10 +398,22 @@ class ArtifactStore:
                 reference,
                 candidate,
                 invocation_directory=self.invocation_directory,
-                input_files=input_files,
-                single_input=single_input,
             )
+            invocation_document = _invocation_document(input_table, input_files)
+            if _contains_redaction(invocation_document):
+                # JSON call arguments can contain credentials or host-local paths.
+                # Keep the evidence safe and fail closed instead of pretending the
+                # sanitized invocation can reproduce the original call.
+                replay_blockers["artifact"] = "redacted_invocation"
             input_digest = hashlib.sha256()
+            input_digest.update(
+                json.dumps(
+                    invocation_document,
+                    allow_nan=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
             for input_name, arrow_path in zip(input_files, arrow_paths, strict=True):
                 input_digest.update(input_name.encode("utf-8"))
                 input_digest.update(b"\0")
@@ -486,15 +444,10 @@ class ArtifactStore:
                     raise RuntimeError("artifact campaign must be below its replay root")
                 path_base = {"kind": "artifact_ancestor", "levels": levels}
             replay: dict[str, Any] = {
-                # The current replay transport covers both single inputs and
-                # named bundles. A failure without complete bindings remains
-                # useful inspection evidence, but cannot execute automatically.
-                "version": 2,
+                "version": 3,
                 "case": replay_case,
                 "environment": "inherited; values are never stored in artifacts",
-                "inputs": [
-                    {"name": name, "file": filename} for name, filename in input_files.items()
-                ],
+                "invocation": invocation_document,
             }
             if path_base is not None:
                 replay["path_base"] = path_base
@@ -509,9 +462,7 @@ class ArtifactStore:
                 replay["config_sha256"] = config_sha256
             if (
                 complete_runtime
-                and _case_supports_automatic_replay(
-                    replay_case, input_files=input_files, single_input=single_input
-                )
+                and _case_supports_automatic_replay(replay_case)
                 and not replay_blockers
             ):
                 replay["command"] = ["parity", "replay", "<artifact-path>"]
@@ -519,7 +470,7 @@ class ArtifactStore:
                 json.dumps(replay, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
             manifest: dict[str, Any] = {
-                "version": 2,
+                "version": 3,
                 "campaign_id": campaign_id,
                 "case": name,
                 "created_at": datetime.now(UTC).isoformat(),

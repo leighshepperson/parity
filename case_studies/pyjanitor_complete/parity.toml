@@ -1,4 +1,4 @@
-version = 1
+version = 2
 artifact_dir = ".parity-pyjanitor-final"
 fail_fast = false
 
@@ -14,24 +14,26 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_grid"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 8
 unique_together = [["store", "sku"]]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "store"
 dtype = "string"
 nullable = false
 categories = ["A", "B", "C"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "sku"
 dtype = "string"
 nullable = false
 categories = ["x", "y", "z"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "metric"
 dtype = "float64"
 nullable = true
@@ -53,8 +55,10 @@ enabled = false
 
 [[cases]]
 name = "empty-input"
-fixture = "fixtures/empty.arrow"
 tags = ["regression", "empty"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/empty.arrow"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_grid"
@@ -64,23 +68,23 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_grid"
 adapter = "polars"
 
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 3
 max_rows = 3
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "store"
 dtype = "string"
 nullable = false
 categories = ["A", "B"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "sku"
 dtype = "string"
 nullable = false
 categories = ["x", "y"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "metric"
 dtype = "float64"
 nullable = false
@@ -102,8 +106,10 @@ enabled = false
 
 [[cases]]
 name = "original-column-order"
-fixture = "fixtures/column_order.json"
 tags = ["regression", "ordering"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/column_order.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_grid"
@@ -128,8 +134,10 @@ enabled = false
 
 [[cases]]
 name = "grouped-sort-order"
-fixture = "fixtures/group_order.json"
 tags = ["regression", "ordering", "grouped"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/group_order.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_grouped"
@@ -154,8 +162,10 @@ enabled = false
 
 [[cases]]
 name = "unsorted-row-order"
-fixture = "fixtures/unsorted.json"
 tags = ["regression", "ordering"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/unsorted.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_unsorted"
@@ -190,24 +200,26 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_fill_implicit"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 8
 unique_together = [["store", "sku"]]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "store"
 dtype = "string"
 nullable = false
 categories = ["A", "B", "C"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "sku"
 dtype = "string"
 nullable = false
 categories = ["x", "y", "z"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "metric"
 dtype = "float64"
 nullable = true
@@ -239,24 +251,26 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_fill_explicit"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 8
 unique_together = [["store", "sku"]]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "store"
 dtype = "string"
 nullable = false
 categories = ["A", "B", "C"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "sku"
 dtype = "string"
 nullable = false
 categories = ["x", "y", "z"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "metric"
 dtype = "float64"
 nullable = true
@@ -288,31 +302,33 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_grouped"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 8
 unique_together = [["warehouse", "week", "sku"]]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "warehouse"
 dtype = "string"
 nullable = false
 categories = ["W1", "W2", "W3"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "week"
 dtype = "int64"
 nullable = false
 minimum = 1
 maximum = 4
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "sku"
 dtype = "string"
 nullable = false
 categories = ["A", "B", "C"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "units"
 dtype = "float64"
 nullable = true
@@ -344,32 +360,34 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_nested_pair"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 8
 unique_together = [["group", "item_id", "item_name"]]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "group"
 dtype = "int64"
 nullable = false
 minimum = 1
 maximum = 2
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "item_id"
 dtype = "int64"
 nullable = false
 minimum = 10
 maximum = 12
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "item_name"
 dtype = "string"
 nullable = false
 categories = ["a", "b", "c"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "metric"
 dtype = "float64"
 nullable = true
@@ -401,43 +419,45 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_grid"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 8
 unique_together = [["store", "sku"]]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "store"
 dtype = "string"
 nullable = false
 categories = ["A", "B", "C"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "sku"
 dtype = "int64"
 nullable = false
 minimum = 1
 maximum = 3
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "count"
 dtype = "int64"
 nullable = true
 minimum = -10
 maximum = 10
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "flag"
 dtype = "boolean"
 nullable = true
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "label"
 dtype = "string"
 nullable = true
 categories = ["ok", "odd"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "observed_at"
 dtype = "datetime"
 nullable = true
@@ -459,8 +479,10 @@ enabled = false
 
 [[cases]]
 name = "duplicate-multiplicity"
-fixture = "fixtures/duplicates.json"
 tags = ["fixture", "duplicates"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/duplicates.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_grid"
@@ -470,23 +492,23 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_grid"
 adapter = "polars"
 
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 3
 max_rows = 3
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "store"
 dtype = "string"
 nullable = false
 categories = ["A", "B"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "sku"
 dtype = "string"
 nullable = false
 categories = ["x", "y"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "metric"
 dtype = "float64"
 nullable = false
@@ -508,8 +530,10 @@ enabled = false
 
 [[cases]]
 name = "unsorted-row-content"
-fixture = "fixtures/unsorted.json"
 tags = ["fixture", "ordering"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/unsorted.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_unsorted"
@@ -519,23 +543,23 @@ adapter = "pandas"
 target = "pyjanitor_parity:polars_unsorted"
 adapter = "polars"
 
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 3
 max_rows = 3
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "store"
 dtype = "string"
 nullable = false
 categories = ["A", "B"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "sku"
 dtype = "string"
 nullable = false
 categories = ["x", "y"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "metric"
 dtype = "float64"
 nullable = false
@@ -557,8 +581,10 @@ enabled = false
 
 [[cases]]
 name = "null-key-preservation"
-fixture = "fixtures/null_keys.json"
 tags = ["regression", "null-keys"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/null_keys.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_grid"
@@ -585,8 +611,10 @@ enabled = false
 
 [[cases]]
 name = "narrow-domain-preservation"
-fixture = "fixtures/narrow_domain.json"
 tags = ["regression", "outer-join"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/narrow_domain.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_narrow_domain"
@@ -613,8 +641,10 @@ enabled = false
 
 [[cases]]
 name = "partial-fill-dictionary"
-fixture = "fixtures/partial_fill.json"
 tags = ["regression", "fill"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/partial_fill.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_partial_fill"
@@ -639,8 +669,10 @@ enabled = false
 
 [[cases]]
 name = "internal-name-collision"
-fixture = "fixtures/index_collision.json"
 tags = ["regression", "collision"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/index_collision.json"
 
 [cases.reference]
 target = "pyjanitor_parity:pandas_index_collision"

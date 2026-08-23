@@ -28,16 +28,22 @@ def test_generated_config_parses_and_validates(tmp_path: Path) -> None:
         case_name="critical-orders",
     )
     raw = tomllib.loads(rendered)
-    assert raw["version"] == 1
-    assert raw["cases"][0]["schema"]["columns"][0]["name"] == "quantity"
+    assert raw["version"] == 2
+    argument = raw["cases"][0]["invocation"]["args"][0]
+    keyword = raw["cases"][0]["invocation"]["kwargs"]["absolute"]
+    assert argument == {
+        "kind": "json",
+        "values": [[], [0], [1, -2, 3], [1_000_000, -1_000_000]],
+    }
+    assert keyword == {"kind": "json", "values": [False, True]}
     assert raw["cases"][0]["reference"]["record_distributions"] == []
-    assert raw["cases"][0]["reference"]["adapter"] == "arrow"
-    assert raw["cases"][0]["candidate"]["adapter"] == "arrow"
-    assert raw["cases"][0]["schema"]["constraints"] == []
-    assert raw["cases"][0]["comparison"]["row_keys"] == []
+    assert "adapter" not in raw["cases"][0]["reference"]
+    assert "adapter" not in raw["cases"][0]["candidate"]
+    assert raw["cases"][0]["comparison"]["rtol"] == 0.0
     assert raw["cases"][0]["generation"]["stability_repeats"] == 2
-    assert raw["cases"][0]["generation"]["max_findings"] == 10
+    assert raw["cases"][0]["generation"]["max_findings"] == 4
     assert raw["cases"][0]["generation"]["search"] is True
+    assert raw["cases"][0]["performance"]["enabled"] is False
     assert raw["cases"][0]["performance"]["repeats"] == 9
 
     path = tmp_path / "nested" / "parity.toml"
@@ -47,8 +53,10 @@ def test_generated_config_parses_and_validates(tmp_path: Path) -> None:
     assert config.cases[0].name == "critical-orders"
     assert config.cases[0].reference.target == "package.old:calculate"
     assert config.cases[0].comparison.row_keys == []
-    assert config.cases[0].input_schema is not None
-    # Isolated pandas/Polars workers include interpreter startup.  A generated
+    assert config.cases[0].invocation is not None
+    assert config.cases[0].invocation.args[0].kind == "json"
+    assert config.cases[0].invocation.kwargs["absolute"].kind == "json"
+    # Isolated target workers include interpreter startup. A generated
     # starter must not turn machine speed into a flaky Hypothesis failure.
     assert config.cases[0].generation.deadline_ms is None
 
@@ -79,12 +87,33 @@ def test_starter_is_runnable_python_and_atomic_about_existing_files(tmp_path: Pa
     paths = write_starter(tmp_path / "parity.toml")
     assert paths == [tmp_path / "parity.toml", tmp_path / "parity_example.py"]
     compile(render_example_module(), "parity_example.py", "exec")
-    assert load_config(paths[0]).cases[0].candidate.target == "parity_example:candidate"
+    config = load_config(paths[0])
+    assert config.cases[0].name == "summary"
+    assert config.cases[0].candidate.target == "parity_example:candidate"
+    assert "pyarrow" not in paths[1].read_text(encoding="utf-8")
 
     paths[1].write_text("user module", encoding="utf-8")
     with pytest.raises(FileExistsError):
         write_starter(paths[0], force=False)
     assert paths[1].read_text(encoding="utf-8") == "user module"
+
+
+def test_generated_example_preserves_nested_json_call_contract() -> None:
+    namespace: dict[str, object] = {}
+    exec(compile(render_example_module(), "parity_example.py", "exec"), namespace)
+    reference = namespace["reference"]
+    candidate = namespace["candidate"]
+
+    assert callable(reference)
+    assert callable(candidate)
+    expected = {
+        "count": 3,
+        "total": 6,
+        "extrema": {"minimum": 1, "maximum": 3},
+    }
+    assert reference([1, -2, 3], absolute=True) == expected
+    assert candidate([1, -2, 3], absolute=True) == expected
+    assert reference([], absolute=False)["extrema"] is None
 
 
 def test_starter_force_replaces_both_files(tmp_path: Path) -> None:
@@ -93,7 +122,7 @@ def test_starter_force_replaces_both_files(tmp_path: Path) -> None:
     config.write_text("old", encoding="utf-8")
     example.write_text("old", encoding="utf-8")
     write_starter(config, force=True)
-    assert "version = 1" in config.read_text(encoding="utf-8")
+    assert "version = 2" in config.read_text(encoding="utf-8")
     assert "def candidate" in example.read_text(encoding="utf-8")
 
 
@@ -113,7 +142,7 @@ def test_project_template_is_minimal_fixture_backed_and_allows_same_target() -> 
     raw = tomllib.loads(rendered)
     assert raw["artifact_dir"] == ".parity"
     case = raw["cases"][0]
-    assert case["fixture"] == "fixtures/input.json"
+    assert case["invocation"]["args"][0]["fixture"] == "fixtures/input.json"
     assert case["reference"]["target"] == case["candidate"]["target"]
     assert case["reference"]["record_distributions"] == ["polars"]
     assert case["comparison"] == {
@@ -121,7 +150,7 @@ def test_project_template_is_minimal_fixture_backed_and_allows_same_target() -> 
         "row_keys": ["account_id", "period"],
     }
     assert case["performance"] == {"enabled": False}
-    assert "schema" not in case
+    assert "schema" not in case["invocation"]["args"][0]
     assert "generation" not in case
 
 
@@ -167,7 +196,8 @@ def test_project_writer_validates_fixture_and_preserves_relative_paths(tmp_path:
     )
     assert written == config_path
     config = load_config(written)
-    assert config.cases[0].fixture == fixture.resolve()
+    assert config.cases[0].invocation is not None
+    assert config.cases[0].invocation.args[0].fixture == fixture.resolve()
     assert config.cases[0].reference.python == Path(sys.executable)
     assert not (config_path.parent / "parity_example.py").exists()
 
@@ -347,7 +377,7 @@ def test_config_writer_force_replaces_dangling_destination_symlink(tmp_path: Pat
 
     assert destination.is_file()
     assert not destination.is_symlink()
-    assert "version = 1" in destination.read_text(encoding="utf-8")
+    assert "version = 2" in destination.read_text(encoding="utf-8")
 
 
 def test_starter_force_prevalidates_both_destinations_before_replacing(tmp_path: Path) -> None:

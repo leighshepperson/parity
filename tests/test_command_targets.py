@@ -9,6 +9,7 @@ import pytest
 
 import parity.execution as execution_module
 from parity.execution import ExecutionOutcome, IsolatedExecutionSession, execute_isolated
+from parity.invocation import Invocation
 from parity.models import CallableSpec
 
 
@@ -44,7 +45,7 @@ def runtime():
 def respond(call_root, request):
     started = time.perf_counter()
     common = {
-        "protocol_version": 1,
+        "protocol_version": 2,
         "duration_seconds": 0.0,
         "mutated_inputs": [],
         "return_type": None,
@@ -54,7 +55,7 @@ def respond(call_root, request):
     if request["operation"] in {"runtime", "inspect"}:
         common.update(outcome="returned", exception=None)
         return common
-    source = request["inputs"]["items"][0]["path"]
+    source = request["invocation"]["args"][0]["path"]
     with open(source, "rb") as stream:
         table = ipc.open_file(stream).read_all()
     mode = table.column("mode")[0].as_py() if "mode" in table.column_names else "return"
@@ -163,7 +164,7 @@ def _spec(tmp_path: Path, *, delta: int = 0, fault: str | None = None) -> Callab
 def test_command_target_returns_canonical_arrow_without_parity_import(tmp_path: Path) -> None:
     observation = execute_isolated(
         _spec(tmp_path, delta=2),
-        pa.table({"mode": ["return"], "value": [40]}),
+        Invocation(args=(pa.table({"mode": ["return"], "value": [40]}),)),
         timeout_seconds=5,
     )
 
@@ -181,12 +182,12 @@ def test_command_target_raise_is_semantic_but_adapter_error_is_infrastructure(
     spec = _spec(tmp_path)
     raised = execute_isolated(
         spec,
-        pa.table({"mode": ["raise"], "value": [1]}),
+        Invocation(args=(pa.table({"mode": ["raise"], "value": [1]}),)),
         timeout_seconds=5,
     )
     errored = execute_isolated(
         spec,
-        pa.table({"mode": ["error"], "value": [1]}),
+        Invocation(args=(pa.table({"mode": ["error"], "value": [1]}),)),
         timeout_seconds=5,
     )
 
@@ -202,8 +203,8 @@ def test_command_session_preflights_once_and_preserves_process_state(tmp_path: P
     spec = _spec(tmp_path, delta=1)
     with IsolatedExecutionSession(spec, timeout_seconds=5) as session:
         preflight = session.preflight_runtime()
-        first = session.execute(pa.table({"mode": ["return"], "value": [1]}))
-        second = session.execute(pa.table({"mode": ["return"], "value": [2]}))
+        first = session.execute(Invocation(args=(pa.table({"mode": ["return"], "value": [1]}),)))
+        second = session.execute(Invocation(args=(pa.table({"mode": ["return"], "value": [2]}),)))
 
     assert preflight.outcome is ExecutionOutcome.RETURNED
     assert first.table == pa.table({"value": [2]})
@@ -280,7 +281,7 @@ def test_command_protocol_still_rejects_a_stable_hard_link(tmp_path: Path) -> No
 def test_command_protocol_rejects_symlink_output(tmp_path: Path) -> None:
     observation = execute_isolated(
         _spec(tmp_path),
-        pa.table({"mode": ["symlink-json"], "value": [1]}),
+        Invocation(args=(pa.table({"mode": ["symlink-json"], "value": [1]}),)),
         timeout_seconds=5,
     )
 
@@ -306,7 +307,7 @@ def test_command_protocol_hard_bounds_output_reads(
 
     observation = execute_isolated(
         _spec(tmp_path),
-        pa.table({"mode": [mode], "value": [1]}),
+        Invocation(args=(pa.table({"mode": [mode], "value": [1]}),)),
         timeout_seconds=5,
     )
 

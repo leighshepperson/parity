@@ -212,14 +212,14 @@ def test_current_guides_describe_only_the_current_replay_contract() -> None:
         "older artifact",
         "reported as unverified",
         "replay contract 1",
-        "replay contract 3",
+        "replay contract 2",
         "manifest contract 1",
-        "manifest contract 3",
+        "manifest contract 2",
     ):
         assert stale_phrase not in content
     architecture = guides[1].read_text(encoding="utf-8")
-    assert "Manifest contract 2" in architecture
-    assert "Replay contract 2" in architecture
+    assert "Manifest contract 3" in architecture
+    assert "Replay contract 3" in architecture
 
 
 def test_release_and_bootstrap_workflows_share_the_guarded_promoter() -> None:

@@ -10,7 +10,7 @@ import polars as pl
 from examples.pandas_polars import corrected, faults
 
 from parity.comparison import compare
-from parity.models import ComparisonPolicy, ParityConfig
+from parity.models import ComparisonPolicy, FrameArgument, ParityConfig
 
 ROOT = Path(__file__).parents[1]
 
@@ -40,11 +40,19 @@ def test_fixed_corpus_uses_explicit_bounded_generation_domains() -> None:
     example_dir = ROOT / "examples" / "pandas_polars"
     raw = tomllib.loads((example_dir / "parity.fixed.toml").read_text())
     config = ParityConfig.model_validate(raw)
-    assert all(case.input_schema is not None for case in config.cases)
+    assert all(
+        case.invocation is not None
+        and isinstance(case.invocation.args[0], FrameArgument)
+        and case.invocation.args[0].input_schema is not None
+        for case in config.cases
+    )
     assert all(case.generation.max_examples <= 3 for case in config.cases)
     timezone = next(case for case in config.cases if case.name == "timezone-day-fixed")
-    assert timezone.input_schema is not None
-    assert timezone.input_schema.columns[0].categories
+    assert timezone.invocation is not None
+    argument = timezone.invocation.args[0]
+    assert isinstance(argument, FrameArgument)
+    assert argument.input_schema is not None
+    assert argument.input_schema.columns[0].categories
 
 
 def test_bad_join_loses_null_match_and_fixed_preserves_it() -> None:

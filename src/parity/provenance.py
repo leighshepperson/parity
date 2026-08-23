@@ -422,23 +422,6 @@ def _canonical_value(
     if isinstance(value, Path):
         return _canonical_path(value, base_directory, dereference=key != "python")
     if isinstance(value, Mapping):
-        # Input declaration order is part of a positional bundle's callable
-        # contract. Preserve only the actual case-level input-bundle mapping;
-        # an ordinary static kwarg may also legitimately be named ``inputs``
-        # and remains a normal order-insensitive JSON mapping.
-        if path == ("cases", "input_bundle", "inputs"):
-            return [
-                {
-                    "name": str(item_key),
-                    "spec": _canonical_value(
-                        item_value,
-                        key=str(item_key),
-                        base_directory=base_directory,
-                        path=(*path, str(item_key)),
-                    ),
-                }
-                for item_key, item_value in value.items()
-            ]
         canonical: dict[str, Any] = {}
         for item_key in sorted(value, key=str):
             item_name = str(item_key)

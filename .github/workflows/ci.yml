@@ -90,9 +90,13 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[test]"
-      # Use the source path so pytest's installed Parity plugin cannot make the
-      # package appear "imported before measurement" during plugin discovery.
-      - run: pytest --cov=src/parity --cov-report=term-missing --cov-report=xml
+      # Start coverage before pytest auto-loads Parity's installed plugin. Starting
+      # it through pytest-cov would leave those early package imports unmeasured.
+      - name: Test with branch coverage
+        run: |
+          python -m coverage run -m pytest
+          python -m coverage report
+          python -m coverage xml
       - name: Smoke-test generated project
         run: |
           temporary="$(mktemp -d)"
@@ -154,6 +158,27 @@ jobs:
           stability-repeats: "2"
           performance: "false"
           artifact-name: parity-action-smoke
+
+  javascript-python-rules:
+    name: JSON-only JavaScript to Python proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e .
+      - name: Verify recursive generation, findings, regressions and replay
+        working-directory: case_studies/javascript_python_rules
+        run: python verify.py --profile quick
 
   fortran-python-container:
     name: Fortran to Python container proof

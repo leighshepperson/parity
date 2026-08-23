@@ -113,4 +113,4 @@ retired = retire_contract(
 ```
 
 The frozen schemas are available as `parity schema compatibility-budget`,
-`parity schema suite-report` (version 4) and `parity schema distilled-contract` (version 2).
+`parity schema suite-report` (version 4) and `parity schema distilled-contract` (version 3).

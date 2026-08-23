@@ -9,15 +9,15 @@ from parity.json_contracts import contract_names, contract_schema
 FROZEN_SCHEMA_SHA256: dict[str, str] = {
     # Updated only when the corresponding public contract version changes.
     "agent-result": "4788dd74f652c966a5027ecf54c6d7aa10a53f5e507529059b29dcc08df9eb5f",
-    "artifact-manifest": "c932308531ed02d30d21e5a86c1203abd69de39405e6262f246dec9949840a1a",
+    "artifact-manifest": "5e9869ed9164959cdd0fabe62ecf30a2d46da8f412e50409ce0b2d75334a680c",
     "checklist": "f61d43610a6fab75938bdad6eafb68f6265c96fbfd5a01b42b9cd46bc4f2e628",
     "compatibility-budget": "5eaeff824ec67a3e72e026de00161343f250689c6adb3cb653820c8ac51be1f7",
-    "config": "b9f1b62e213f2c71df71f433f9e881ffc4c3a54a8a204e3038fa0ed246a74a64",
-    "distilled-contract": "be276fae5e149a7a60a9ab3cf163bb8a0c27cc65030cebf56462a7ce263aceaf",
+    "config": "9cd5bce481d016841d90d13658b7f78b6423820d5464b8757f7d636fd0f94ac6",
+    "distilled-contract": "2b322f2ad3d4940ad8066646937c5bb7059d238577114cb9b975efb27ab9eb1d",
     "finding": "a6786da6fec5badf1cc90cbba6d58d2a14290030bfbd826193c49e2d4b52b4cc",
     "migration-manifest": "125f07d0506531e10ef094ce7eca0731f8788ee2eb89fcb32ba85e9b29998c01",
     "migration-report": "fa908e65a926d1211c3649602a2ec3c74e0bbabae9615a068fa346731382ecec",
-    "replay": "f72b07dbaec152b47a029139f3f42b91277f90aae1dc0c5b9f70b6918de17640",
+    "replay": "539e847ed9e871845c83e4894a51d286025790230139617f194e6f7c296759fa",
     "suite-report": "502abcc11ad8b4674698aad4eee36f508e496552709c0461e0e17b0387611c3a",
     "workspace": "0b2ddbabc858ba54e6432dcb8e3239660011d4df67db10e718c19a78d0c9ae8a",
 }

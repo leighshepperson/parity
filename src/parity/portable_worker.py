@@ -15,6 +15,7 @@ made in those cases.
 import hashlib
 import importlib
 import json
+import keyword
 import os
 import platform
 import re
@@ -30,7 +31,7 @@ import urllib.request
 # untracked ``__pycache__`` files inside an editable source worktree.
 sys.dont_write_bytecode = True
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 _CALL_TOKEN = re.compile(r"^call-[0-9]{8}-[0-9a-f]{32}$")
 _SAFE_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+~!-]{0,127}$")
 _DIST_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9]$|^[A-Za-z0-9]$")
@@ -528,37 +529,62 @@ def _json_value(value):
         return False, None
 
 
-def _inputs(request, call_root, adapter, pandas_input):
-    envelope = request.get("inputs")
-    if not isinstance(envelope, dict) or set(envelope) != {"kind", "items"}:
-        raise WorkerFailure("invalid input bundle")
-    kind = envelope.get("kind")
-    items = envelope.get("items")
-    if kind not in ("single", "positional", "keyword") or not isinstance(items, list) or not items:
-        raise WorkerFailure("invalid input bundle")
-    if kind == "single" and len(items) != 1:
-        raise WorkerFailure("single input requires one item")
-    parsed = []
-    for index, item in enumerate(items):
-        if not isinstance(item, dict) or set(item) != {"name", "path"}:
-            raise WorkerFailure("invalid input item")
-        name = item.get("name")
-        path = item.get("path")
-        if not isinstance(name, str) or not isinstance(path, str):
-            raise WorkerFailure("invalid input item")
-        expected_name = f"input-{index:08d}.arrow"
-        table = _read_arrow(_within(call_root, path, expected_name, True))
-        parsed.append((name, _from_arrow(table, adapter, pandas_input)))
-    labels = [name for name, _value in parsed]
-    if len(labels) != len(set(labels)):
-        raise WorkerFailure("input labels must be unique")
-    if kind == "single" and labels != ["input"]:
-        raise WorkerFailure("invalid single input label")
-    if kind == "positional" and labels != [str(index) for index in range(len(parsed))]:
-        raise WorkerFailure("invalid positional input labels")
-    if kind == "keyword" and any(not name.isidentifier() for name in labels):
-        raise WorkerFailure("invalid keyword input labels")
-    return kind, parsed
+def _invocation(request, call_root, adapter, pandas_input):
+    envelope = request.get("invocation")
+    if not isinstance(envelope, dict) or set(envelope) != {"args", "kwargs"}:
+        raise WorkerFailure("invalid invocation")
+    raw_args = envelope.get("args")
+    raw_kwargs = envelope.get("kwargs")
+    if not isinstance(raw_args, list) or not isinstance(raw_kwargs, dict):
+        raise WorkerFailure("invalid invocation")
+    if len(raw_args) > 256 or len(raw_kwargs) > 256:
+        raise WorkerFailure("invocation contains too many arguments")
+    if any(
+        not isinstance(name, str)
+        or not name.isidentifier()
+        or keyword.iskeyword(name)
+        or len(name) > 128
+        for name in raw_kwargs
+    ):
+        raise WorkerFailure("invalid invocation keyword")
+    file_index = [0]
+
+    def parse(node):
+        if not isinstance(node, dict):
+            raise WorkerFailure("invalid invocation value")
+        kind = node.get("kind")
+        if kind == "arrow" and set(node) == {"kind", "path"}:
+            index = file_index[0]
+            file_index[0] += 1
+            expected_name = f"input-{index:08d}.arrow"
+            path = node.get("path")
+            if not isinstance(path, str):
+                raise WorkerFailure("invalid Arrow invocation value")
+            table = _read_arrow(_within(call_root, path, expected_name, True))
+            return _from_arrow(table, adapter, pandas_input)
+        if kind == "json" and set(node) == {"kind", "value"}:
+            serializable, value = _json_value(node.get("value"))
+            if not serializable:
+                raise WorkerFailure("invalid JSON invocation value")
+            return value
+        if kind == "frames" and set(node) == {"kind", "container", "items"}:
+            container = node.get("container")
+            items = node.get("items")
+            if container not in ("list", "tuple") or not isinstance(items, list):
+                raise WorkerFailure("invalid frame sequence invocation value")
+            if len(items) > 256:
+                raise WorkerFailure("frame sequence contains too many items")
+            if any(not isinstance(item, dict) or item.get("kind") != "arrow" for item in items):
+                raise WorkerFailure("frame sequence items must be Arrow inputs")
+            values = [parse(item) for item in items]
+            return values if container == "list" else tuple(values)
+        raise WorkerFailure("invalid invocation value")
+
+    args = [parse(node) for node in raw_args]
+    kwargs = {name: parse(node) for name, node in raw_kwargs.items()}
+    labels = [f"args/{index}" for index in range(len(args))]
+    labels.extend(f"kwargs/{name}" for name in kwargs)
+    return args, kwargs, labels
 
 
 def _exception_details(error):
@@ -643,19 +669,21 @@ def _worker_error(error, duration_seconds, runtime, mutated_inputs=None, return_
     }
 
 
-def _invoke(function, kind, parsed, static_args, static_kwargs):
-    values = [value for _name, value in parsed]
-    if kind == "single":
-        return function(values[0], *static_args, **static_kwargs)
-    if kind == "positional":
-        return function(*(values + list(static_args)), **static_kwargs)
-    if static_args:
-        raise WorkerFailure("keyword inputs cannot be combined with static positional args")
-    keywords = dict(parsed)
-    if set(keywords).intersection(static_kwargs):
-        raise WorkerFailure("input names collide with static keyword args")
-    keywords.update(static_kwargs)
-    return function(**keywords)
+def _argument_fingerprint(value, adapter):
+    direct = _fingerprint(value, adapter)
+    if direct is not None:
+        return direct
+    if isinstance(value, (list, tuple)):
+        parts = [_fingerprint(item, adapter) for item in value]
+        if parts and all(part is not None for part in parts):
+            return hashlib.sha256("\0".join(parts).encode("ascii")).hexdigest()
+    serializable, normalized = _json_value(value)
+    if not serializable:
+        return None
+    encoded = json.dumps(normalized, allow_nan=True, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _execute(request, call_root, endpoint, runtime):
@@ -667,12 +695,6 @@ def _execute(request, call_root, endpoint, runtime):
         raise WorkerFailure("unsupported Python adapter")
     if pandas_input not in ("arrow", "native"):
         raise WorkerFailure("invalid pandas input mode")
-    static_args = request.get("static_args", [])
-    static_kwargs = request.get("static_kwargs", {})
-    if not isinstance(static_args, list) or not isinstance(static_kwargs, dict):
-        raise WorkerFailure("invalid static arguments")
-    if not all(isinstance(name, str) for name in static_kwargs):
-        raise WorkerFailure("static keyword names must be strings")
     function = _import_callable(target)
     if canonicalizer_target is not None and not isinstance(canonicalizer_target, str):
         raise WorkerFailure("invalid output canonicalizer")
@@ -680,16 +702,17 @@ def _execute(request, call_root, endpoint, runtime):
         _import_callable(canonicalizer_target) if canonicalizer_target is not None else None
     )
     adapter = _resolve_adapter(requested_adapter, function)
-    kind, parsed = _inputs(request, call_root, adapter, pandas_input)
-    before = [_fingerprint(value, adapter) for _name, value in parsed]
+    args, kwargs, labels = _invocation(request, call_root, adapter, pandas_input)
+    values = [*args, *kwargs.values()]
+    before = [_argument_fingerprint(value, adapter) for value in values]
     started = time.perf_counter()
     try:
-        returned = _invoke(function, kind, parsed, static_args, static_kwargs)
+        returned = function(*args, **kwargs)
     except BaseException as error:
         mutated = [
             name
-            for (name, value), fingerprint in zip(parsed, before)  # noqa: B905 (Python 3.8)
-            if fingerprint != _fingerprint(value, adapter)
+            for name, value, fingerprint in zip(labels, values, before)  # noqa: B905
+            if fingerprint != _argument_fingerprint(value, adapter)
         ]
         return {
             "outcome": "raised",
@@ -702,8 +725,8 @@ def _execute(request, call_root, endpoint, runtime):
         }
     mutated = [
         name
-        for (name, value), fingerprint in zip(parsed, before)  # noqa: B905 (Python 3.8)
-        if fingerprint != _fingerprint(value, adapter)
+        for name, value, fingerprint in zip(labels, values, before)  # noqa: B905
+        if fingerprint != _argument_fingerprint(value, adapter)
     ]
     return_type = f"{type(returned).__module__}.{type(returned).__qualname__}"
     try:

@@ -47,10 +47,13 @@ def candidate(table):
     budget_line = 'compatibility_budget = "compatibility.toml"\n' if budget else ""
     config.write_text(
         f"""
-version = 1
+version = 2
 {budget_line}
 [[cases]]
 name = "upgrade"
+
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "input.arrow"
 
 [cases.reference]
@@ -285,8 +288,8 @@ def test_config_rejects_a_budget_outside_its_directory(tmp_path: Path) -> None:
     config = _write_project(project, budget=False)
     config.write_text(
         config.read_text(encoding="utf-8").replace(
-            "version = 1",
-            'version = 1\ncompatibility_budget = "../outside.toml"',
+            "version = 2",
+            'version = 2\ncompatibility_budget = "../outside.toml"',
         ),
         encoding="utf-8",
     )

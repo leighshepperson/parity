@@ -1,11 +1,9 @@
-"""Execute user dataframe transformations without leaking their inputs.
+"""Execute complete user invocations without leaking their inputs.
 
-The execution boundary is intentionally Arrow-first: callers provide one canonical
-``pyarrow.Table`` or an ordered/named bundle of tables, and each implementation
-receives fresh adapter-specific copies.  The module never prints user data,
-subprocess output, environment variables, or tracebacks.  Isolated execution uses
-files in a private temporary directory so frames are never transported through a
-log stream.
+Arrow frames remain the canonical tabular boundary while JSON values retain their
+call positions. Each implementation receives fresh adapter-specific frame copies.
+The module never prints user data, subprocess output, environment variables, or
+tracebacks. Isolated execution uses private files rather than a log stream.
 """
 
 from __future__ import annotations
@@ -14,7 +12,6 @@ import contextlib
 import hashlib
 import importlib
 import json
-import keyword
 import os
 import secrets
 import shutil
@@ -29,7 +26,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, cast, get_type_hints
+from typing import Any, Literal, cast, get_type_hints
 
 import numpy as np
 import pyarrow as pa
@@ -46,6 +43,7 @@ from parity.exception_semantics import (
     normalize_exception_message,
     redact_exception_text,
 )
+from parity.invocation import FrameSequence, Invocation, InvocationValue
 from parity.models import CallableSpec, JsonValue, PandasInput, RunMetrics
 from parity.provenance import (
     RuntimeProvenance,
@@ -55,33 +53,11 @@ from parity.provenance import (
 )
 from parity.targets import is_import_target
 
-_TARGET_PROTOCOL_VERSION = 1
+_TARGET_PROTOCOL_VERSION = 2
 _MAX_TARGET_RESPONSE_BYTES = 1024 * 1024
 _MAX_TARGET_JSON_OUTPUT_BYTES = 16 * 1024 * 1024
 _MAX_TARGET_ARROW_OUTPUT_BYTES = 256 * 1024 * 1024
 _PROTOCOL_READ_CHUNK_BYTES = 1024 * 1024
-
-InputKind: TypeAlias = Literal["single", "positional", "keyword"]
-ArrowInputBundle: TypeAlias = pa.Table | Sequence[pa.Table] | Mapping[str, pa.Table]
-
-
-@dataclass(frozen=True, slots=True)
-class _NormalizedInputs:
-    """Validated input binding plus stable, data-safe mutation labels."""
-
-    kind: InputKind
-    items: tuple[tuple[str, pa.Table], ...]
-
-    @property
-    def labels(self) -> tuple[str, ...]:
-        return tuple(label for label, _ in self.items)
-
-    def as_public_bundle(self) -> ArrowInputBundle:
-        if self.kind == "single":
-            return self.items[0][1]
-        if self.kind == "positional":
-            return tuple(table for _, table in self.items)
-        return dict(self.items)
 
 
 class ExecutionOutcome(StrEnum):
@@ -207,101 +183,106 @@ class ExecutionError(RuntimeError):
 _PROCESS_CONTEXT_LOCK = threading.RLock()
 
 
-def _normalize_inputs(inputs: ArrowInputBundle | _NormalizedInputs) -> _NormalizedInputs:
-    """Validate public input binding and preserve its deterministic order."""
+def _normalize_inputs(inputs: Invocation) -> Invocation:
+    """Validate the complete public invocation contract."""
 
-    if isinstance(inputs, _NormalizedInputs):
-        return inputs
-    if isinstance(inputs, pa.Table):
-        return _NormalizedInputs("single", (("input", inputs),))
-    if isinstance(inputs, Mapping):
-        if not inputs:
-            raise ExecutionError("a named input bundle cannot be empty")
-        items: list[tuple[str, pa.Table]] = []
-        for name, table in inputs.items():
-            if (
-                not isinstance(name, str)
-                or not name
-                or not name.isidentifier()
-                or keyword.iskeyword(name)
-            ):
-                raise ExecutionError("named input labels must be valid Python identifiers")
-            if not isinstance(table, pa.Table):
-                raise ExecutionError(f"named input {name!r} must be a pyarrow.Table")
-            items.append((name, table))
-        return _NormalizedInputs("keyword", tuple(items))
-    if isinstance(inputs, Sequence) and not isinstance(inputs, (str, bytes, bytearray)):
-        if not inputs:
-            raise ExecutionError("a positional input bundle cannot be empty")
-        positional: list[tuple[str, pa.Table]] = []
-        for index, table in enumerate(inputs):
-            if not isinstance(table, pa.Table):
-                raise ExecutionError(f"positional input {index} must be a pyarrow.Table")
-            positional.append((str(index), table))
-        return _NormalizedInputs("positional", tuple(positional))
-    raise ExecutionError(
-        "inputs must be a pyarrow.Table, a non-empty sequence of tables, "
-        "or a non-empty mapping of names to tables"
-    )
+    if not isinstance(inputs, Invocation):
+        raise ExecutionError("input must be a parity.Invocation")
+    return inputs.copy()
 
 
-def _validate_invocation_binding(
-    inputs: _NormalizedInputs,
-    static_args: Sequence[JsonValue],
-    static_kwargs: Mapping[str, JsonValue],
-) -> None:
-    if inputs.kind != "keyword":
-        return
-    if static_args:
-        raise ExecutionError("named input bundles cannot be combined with static positional args")
-    collisions = set(inputs.labels).intersection(static_kwargs)
-    if collisions:
-        raise ExecutionError(
-            "named inputs collide with static keyword args: " + ", ".join(sorted(collisions))
-        )
-
-
-def _materialize_inputs(
-    inputs: _NormalizedInputs,
+def _materialize_value(
+    value: InvocationValue,
     adapter: str,
     *,
     pandas_input: PandasInput,
-) -> tuple[tuple[Any, ...], tuple[str | None, ...]]:
-    arguments = tuple(
-        _fresh_argument(table, adapter, pandas_input=pandas_input) for _, table in inputs.items
+) -> Any:
+    if isinstance(value, pa.Table):
+        return _fresh_argument(value, adapter, pandas_input=pandas_input)
+    if isinstance(value, FrameSequence):
+        items = [
+            _fresh_argument(table, adapter, pandas_input=pandas_input) for table in value.items
+        ]
+        return items if value.container == "list" else tuple(items)
+    # JSON round-tripping both detaches mutable containers and preserves the
+    # strict cross-process value contract used by command targets.
+    return json.loads(json.dumps(value, allow_nan=True))
+
+
+def _materialize_inputs(
+    invocation: Invocation,
+    adapter: str,
+    *,
+    pandas_input: PandasInput,
+) -> tuple[tuple[Any, ...], dict[str, Any], dict[str, str | None]]:
+    args = tuple(
+        _materialize_value(value, adapter, pandas_input=pandas_input) for value in invocation.args
     )
-    fingerprints = tuple(_fingerprint(argument, adapter) for argument in arguments)
-    return arguments, fingerprints
+    kwargs = {
+        name: _materialize_value(value, adapter, pandas_input=pandas_input)
+        for name, value in invocation.kwargs.items()
+    }
+    fingerprints = _invocation_fingerprints(invocation, args, kwargs, adapter)
+    return args, kwargs, fingerprints
 
 
 def _invoke_with_inputs(
     function: Callable[..., Any],
-    inputs: _NormalizedInputs,
     arguments: tuple[Any, ...],
-    *,
-    static_args: Sequence[JsonValue],
-    static_kwargs: Mapping[str, JsonValue],
+    keyword_arguments: Mapping[str, Any],
 ) -> Any:
-    if inputs.kind == "single":
-        return function(arguments[0], *static_args, **dict(static_kwargs))
-    if inputs.kind == "positional":
-        return function(*arguments, *static_args, **dict(static_kwargs))
-    keywords = dict(zip(inputs.labels, arguments, strict=True))
-    keywords.update(static_kwargs)
-    return function(**keywords)
+    return function(*arguments, **dict(keyword_arguments))
+
+
+def _json_fingerprint(value: Any) -> str | None:
+    try:
+        payload = json.dumps(value, allow_nan=True, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _argument_fingerprint(canonical: InvocationValue, value: Any, adapter: str) -> str | None:
+    if isinstance(canonical, pa.Table):
+        return _fingerprint(value, adapter)
+    if isinstance(canonical, FrameSequence):
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            return None
+        parts = [_fingerprint(item, adapter) for item in value]
+        if any(part is None for part in parts):
+            return None
+        return hashlib.sha256("\0".join(cast(list[str], parts)).encode("ascii")).hexdigest()
+    return _json_fingerprint(value)
+
+
+def _invocation_fingerprints(
+    invocation: Invocation,
+    args: Sequence[Any],
+    kwargs: Mapping[str, Any],
+    adapter: str,
+) -> dict[str, str | None]:
+    fingerprints = {
+        f"args/{index}": _argument_fingerprint(canonical, args[index], adapter)
+        for index, canonical in enumerate(invocation.args)
+    }
+    fingerprints.update(
+        {
+            f"kwargs/{name}": _argument_fingerprint(canonical, kwargs[name], adapter)
+            for name, canonical in invocation.kwargs.items()
+        }
+    )
+    return fingerprints
 
 
 def _mutated_labels(
-    inputs: _NormalizedInputs,
+    invocation: Invocation,
     arguments: tuple[Any, ...],
-    before: tuple[str | None, ...],
+    keyword_arguments: Mapping[str, Any],
+    before: Mapping[str, str | None],
     adapter: str,
 ) -> tuple[str, ...]:
-    return tuple(
-        label
-        for (label, _), argument, fingerprint in zip(inputs.items, arguments, before, strict=True)
-        if fingerprint != _fingerprint(argument, adapter)
-    )
+    after = _invocation_fingerprints(invocation, arguments, keyword_arguments, adapter)
+    return tuple(label for label in before if before[label] != after[label])
 
 
 def redact_text(text: str) -> str:
@@ -769,10 +750,8 @@ def _preflight_failure_observation(
 
 def execute_current(
     spec: CallableSpec,
-    input_table: ArrowInputBundle,
+    invocation: Invocation,
     *,
-    static_args: Sequence[JsonValue] = (),
-    static_kwargs: Mapping[str, JsonValue] | None = None,
     expected_runtime: RuntimeProvenance | None = None,
     expected_parity_version: str | None = None,
 ) -> Observation:
@@ -784,9 +763,7 @@ def execute_current(
     required.
     """
 
-    inputs = _normalize_inputs(input_table)
-    invocation_kwargs = dict(static_kwargs or {})
-    _validate_invocation_binding(inputs, static_args, invocation_kwargs)
+    inputs = _normalize_inputs(invocation)
     if spec.command is not None:
         raise ExecutionError("command endpoints require isolated protocol execution")
     if spec.python is not None and Path(spec.python).resolve() != Path(sys.executable).resolve():
@@ -822,19 +799,19 @@ def execute_current(
                     import_callable(spec.canonicalizer) if spec.canonicalizer is not None else None
                 )
                 adapter = _resolve_adapter(spec.adapter, function)
-                arguments, before = _materialize_inputs(
+                arguments, keyword_arguments, before = _materialize_inputs(
                     inputs, adapter, pandas_input=spec.pandas_input
                 )
                 try:
                     returned = _invoke_with_inputs(
                         function,
-                        inputs,
                         arguments,
-                        static_args=static_args,
-                        static_kwargs=invocation_kwargs,
+                        keyword_arguments,
                     )
                 except BaseException as error:  # user code is an observation boundary
-                    mutated_inputs = _mutated_labels(inputs, arguments, before, adapter)
+                    mutated_inputs = _mutated_labels(
+                        inputs, arguments, keyword_arguments, before, adapter
+                    )
                     return Observation(
                         outcome=ExecutionOutcome.RAISED,
                         exception=ExceptionInfo.from_exception(error),
@@ -845,7 +822,9 @@ def execute_current(
                         ),
                         runtime=runtime,
                     )
-                mutated_inputs = _mutated_labels(inputs, arguments, before, adapter)
+                mutated_inputs = _mutated_labels(
+                    inputs, arguments, keyword_arguments, before, adapter
+                )
                 return_type = f"{type(returned).__module__}.{type(returned).__qualname__}"
                 if canonicalizer is not None:
                     try:
@@ -942,13 +921,11 @@ def execute_current(
 
 def execute_callable_current(
     function: Callable[..., Any],
-    input_table: ArrowInputBundle,
+    invocation: Invocation,
     *,
     adapter: str = "auto",
     pandas_input: PandasInput = "arrow",
     record_distributions: Sequence[str] = (),
-    static_args: Sequence[JsonValue] = (),
-    static_kwargs: Mapping[str, JsonValue] | None = None,
 ) -> Observation:
     """Execute a live, potentially non-importable callable in this interpreter.
 
@@ -963,9 +940,7 @@ def execute_callable_current(
         raise ValueError(f"unsupported adapter: {adapter}")
     if pandas_input not in {"arrow", "native"}:
         raise ValueError(f"unsupported pandas input: {pandas_input}")
-    inputs = _normalize_inputs(input_table)
-    invocation_kwargs = dict(static_kwargs or {})
-    _validate_invocation_binding(inputs, static_args, invocation_kwargs)
+    inputs = _normalize_inputs(invocation)
     started = time.perf_counter()
     runtime: RuntimeProvenance | None = None
     return_type: str | None = None
@@ -973,17 +948,19 @@ def execute_callable_current(
         try:
             runtime = collect_runtime_provenance(record_distributions)
             resolved = _resolve_adapter(adapter, function)
-            arguments, before = _materialize_inputs(inputs, resolved, pandas_input=pandas_input)
+            arguments, keyword_arguments, before = _materialize_inputs(
+                inputs, resolved, pandas_input=pandas_input
+            )
             try:
                 returned = _invoke_with_inputs(
                     function,
-                    inputs,
                     arguments,
-                    static_args=static_args,
-                    static_kwargs=invocation_kwargs,
+                    keyword_arguments,
                 )
             except BaseException as error:
-                mutated_inputs = _mutated_labels(inputs, arguments, before, resolved)
+                mutated_inputs = _mutated_labels(
+                    inputs, arguments, keyword_arguments, before, resolved
+                )
                 return Observation(
                     outcome=ExecutionOutcome.RAISED,
                     exception=ExceptionInfo.from_exception(error),
@@ -994,7 +971,7 @@ def execute_callable_current(
                     ),
                     runtime=runtime,
                 )
-            mutated_inputs = _mutated_labels(inputs, arguments, before, resolved)
+            mutated_inputs = _mutated_labels(inputs, arguments, keyword_arguments, before, resolved)
             return_type = f"{type(returned).__module__}.{type(returned).__qualname__}"
             try:
                 table = _return_to_arrow(returned)
@@ -1136,23 +1113,39 @@ def _isolated_environment(spec: CallableSpec) -> dict[str, str]:
     return environment
 
 
-def _write_input_bundle(inputs: _NormalizedInputs, root: Path) -> dict[str, Any]:
-    """Write a validated bundle to opaque files and return its protocol envelope."""
+def _write_invocation(invocation: Invocation, root: Path) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Persist Arrow leaves and return the versioned invocation envelope."""
 
-    items: list[dict[str, str]] = []
-    for index, (label, table) in enumerate(inputs.items):
-        path = root / f"input-{index:08d}.arrow"
-        _write_arrow(table, path)
-        items.append({"name": label, "path": str(path)})
-    return {"kind": inputs.kind, "items": items}
+    counter = 0
+
+    def encode(value: InvocationValue) -> dict[str, Any]:
+        nonlocal counter
+        if isinstance(value, pa.Table):
+            path = root / f"input-{counter:08d}.arrow"
+            counter += 1
+            _write_arrow(value, path)
+            return {"kind": "arrow", "path": str(path)}
+        if isinstance(value, FrameSequence):
+            return {
+                "kind": "frames",
+                "container": value.container,
+                "items": [encode(table) for table in value.items],
+            }
+        return {"kind": "json", "value": value}
+
+    envelope = {
+        "args": [encode(value) for value in invocation.args],
+        "kwargs": {name: encode(value) for name, value in invocation.kwargs.items()},
+    }
+    labels = tuple(f"args/{index}" for index in range(len(invocation.args)))
+    labels += tuple(f"kwargs/{name}" for name in invocation.kwargs)
+    return envelope, labels
 
 
 def execute_isolated(
     spec: CallableSpec,
-    input_table: ArrowInputBundle,
+    invocation: Invocation,
     *,
-    static_args: Sequence[JsonValue] = (),
-    static_kwargs: Mapping[str, JsonValue] | None = None,
     timeout_seconds: float = 30.0,
     expected_runtime: RuntimeProvenance | None = None,
 ) -> Observation:
@@ -1163,11 +1156,7 @@ def execute_isolated(
         timeout_seconds=timeout_seconds,
         expected_runtime=expected_runtime,
     ) as session:
-        return session.execute(
-            input_table,
-            static_args=static_args,
-            static_kwargs=static_kwargs,
-        )
+        return session.execute(invocation)
 
 
 def _observation_from_target(
@@ -1401,10 +1390,8 @@ class IsolatedExecutionSession:
 
     def execute(
         self,
-        input_table: ArrowInputBundle,
+        invocation: Invocation,
         *,
-        static_args: Sequence[JsonValue] = (),
-        static_kwargs: Mapping[str, JsonValue] | None = None,
         timeout_seconds: float | None = None,
         _operation: Literal["execute", "inspect", "runtime"] = "execute",
     ) -> Observation:
@@ -1413,9 +1400,7 @@ class IsolatedExecutionSession:
         timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
         if timeout <= 0:
             raise ValueError("timeout_seconds must be positive")
-        inputs = _normalize_inputs(input_table)
-        invocation_kwargs = dict(static_kwargs or {})
-        _validate_invocation_binding(inputs, static_args, invocation_kwargs)
+        inputs = _normalize_inputs(invocation)
         started = time.perf_counter()
         with self._lock:
             if self._closed or self._broken:
@@ -1458,17 +1443,16 @@ class IsolatedExecutionSession:
                         "pandas_input": self.spec.pandas_input,
                         "record_distributions": list(self.spec.provenance_distributions),
                     }
+                invocation_payload, input_labels = _write_invocation(inputs, call_root)
                 request = {
                     "protocol_version": _TARGET_PROTOCOL_VERSION,
                     "operation": _operation,
                     "endpoint": endpoint,
-                    "inputs": _write_input_bundle(inputs, call_root),
+                    "invocation": invocation_payload,
                     "output": {
                         "arrow": str(output_arrow),
                         "json": str(output_json),
                     },
-                    "static_args": list(static_args),
-                    "static_kwargs": invocation_kwargs,
                 }
                 request_path.write_text(json.dumps(request), encoding="utf-8")
 
@@ -1545,7 +1529,7 @@ class IsolatedExecutionSession:
                         call_root,
                         output_arrow,
                         output_json,
-                        expected_input_labels=inputs.labels,
+                        expected_input_labels=input_labels,
                         allow_outputless_success=_operation in {"inspect", "runtime"},
                         expected_executor=(
                             "command" if self.spec.command is not None else "portable-python"
@@ -1595,7 +1579,7 @@ class IsolatedExecutionSession:
         """Validate transport and collect provenance without importing the target."""
 
         return self.execute(
-            pa.table({}),
+            Invocation(),
             timeout_seconds=timeout_seconds,
             _operation="runtime",
         )
@@ -1604,7 +1588,7 @@ class IsolatedExecutionSession:
         """Validate target, canonicalizer, and adapter imports without invocation."""
 
         return self.execute(
-            pa.table({}),
+            Invocation(),
             timeout_seconds=timeout_seconds,
             _operation="inspect",
         )
@@ -1680,10 +1664,8 @@ class IsolatedExecutionSession:
 
 def execute(
     spec: CallableSpec,
-    input_table: ArrowInputBundle,
+    invocation: Invocation,
     *,
-    static_args: Sequence[JsonValue] = (),
-    static_kwargs: Mapping[str, JsonValue] | None = None,
     isolated: bool | None = None,
     timeout_seconds: float = 30.0,
     expected_runtime: RuntimeProvenance | None = None,
@@ -1701,23 +1683,18 @@ def execute(
     if use_isolated:
         return execute_isolated(
             spec,
-            input_table,
-            static_args=static_args,
-            static_kwargs=static_kwargs,
+            invocation,
             timeout_seconds=timeout_seconds,
             expected_runtime=expected_runtime,
         )
     return execute_current(
         spec,
-        input_table,
-        static_args=static_args,
-        static_kwargs=static_kwargs,
+        invocation,
         expected_runtime=expected_runtime,
     )
 
 
 __all__ = [
-    "ArrowInputBundle",
     "ExceptionInfo",
     "ExecutionError",
     "ExecutionOutcome",

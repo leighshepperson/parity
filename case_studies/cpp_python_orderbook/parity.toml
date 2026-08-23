@@ -1,4 +1,4 @@
-version = 1
+version = 2
 artifact_dir = ".parity-orderbook"
 jobs = 1
 

@@ -24,6 +24,7 @@ from parity.models import (
     CompatibilityBudget,
     CompatibilityResult,
     Diagnosis,
+    InvocationDocument,
     MismatchKind,
     PerformanceResult,
     RunMetrics,
@@ -36,7 +37,7 @@ from parity.models import (
 class ConfigContract(StrictModel):
     """Structurally typed authoring contract for ``parity.toml``."""
 
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     artifact_dir: Path = Path(".parity")
     cases: list[CaseConfig] | None = Field(default=None, min_length=1)
     cases_file: Path | None = None
@@ -207,11 +208,11 @@ class ReplayInputContract(StrictModel):
 class ReplayContract(StrictModel):
     """Path-free replay document stored inside a finding artifact."""
 
-    version: Literal[2]
+    version: Literal[3]
     path_base: ReplayPathBaseContract | None = None
     case: dict[str, JsonValue]
     environment: str
-    inputs: list[ReplayInputContract] = Field(min_length=1)
+    invocation: InvocationDocument
     replay_blockers: dict[str, str] | None = None
     expected_runtime: JsonValue = None
     config_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -224,7 +225,7 @@ class ArtifactFileContract(StrictModel):
 
 
 class ArtifactManifestContract(StrictModel):
-    version: Literal[2]
+    version: Literal[3]
     campaign_id: str = Field(min_length=1)
     case: str = Field(min_length=1)
     created_at: str = Field(min_length=1)
@@ -236,15 +237,15 @@ class ArtifactManifestContract(StrictModel):
 
 _CONTRACTS: dict[str, tuple[type[Any], int]] = {
     "agent-result": (AgentCommandOutput, 1),
-    "artifact-manifest": (ArtifactManifestContract, 2),
+    "artifact-manifest": (ArtifactManifestContract, 3),
     "checklist": (ContractChecklist, 1),
     "compatibility-budget": (CompatibilityBudget, 1),
-    "config": (ConfigContract, 1),
-    "distilled-contract": (DistilledContractManifest, 2),
+    "config": (ConfigContract, 2),
+    "distilled-contract": (DistilledContractManifest, 3),
     "finding": (FindingContract, 1),
     "migration-manifest": (MigrationManifest, 1),
     "migration-report": (MigrationReportContract, 1),
-    "replay": (ReplayContract, 2),
+    "replay": (ReplayContract, 3),
     "suite-report": (SuiteReportContract, 4),
     "workspace": (MigrationWorkspace, 3),
 }

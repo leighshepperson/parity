@@ -48,8 +48,10 @@ from parity.models import (
     CallableSpec,
     CaseConfig,
     ColumnSchema,
+    FrameArgument,
     FrameSchema,
     GenerationConfig,
+    InvocationConfig,
     ParityConfig,
     PerformanceConfig,
     Status,
@@ -89,7 +91,15 @@ def _config() -> ParityConfig:
                 name="orders",
                 reference=CallableSpec(target="candidate_lib:transform"),
                 candidate=CallableSpec(target="candidate_lib:transform"),
-                input_schema=FrameSchema(columns=[ColumnSchema(name="id", dtype="int64")]),
+                invocation=InvocationConfig(
+                    args=[
+                        FrameArgument(
+                            input_schema=FrameSchema(
+                                columns=[ColumnSchema(name="id", dtype="int64")]
+                            )
+                        )
+                    ]
+                ),
             )
         ]
     )
@@ -1976,7 +1986,7 @@ def test_same_version_worktree_mutation_blocks_finding_replay_before_invocation(
         name="same-version-source",
         reference=endpoint_specs[0],
         candidate=endpoint_specs[1],
-        fixture=fixture,
+        invocation=InvocationConfig(args=[FrameArgument(fixture=fixture)]),
         generation=GenerationConfig(
             max_examples=1,
             adversarial_examples=False,
@@ -2255,7 +2265,7 @@ def test_migration_init_cli_scaffolds_released_pair_contract(
     assert workspace["candidate_package"] == "more-itertools==9.0.0"
     assert "candidate_path" not in workspace
     assert config["cases"][0]["name"] == "windowed"
-    assert config["cases"][0]["fixture"] == "../windowed.csv"
+    assert config["cases"][0]["invocation"]["args"][0]["fixture"] == "../windowed.csv"
     assert config["cases"][0]["reference"]["target"] == ("migration_adapters:windowed_contract")
     assert config["cases"][0]["candidate"]["target"] == ("migration_adapters:windowed_contract")
     assert "workdir" not in config["cases"][0]["reference"]

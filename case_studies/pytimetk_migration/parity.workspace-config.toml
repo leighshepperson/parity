@@ -1,4 +1,4 @@
-version = 1
+version = 2
 artifact_dir = ".parity/workspace/artifacts"
 cases_file = "parity.cases.toml"
 fail_fast = false

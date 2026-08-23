@@ -9,7 +9,9 @@ from parity.models import (
     CaseConfig,
     CaseResult,
     ColumnSchema,
+    FrameArgument,
     FrameSchema,
+    InvocationConfig,
     ParityConfig,
     Status,
     SuiteResult,
@@ -28,7 +30,15 @@ def test_check_applies_parallel_execution_overrides(monkeypatch: pytest.MonkeyPa
                 name="orders",
                 reference=CallableSpec(target="project:legacy"),
                 candidate=CallableSpec(target="project:replacement"),
-                input_schema=FrameSchema(columns=[ColumnSchema(name="order_id", dtype="integer")]),
+                invocation=InvocationConfig(
+                    args=[
+                        FrameArgument(
+                            input_schema=FrameSchema(
+                                columns=[ColumnSchema(name="order_id", dtype="integer")]
+                            )
+                        )
+                    ]
+                ),
             )
         ]
     )

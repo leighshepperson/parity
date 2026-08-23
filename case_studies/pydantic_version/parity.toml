@@ -1,4 +1,4 @@
-version = 1
+version = 2
 artifact_dir = ".parity-pydantic-versions"
 fail_fast = false
 
@@ -32,11 +32,13 @@ target = "pydantic_version_parity:stable"
 [cases.candidate]
 target = "pydantic_version_parity:stable"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 3
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "value"
 dtype = "int64"
 nullable = false
@@ -58,11 +60,13 @@ target = "pydantic_version_parity:migration_surface"
 [cases.candidate]
 target = "pydantic_version_parity:migration_surface"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 3
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "operation"
 dtype = "string"
 nullable = false
@@ -73,7 +77,7 @@ categories = [
   "model-dict-equality",
 ]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "value"
 dtype = "float64"
 nullable = false

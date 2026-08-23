@@ -1,4 +1,4 @@
-version = 1
+version = 2
 artifact_dir = ".parity-asof"
 fail_fast = false
 
@@ -17,21 +17,21 @@ target = "asof_parity:polars_forward"
 adapter = "polars"
 record_distributions = ["polars"]
 
-[cases.input_bundle]
-binding = "keyword"
 
-[cases.input_bundle.inputs.left.schema]
+[cases.invocation.kwargs.left]
+kind = "frame"
+[cases.invocation.kwargs.left.schema]
 min_rows = 1
 max_rows = 4
 unique_together = [["time"]]
 
-[[cases.input_bundle.inputs.left.schema.constraints]]
+[[cases.invocation.kwargs.left.schema.constraints]]
 kind = "sorted_by"
 columns = ["time"]
 descending = false
 nulls = "last"
 
-[[cases.input_bundle.inputs.left.schema.columns]]
+[[cases.invocation.kwargs.left.schema.columns]]
 name = "time"
 dtype = "int64"
 nullable = false
@@ -39,25 +39,27 @@ unique = true
 minimum = 0
 maximum = 8
 
-[[cases.input_bundle.inputs.left.schema.columns]]
+[[cases.invocation.kwargs.left.schema.columns]]
 name = "left_value"
 dtype = "int64"
 nullable = false
 minimum = 0
 maximum = 20
 
-[cases.input_bundle.inputs.right.schema]
+[cases.invocation.kwargs.right]
+kind = "frame"
+[cases.invocation.kwargs.right.schema]
 min_rows = 1
 max_rows = 4
 unique_together = [["time"]]
 
-[[cases.input_bundle.inputs.right.schema.constraints]]
+[[cases.invocation.kwargs.right.schema.constraints]]
 kind = "sorted_by"
 columns = ["time"]
 descending = false
 nulls = "last"
 
-[[cases.input_bundle.inputs.right.schema.columns]]
+[[cases.invocation.kwargs.right.schema.columns]]
 name = "time"
 dtype = "int64"
 nullable = false
@@ -65,14 +67,14 @@ unique = true
 minimum = 0
 maximum = 8
 
-[[cases.input_bundle.inputs.right.schema.columns]]
+[[cases.invocation.kwargs.right.schema.columns]]
 name = "right_value"
 dtype = "int64"
 nullable = false
 minimum = 100
 maximum = 120
 
-[[cases.input_bundle.relationships]]
+[[cases.invocation.relationships]]
 kind = "equal_row_count"
 inputs = ["left", "right"]
 
@@ -105,24 +107,26 @@ pandas_input = "native"
 target = "asof_parity:polars_span"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 0
 max_rows = 10
 
-[[cases.schema.constraints]]
+[[cases.invocation.args.schema.constraints]]
 kind = "row_comparison"
 left = "start"
 operator = "le"
 right = "end"
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "start"
 dtype = "int64"
 nullable = false
 minimum = 0
 maximum = 20
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "end"
 dtype = "int64"
 nullable = false

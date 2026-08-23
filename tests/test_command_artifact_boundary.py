@@ -13,7 +13,9 @@ from parity.engine import ReplayError, replay_artifact, run_suite
 from parity.models import (
     CallableSpec,
     CaseConfig,
+    FrameArgument,
     GenerationConfig,
+    InvocationConfig,
     ParityConfig,
     PerformanceConfig,
     Status,
@@ -62,7 +64,7 @@ for raw_token in sys.stdin.buffer:
     with open(os.path.join(call_root, "request.json"), encoding="utf-8") as stream:
         request = json.load(stream)
     response = {{
-        "protocol_version": 1,
+        "protocol_version": 2,
         "duration_seconds": 0.0,
         "mutated_inputs": [],
         "return_type": None,
@@ -72,7 +74,7 @@ for raw_token in sys.stdin.buffer:
         "outcome": "returned",
     }}
     if request["operation"] == "execute":
-        source = request["inputs"]["items"][0]["path"]
+        source = request["invocation"]["args"][0]["path"]
         with open(source, "rb") as stream:
             table = ipc.open_file(stream).read_all()
         output = pa.table({{"value": table.column("value")}})
@@ -97,10 +99,13 @@ def test_toml_accepts_command_and_python_canonicalizer_endpoints(tmp_path: Path)
     config_path = tmp_path / "parity.toml"
     config_path.write_text(
         """
-version = 1
+version = 2
 
 [[cases]]
 name = "mixed-runtime"
+
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixture.arrow"
 
 [cases.reference]
@@ -165,7 +170,7 @@ def canonicalize(table):
             adapter="arrow",
             workdir=tmp_path,
         ),
-        fixture=fixture,
+        invocation=InvocationConfig(args=[FrameArgument(fixture=fixture)]),
         generation=GenerationConfig(
             max_examples=1,
             search=False,
@@ -235,7 +240,7 @@ def transform(table):
             adapter="arrow",
             workdir=tmp_path,
         ),
-        fixture=fixture,
+        invocation=InvocationConfig(args=[FrameArgument(fixture=fixture)]),
         generation=GenerationConfig(
             max_examples=1,
             search=False,

@@ -1,11 +1,13 @@
-version = 1
+version = 2
 artifact_dir = ".parity-polars-versions"
 fail_fast = false
 
 [[cases]]
 name = "group-by-dynamic-default-offset"
-fixture = "fixtures/boundary.json"
 tags = ["cross-version", "finding", "polars", "version-drift"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/boundary.json"
 
 [cases.reference]
 target = "polars_version_parity:dynamic_window"

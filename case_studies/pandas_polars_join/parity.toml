@@ -1,4 +1,4 @@
-version = 1
+version = 2
 artifact_dir = ".parity-join"
 fail_fast = false
 
@@ -16,46 +16,48 @@ target = "join_parity:polars_left_join"
 adapter = "polars"
 record_distributions = ["polars"]
 
-[cases.input_bundle]
-binding = "keyword"
 
-[cases.input_bundle.inputs.left.schema]
+[cases.invocation.kwargs.left]
+kind = "frame"
+[cases.invocation.kwargs.left.schema]
 min_rows = 1
 max_rows = 3
 
-[[cases.input_bundle.inputs.left.schema.columns]]
+[[cases.invocation.kwargs.left.schema.columns]]
 name = "key"
 dtype = "int64"
 nullable = true
 minimum = 0
 maximum = 2
 
-[[cases.input_bundle.inputs.left.schema.columns]]
+[[cases.invocation.kwargs.left.schema.columns]]
 name = "left_value"
 dtype = "int64"
 nullable = false
 minimum = 0
 maximum = 20
 
-[cases.input_bundle.inputs.right.schema]
+[cases.invocation.kwargs.right]
+kind = "frame"
+[cases.invocation.kwargs.right.schema]
 min_rows = 1
 max_rows = 3
 
-[[cases.input_bundle.inputs.right.schema.columns]]
+[[cases.invocation.kwargs.right.schema.columns]]
 name = "key"
 dtype = "int64"
 nullable = true
 minimum = 0
 maximum = 2
 
-[[cases.input_bundle.inputs.right.schema.columns]]
+[[cases.invocation.kwargs.right.schema.columns]]
 name = "right_value"
 dtype = "int64"
 nullable = false
 minimum = 0
 maximum = 20
 
-[[cases.input_bundle.relationships]]
+[[cases.invocation.relationships]]
 kind = "equal_row_count"
 inputs = ["left", "right"]
 

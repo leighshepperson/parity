@@ -8,11 +8,14 @@ from parity.models import (
     CaseConfig,
     ColumnSchema,
     ComparisonPolicy,
+    EqualRowCount,
     ExampleResult,
+    FrameArgument,
     FrameSchema,
+    FrameSequenceArgument,
     GenerationConfig,
-    InputBundle,
-    InputSpec,
+    InvocationConfig,
+    JsonArgument,
     ParityConfig,
     RowComparison,
     SortedBy,
@@ -115,7 +118,7 @@ def test_finding_signatures_use_only_the_current_contract() -> None:
         )
 
 
-def test_keyed_row_alignment_contract_is_explicit_and_backward_compatible() -> None:
+def test_keyed_row_alignment_contract_is_explicit() -> None:
     assert ComparisonPolicy().row_order == "strict"
     assert ComparisonPolicy().row_keys == []
     assert ComparisonPolicy(row_order="keyed", row_keys=["account", "date"]).row_keys == [
@@ -237,76 +240,132 @@ def test_column_text_and_timezone_constraints_are_validated(
         ColumnSchema.model_validate({"name": "value", **kwargs})
 
 
-def test_input_bundle_rejects_partial_fixture_sets() -> None:
-    with pytest.raises(ValidationError, match="provided for every input or none"):
-        InputBundle(
-            inputs={
-                "left": InputSpec(fixture="left.csv"),
-                "right": InputSpec(input_schema=schema()),
-            }
+def test_invocation_allows_mixed_fixed_and_generated_frames() -> None:
+    invocation = InvocationConfig(
+        args=[
+            FrameArgument(fixture="left.csv", generate=False),
+            FrameArgument(input_schema=schema()),
+        ]
+    )
+
+    assert invocation.args[0].generate is False
+    assert invocation.args[1].generate is True
+
+
+def test_relationship_fixtures_are_atomic_or_absent() -> None:
+    with pytest.raises(ValidationError, match="provided for every referenced frame or none"):
+        InvocationConfig(
+            args=[
+                FrameArgument(name="left", fixture="left.csv", input_schema=schema()),
+                FrameArgument(name="right", input_schema=schema()),
+            ],
+            relationships=[EqualRowCount(inputs=["left", "right"])],
         )
 
 
-def test_input_bundle_requires_callable_safe_names() -> None:
+def test_invocation_requires_callable_safe_keyword_names() -> None:
     with pytest.raises(ValidationError, match="non-keyword Python identifier"):
-        InputBundle(
-            inputs={
-                "valid": InputSpec(input_schema=schema()),
-                "class": InputSpec(input_schema=schema()),
-            }
+        InvocationConfig(
+            kwargs={
+                "valid": FrameArgument(input_schema=schema()),
+                "class": FrameArgument(input_schema=schema()),
+            },
         )
 
 
-def test_keyword_bundle_rejects_ambiguous_static_arguments() -> None:
-    bundle = InputBundle(
-        inputs={
-            "left": InputSpec(input_schema=schema()),
-            "right": InputSpec(input_schema=schema()),
-        }
+def test_invocation_bounds_expanded_varargs_with_positional_arguments() -> None:
+    with pytest.raises(ValidationError, match="expanded varargs cannot exceed 256"):
+        InvocationConfig(
+            args=[JsonArgument(values=[None])],
+            varargs=FrameSequenceArgument(
+                input_schema=schema(),
+                min_items=0,
+                max_items=256,
+                container="tuple",
+            ),
+        )
+
+
+def test_configured_json_arguments_enforce_protocol_size_bounds() -> None:
+    with pytest.raises(ValidationError, match="256 KiB"):
+        JsonArgument(values=["x" * (256 * 1024)])
+    with pytest.raises(ValidationError, match="512 KiB in total"):
+        InvocationConfig(
+            args=[
+                JsonArgument(values=["x" * 200_000]),
+                JsonArgument(values=["y" * 200_000]),
+                JsonArgument(values=["z" * 200_000]),
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("legacy_field", "value"),
+    [
+        ("fixture", "input.arrow"),
+        ("schema", {}),
+        ("input_bundle", {}),
+        ("static_args", [1]),
+        ("static_kwargs", {"mode": "strict"}),
+        ("reference_kwargs", {"engine": "pandas"}),
+        ("candidate_kwargs", {"engine": "polars"}),
+    ],
+)
+def test_invocation_is_the_only_argument_contract(legacy_field: str, value: object) -> None:
+    invocation = InvocationConfig(
+        args=[
+            JsonArgument(values=["strict"]),
+            FrameArgument(input_schema=schema()),
+        ],
+        kwargs={"window": JsonArgument(values=[3, 7])},
     )
     base = {
         "name": "join",
         "reference": CallableSpec(target="example:reference"),
         "candidate": CallableSpec(target="example:candidate"),
-        "input_bundle": bundle,
+        "invocation": invocation,
     }
-    with pytest.raises(ValidationError, match="cannot be combined with static_args"):
-        CaseConfig(**base, static_args=[1])
-    with pytest.raises(ValidationError, match="collide with invocation kwargs"):
-        CaseConfig(**base, static_kwargs={"left": 1})
-    with pytest.raises(ValidationError, match="collide with invocation kwargs"):
-        CaseConfig(**base, reference_kwargs={"left": 1})
-    with pytest.raises(ValidationError, match="collide with invocation kwargs"):
-        CaseConfig(**base, candidate_kwargs={"right": 1})
-
-    positional = bundle.model_copy(update={"binding": "positional"})
-    assert CaseConfig(**{**base, "input_bundle": positional}, static_args=[1]).static_args == [1]
+    assert CaseConfig(**base).invocation == invocation
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CaseConfig(**base, **{legacy_field: value})
 
 
-def test_endpoint_kwargs_are_disjoint_from_shared_kwargs() -> None:
-    base = {
-        "name": "engines",
-        "reference": CallableSpec(target="example:transform"),
-        "candidate": CallableSpec(target="example:transform"),
-        "input_schema": schema(),
-        "static_kwargs": {"window": 3},
-    }
-
+def test_configuration_v1_is_not_accepted() -> None:
     case = CaseConfig(
-        **base,
-        reference_kwargs={"engine": "pandas"},
-        candidate_kwargs={"engine": "polars"},
+        name="call",
+        reference=CallableSpec(target="example:reference"),
+        candidate=CallableSpec(target="example:candidate"),
+        invocation=InvocationConfig(),
     )
-    assert case.reference_kwargs == {"engine": "pandas"}
-    assert case.candidate_kwargs == {"engine": "polars"}
-    with pytest.raises(ValidationError, match="reference_kwargs overlap static_kwargs"):
-        CaseConfig(**base, reference_kwargs={"window": 4})
-    with pytest.raises(ValidationError, match="candidate_kwargs overlap static_kwargs"):
-        CaseConfig(**base, candidate_kwargs={"window": 4})
+    with pytest.raises(ValidationError, match="Input should be 2"):
+        ParityConfig(version=1, cases=[case])  # type: ignore[arg-type]
 
 
-def test_case_requires_fixture_or_schema() -> None:
-    with pytest.raises(ValidationError, match="fixture or schema"):
+def test_frame_sequence_and_varargs_contracts_are_distinct() -> None:
+    sequence = FrameSequenceArgument(input_schema=schema(), min_items=0, max_items=12)
+    assert InvocationConfig(args=[sequence]).args == [sequence]
+    with pytest.raises(ValidationError, match="container='tuple'"):
+        InvocationConfig(varargs=sequence)
+    assert (
+        InvocationConfig(varargs=sequence.model_copy(update={"container": "tuple"})).varargs
+        is not None
+    )
+
+
+def test_frame_sequence_rejects_seed_length_outside_declared_bounds() -> None:
+    with pytest.raises(ValidationError, match="fixture count must satisfy"):
+        FrameSequenceArgument(
+            fixtures=["only.arrow"],
+            input_schema=schema(),
+            min_items=2,
+            max_items=4,
+        )
+
+
+def test_case_requires_invocation_or_custom_generator() -> None:
+    with pytest.raises(
+        ValidationError, match=r"exactly one of invocation or generation\.generator"
+    ):
         CaseConfig(
             name="orders",
             reference=CallableSpec(target="example:reference"),
@@ -395,17 +454,20 @@ def test_callable_required_distributions_use_normalized_pep440_specifiers() -> N
         )
 
 
-def test_case_accepts_schema_alias_and_serializes_it() -> None:
+def test_frame_argument_accepts_schema_alias_and_serializes_it() -> None:
     case = CaseConfig.model_validate(
         {
             "name": "orders",
             "reference": {"target": "example:reference"},
             "candidate": {"target": "example:candidate"},
-            "schema": schema().model_dump(),
+            "invocation": {
+                "args": [{"kind": "frame", "schema": schema().model_dump()}],
+            },
         }
     )
-    assert case.input_schema is not None
-    assert "schema" in case.model_dump(by_alias=True)
+    assert case.invocation is not None
+    assert case.invocation.args[0].input_schema is not None
+    assert "schema" in case.model_dump(by_alias=True)["invocation"]["args"][0]
 
 
 def test_config_rejects_duplicate_case_names() -> None:
@@ -413,7 +475,7 @@ def test_config_rejects_duplicate_case_names() -> None:
         name="orders",
         reference=CallableSpec(target="example:reference"),
         candidate=CallableSpec(target="example:candidate"),
-        schema=schema(),
+        invocation=InvocationConfig(args=[FrameArgument(input_schema=schema())]),
     )
     with pytest.raises(ValidationError, match="case names must be unique"):
         ParityConfig(cases=[case, case.model_copy(deep=True)])

@@ -108,7 +108,8 @@ protocol adapter executable.
 ## Artifact privacy
 
 JSON, JUnit, Markdown and step-summary reports omit dataframe values. Counterexample directories
-contain the actual minimized input as Arrow and, when representable, Parquet. When a generated
+contain the actual minimized invocation's frame leaves as Arrow and, when representable, Parquet.
+When a generated
 schema was inferred from a real fixture, those files may reproduce fixture values. Use private repositories, constrained
 artifact permissions and an appropriate retention period. Upload is disabled by default; set
 `upload-artifact: "true"` only when policy permits remote evidence storage.

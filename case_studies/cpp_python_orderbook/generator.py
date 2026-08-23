@@ -7,8 +7,10 @@ from collections.abc import Iterable, Sequence
 import pyarrow as pa
 from hypothesis import strategies as st
 
+from parity import Invocation
+
 Event = tuple[str, int, str, str, int, int]
-Bundle = dict[str, pa.Table]
+Bundle = Invocation
 
 EVENT_SCHEMA = pa.schema(
     [
@@ -100,10 +102,12 @@ def _tables(events: Sequence[Event]) -> Bundle:
         {"instrument": "ALPHA", "lot_size": 1},
         {"instrument": "BETA", "lot_size": 10},
     ]
-    return {
-        "events": pa.Table.from_pylist(event_rows, schema=EVENT_SCHEMA),
-        "instruments": pa.Table.from_pylist(instruments, schema=INSTRUMENT_SCHEMA),
-    }
+    return Invocation(
+        kwargs={
+            "events": pa.Table.from_pylist(event_rows, schema=EVENT_SCHEMA),
+            "instruments": pa.Table.from_pylist(instruments, schema=INSTRUMENT_SCHEMA),
+        }
+    )
 
 
 def _random_bundle(raw_events: Sequence[tuple[int, int, int, int, int, int]]) -> Bundle:

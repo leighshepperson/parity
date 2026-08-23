@@ -21,7 +21,7 @@ def _request(call_root: Path, *, target: str) -> dict[str, object]:
     input_path = call_root / "input-00000000.arrow"
     _write_arrow(pa.table({"x": [1, 2]}), input_path)
     return {
-        "protocol_version": 1,
+        "protocol_version": 2,
         "operation": "execute",
         "endpoint": {
             "target": target,
@@ -29,16 +29,14 @@ def _request(call_root: Path, *, target: str) -> dict[str, object]:
             "pandas_input": "native",
             "record_distributions": [],
         },
-        "inputs": {
-            "kind": "single",
-            "items": [{"name": "input", "path": str(input_path)}],
+        "invocation": {
+            "args": [{"kind": "arrow", "path": str(input_path)}],
+            "kwargs": {},
         },
         "output": {
             "arrow": str(call_root / "output.arrow"),
             "json": str(call_root / "output.json"),
         },
-        "static_args": [],
-        "static_kwargs": {},
     }
 
 
@@ -96,7 +94,7 @@ def test_portable_worker_executes_without_importing_parity(tmp_path: Path) -> No
     response = _run_call(tmp_path, request)
 
     assert response["outcome"] == "returned"
-    assert response["protocol_version"] == 1
+    assert response["protocol_version"] == 2
     assert response["runtime"]["executor"] == "portable-python"
     assert response["runtime"]["parity_version"] is None
     assert _read_arrow(call_root / "output.arrow").column("x").to_pylist() == [5, 6]
@@ -198,11 +196,11 @@ def test_portable_worker_rejects_input_path_escape_without_disclosing_it(
     request = _request(call_root, target="portable_target:transform")
     outside = tmp_path / "outside.arrow"
     _write_arrow(pa.table({"secret": [42]}), outside)
-    inputs = request["inputs"]
-    assert isinstance(inputs, dict)
-    items = inputs["items"]
-    assert isinstance(items, list)
-    items[0]["path"] = str(outside)
+    invocation = request["invocation"]
+    assert isinstance(invocation, dict)
+    arguments = invocation["args"]
+    assert isinstance(arguments, list)
+    arguments[0]["path"] = str(outside)
 
     response = _run_call(tmp_path, request)
 
@@ -213,16 +211,16 @@ def test_portable_worker_rejects_input_path_escape_without_disclosing_it(
 
 
 @pytest.mark.parametrize(
-    "inputs",
+    "invocation",
     [
-        {"kind": "positional", "items": []},
-        {"kind": "single", "items": []},
-        {"kind": "single", "items": [{"name": "wrong", "path": "missing"}]},
+        {"args": {}, "kwargs": {}},
+        {"args": [{"kind": "unknown"}], "kwargs": {}},
+        {"args": [], "kwargs": {"not-valid": {"kind": "json", "value": 1}}},
     ],
 )
-def test_portable_worker_rejects_malformed_input_envelopes(
+def test_portable_worker_rejects_malformed_invocation_envelopes(
     tmp_path: Path,
-    inputs: dict[str, object],
+    invocation: dict[str, object],
 ) -> None:
     (tmp_path / "portable_target.py").write_text(
         "def transform(frame):\n    return frame\n",
@@ -232,7 +230,7 @@ def test_portable_worker_rejects_malformed_input_envelopes(
     call_root = root / "call-00000001-0123456789abcdef0123456789abcdef"
     call_root.mkdir(parents=True)
     request = _request(call_root, target="portable_target:transform")
-    request["inputs"] = inputs
+    request["invocation"] = invocation
 
     response = _run_call(tmp_path, request)
 

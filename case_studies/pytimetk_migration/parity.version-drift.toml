@@ -1,12 +1,14 @@
-version = 1
+version = 2
 artifact_dir = ".parity-version-drift"
 fail_fast = false
 
 [[cases]]
 name = "pandas-lags-drift"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["version-drift", "pandas", "augment-lags"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:lags_null_pandas"
@@ -42,9 +44,11 @@ enabled = false
 
 [[cases]]
 name = "polars-lags-drift"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["version-drift", "polars", "augment-lags"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:lags_null_polars"
@@ -78,9 +82,11 @@ enabled = false
 
 [[cases]]
 name = "pandas-rolling-drift"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["version-drift", "pandas", "augment-rolling"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:rolling_null_pandas"
@@ -116,9 +122,11 @@ enabled = false
 
 [[cases]]
 name = "polars-rolling-drift"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["version-drift", "polars", "augment-rolling"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:rolling_null_polars"
@@ -152,9 +160,11 @@ enabled = false
 
 [[cases]]
 name = "pandas-ewm-drift"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["version-drift", "pandas", "augment-ewm"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:ewm_null_pandas"
@@ -190,9 +200,11 @@ enabled = false
 
 [[cases]]
 name = "polars-ewm-drift"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["version-drift", "polars", "augment-ewm"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:ewm_null_polars"
@@ -226,9 +238,11 @@ enabled = false
 
 [[cases]]
 name = "pandas-macd-drift"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["version-drift", "pandas", "augment-macd"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:macd_null_pandas"
@@ -264,9 +278,11 @@ enabled = false
 
 [[cases]]
 name = "polars-macd-drift"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["version-drift", "polars", "augment-macd"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:macd_null_polars"
@@ -300,9 +316,11 @@ enabled = false
 
 [[cases]]
 name = "pandas-pad-drift"
-fixture = "fixtures/pad_numeric_hostile.arrow"
 tags = ["version-drift", "pandas", "pad-by-time"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/pad_numeric_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:pad_null_pandas"
@@ -338,9 +356,11 @@ enabled = false
 
 [[cases]]
 name = "polars-pad-drift"
-fixture = "fixtures/pad_numeric_hostile.arrow"
 tags = ["version-drift", "polars", "pad-by-time"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/pad_numeric_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:pad_null_polars"

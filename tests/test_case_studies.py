@@ -9,7 +9,7 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 
-from parity.models import ParityConfig
+from parity.models import FrameArgument, ParityConfig
 
 ROOT = Path(__file__).parents[1]
 STUDY = ROOT / "case_studies" / "pyjanitor_complete"
@@ -30,6 +30,15 @@ SKRUB_CASES = [
     "aggjoiner-tied-mode-finding",
     "aggjoiner-ieee-nan-finding",
 ]
+
+
+def _frame_arguments(case) -> list[FrameArgument]:
+    assert case.invocation is not None
+    return [
+        argument
+        for argument in [*case.invocation.args, *case.invocation.kwargs.values()]
+        if isinstance(argument, FrameArgument)
+    ]
 
 
 def test_pyjanitor_case_study_config_and_evidence_are_consistent() -> None:
@@ -62,8 +71,9 @@ def test_pyjanitor_case_study_config_and_evidence_are_consistent() -> None:
             assert distributions["pyarrow"] == "25.0.1"
 
     for case in config.cases:
-        if case.fixture is not None:
-            assert (STUDY / case.fixture).is_file()
+        for argument in _frame_arguments(case):
+            if argument.fixture is not None:
+                assert (STUDY / argument.fixture).is_file()
 
 
 def test_pyjanitor_case_study_targets_exist_without_importing_optional_dependency() -> None:
@@ -115,8 +125,9 @@ def test_skrub_case_study_config_and_reports_are_consistent() -> None:
     assert all(not case.generation.adversarial_examples for case in config.cases)
     assert all(not case.performance.enabled for case in config.cases)
     for case in config.cases:
-        assert case.fixture is not None
-        assert (SKRUB_STUDY / case.fixture).is_file()
+        [argument] = _frame_arguments(case)
+        assert argument.fixture is not None
+        assert (SKRUB_STUDY / argument.fixture).is_file()
         for endpoint in (case.reference, case.candidate):
             assert endpoint.record_distributions == ["scikit-learn", "skrub"]
     native = [
@@ -217,16 +228,14 @@ def test_join_case_study_uses_a_generated_two_frame_contract() -> None:
     config = ParityConfig.model_validate(raw)
     case = config.cases[0]
 
-    assert case.fixture is None
-    assert case.input_bundle is not None
-    assert list(case.input_bundle.inputs) == ["left", "right"]
-    assert case.input_bundle.binding == "keyword"
-    assert case.input_bundle.relationships[0].kind == "equal_row_count"
+    assert case.invocation is not None
+    assert list(case.invocation.kwargs) == ["left", "right"]
+    assert case.invocation.relationships[0].kind == "equal_row_count"
     assert case.generation.max_examples == 500
     assert case.generation.max_findings == 1
     assert not case.generation.adversarial_examples
     assert not case.performance.enabled
-    assert all(spec.input_schema is not None for spec in case.input_bundle.inputs.values())
+    assert all(spec.input_schema is not None for spec in case.invocation.kwargs.values())
 
     source = (JOIN_STUDY / "join_parity.py").read_text(encoding="utf-8")
     compile(source, str(JOIN_STUDY / "join_parity.py"), "exec")
@@ -262,15 +271,18 @@ def test_asof_case_study_declares_valid_order_and_row_domains() -> None:
     config = ParityConfig.model_validate(raw)
     asof_case, interval_case = config.cases
 
-    assert asof_case.input_bundle is not None
-    assert list(asof_case.input_bundle.inputs) == ["left", "right"]
-    for spec in asof_case.input_bundle.inputs.values():
+    assert asof_case.invocation is not None
+    assert list(asof_case.invocation.kwargs) == ["left", "right"]
+    for spec in asof_case.invocation.kwargs.values():
         assert spec.input_schema is not None
         constraint = spec.input_schema.constraints[0]
         assert constraint.kind == "sorted_by"
         assert constraint.columns == ["time"]
-    assert interval_case.input_schema is not None
-    comparison = interval_case.input_schema.constraints[0]
+    assert interval_case.invocation is not None
+    interval_argument = interval_case.invocation.args[0]
+    assert isinstance(interval_argument, FrameArgument)
+    assert interval_argument.input_schema is not None
+    comparison = interval_argument.input_schema.constraints[0]
     assert comparison.kind == "row_comparison"
     assert (comparison.left, comparison.operator, comparison.right) == ("start", "le", "end")
 
@@ -289,8 +301,9 @@ def test_stability_study_has_a_matching_but_changing_pair() -> None:
     config = ParityConfig.model_validate(raw)
     case = config.cases[0]
     assert case.generation.stability_repeats == 2
-    assert case.fixture is not None
-    assert (STABILITY_STUDY / case.fixture).is_file()
+    [argument] = _frame_arguments(case)
+    assert argument.fixture is not None
+    assert (STABILITY_STUDY / argument.fixture).is_file()
 
     targets = runpy.run_path(str(STABILITY_STUDY / "stability_parity.py"))
     frame = pa.table({"value": [1]})

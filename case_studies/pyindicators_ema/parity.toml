@@ -1,11 +1,13 @@
-version = 1
+version = 2
 artifact_dir = ".parity-pyindicators"
 fail_fast = false
 
 [[cases]]
 name = "ema-finite-control"
-fixture = "fixtures/finite.json"
 tags = ["control", "external", "pandas", "polars", "public-project"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/finite.json"
 
 [cases.reference]
 target = "pyindicators_parity:pandas_ema"
@@ -39,8 +41,10 @@ derandomize = true
 enabled = false
 [[cases]]
 name = "ema-nullable-backend-divergence"
-fixture = "fixtures/nullable.json"
 tags = ["external", "finding", "null", "pandas", "polars", "public-project"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/nullable.json"
 
 [cases.reference]
 target = "pyindicators_parity:pandas_ema"

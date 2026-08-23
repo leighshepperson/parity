@@ -162,7 +162,7 @@ def _artifact_has_executable_replay(path: Path) -> bool:
     path_base = payload.get("path_base")
     levels = path_base.get("levels") if isinstance(path_base, dict) else None
     return bool(
-        payload["version"] == 2
+        payload["version"] == 3
         and isinstance(path_base, dict)
         and set(path_base) == {"kind", "levels"}
         and path_base.get("kind") == "artifact_ancestor"
@@ -370,7 +370,7 @@ def adapter_serve(
     path: Annotated[Path, typer.Argument(help="Python adapter module")],
     session_root: Annotated[Path, typer.Argument(help="Private protocol session root")],
 ) -> None:
-    """Serve one generated adapter through target protocol v1."""
+    """Serve one generated adapter through target protocol v2."""
 
     try:
         adapter = _load_command_adapter(path)
@@ -1136,6 +1136,7 @@ def migration_validate(
     from parity.agent_output import ContractChecklist
     from parity.migration import MigrationConfigError, load_migration_manifest
     from parity.migration_workspace import WorkspaceError, load_workspace
+    from parity.models import FrameArgument, FrameSequenceArgument
 
     invocation = Path.cwd()
     checks: list[dict[str, Any]] = []
@@ -1171,15 +1172,19 @@ def migration_validate(
 
         fixture_count = 0
         for case in configured.cases:
-            fixtures = [case.fixture] if case.fixture is not None else []
-            if case.input_bundle is not None:
-                fixtures.extend(
-                    spec.fixture
-                    for spec in case.input_bundle.inputs.values()
-                    if spec.fixture is not None
-                )
+            fixtures: list[Path] = []
+            if case.invocation is not None:
+                arguments = [
+                    *case.invocation.args,
+                    *case.invocation.kwargs.values(),
+                    *([case.invocation.varargs] if case.invocation.varargs is not None else []),
+                ]
+                for argument in arguments:
+                    if isinstance(argument, FrameArgument) and argument.fixture is not None:
+                        fixtures.append(argument.fixture)
+                    elif isinstance(argument, FrameSequenceArgument):
+                        fixtures.extend(argument.fixtures)
             for fixture_path in fixtures:
-                assert fixture_path is not None
                 load_arrow_fixture(fixture_path)
                 fixture_count += 1
         checks.append(
@@ -1960,9 +1965,9 @@ def _runtime_label(worker: WorkerRuntimeReport, field: str) -> str:
     if field == "parity":
         if worker.executor != "parity-python":
             protocol = (
-                "portable protocol v1"
+                "portable protocol v2"
                 if worker.executor == "portable-python"
-                else "target protocol v1"
+                else "target protocol v2"
             )
             return f"not required ({protocol})"
         version = worker.parity_version or "unavailable"

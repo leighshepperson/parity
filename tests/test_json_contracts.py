@@ -43,12 +43,12 @@ def test_breaking_contract_versions_are_exposed_in_their_schemas() -> None:
     suite = contract_schema("suite-report")
 
     assert workspace["properties"]["version"]["const"] == 3
-    assert replay["properties"]["version"]["const"] == 2
-    assert artifact["properties"]["version"]["const"] == 2
+    assert replay["properties"]["version"]["const"] == 3
+    assert artifact["properties"]["version"]["const"] == 3
     assert compatibility["properties"]["version"]["const"] == 1
-    assert distilled["properties"]["version"]["const"] == 2
+    assert distilled["properties"]["version"]["const"] == 3
     assert suite["properties"]["schema_version"]["const"] == 4
-    assert replay["$id"].endswith("/v2.json")
+    assert replay["$id"].endswith("/v3.json")
 
 
 def test_report_schemas_describe_cases_findings_and_migration_units() -> None:
@@ -56,6 +56,7 @@ def test_report_schemas_describe_cases_findings_and_migration_units() -> None:
     suite = contract_schema("suite-report")
     migration = contract_schema("migration-report")
     config = contract_schema("config")
+    replay = contract_schema("replay")
 
     assert finding["properties"]["mismatch_counts"] == {"$ref": "#/$defs/MismatchCountsContract"}
     assert finding["$defs"]["MismatchCountsContract"]["additionalProperties"] is False
@@ -75,6 +76,17 @@ def test_report_schemas_describe_cases_findings_and_migration_units() -> None:
     inline_cases = config["properties"]["cases"]["anyOf"][0]
     assert inline_cases["items"] == {"$ref": "#/$defs/CaseConfig"}
     assert {"name", "reference", "candidate"} <= set(config["$defs"]["CaseConfig"]["required"])
+    assert config["properties"]["version"]["const"] == 2
+    assert set(config["$defs"]["InvocationConfig"]["properties"]) == {
+        "args",
+        "kwargs",
+        "relationships",
+        "varargs",
+    }
+    assert replay["properties"]["invocation"] == {"$ref": "#/$defs/InvocationDocument"}
+    invocation = replay["$defs"]["InvocationDocument"]
+    assert set(invocation["required"]) == {"args", "kwargs"}
+    assert invocation["additionalProperties"] is False
 
 
 def test_finding_contract_rejects_unknown_nested_fields_and_mismatch_kinds() -> None:

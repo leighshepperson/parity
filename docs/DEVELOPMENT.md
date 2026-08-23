@@ -17,11 +17,15 @@ Run the same gates as CI:
 ruff check .
 ruff format --check .
 mypy src/parity
-pytest
+python -m coverage run -m pytest
+python -m coverage report
 python -m build
 ```
 
-Branch coverage is gated at the measured first-release baseline (68%). Treat the threshold as a
+Coverage starts before pytest so the installed Parity plugin's own import path is measured rather
+than being incorrectly reported as uncovered initialization code.
+
+Branch coverage is gated at the current measured baseline (75%). Treat the threshold as a
 ratchet: new work should add focused tests and raise it when the sustained suite result reaches the
 next whole percentage point. Do not lower it to land untested behavior.
 
@@ -89,7 +93,8 @@ tests/               unit, property and integration tests
 
 ## Engineering rules
 
-- Preserve a single Arrow input boundary. Do not add pairwise pandas/engine conversions.
+- Preserve the canonical `Invocation` boundary and Arrow frame leaves. Do not add pairwise
+  pandas/engine conversions.
 - Keep the portable target worker independent of Parity and controller-only dependencies.
 - Keep external commands and Python workers on the same versioned observation protocol.
 - Make equivalence policy explicit and validated. Avoid “smart” implicit tolerance widening.

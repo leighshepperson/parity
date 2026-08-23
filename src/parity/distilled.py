@@ -16,6 +16,7 @@ import shutil
 import tempfile
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -26,13 +27,13 @@ from parity._version import __version__
 from parity.adapters import load_arrow_fixture
 from parity.comparison import compare_observations, mismatch_signature
 from parity.execution import (
-    ArrowInputBundle,
     ExceptionInfo,
     ExecutionOutcome,
     Observation,
     _write_arrow,
     execute_isolated,
 )
+from parity.invocation import FrameSequence, Invocation
 from parity.models import (
     CallableSpec,
     CaseProvenance,
@@ -41,6 +42,7 @@ from parity.models import (
     CompatibilityBudget,
     CompatibilityDecision,
     ExampleResult,
+    InvocationDocument,
     JsonValue,
     Mismatch,
     MismatchKind,
@@ -81,6 +83,82 @@ def _contains_redaction(value: Any) -> bool:
     return False
 
 
+def _invocation_file_bindings(document: Any) -> list[tuple[str, str]]:
+    """Validate a stored invocation document and list its Arrow leaves."""
+
+    if isinstance(document, InvocationDocument):
+        document = document.model_dump(mode="python")
+
+    if not isinstance(document, dict) or set(document) != {"args", "kwargs"}:
+        raise ValueError("contract invocation must contain args and kwargs")
+    args = document.get("args")
+    kwargs = document.get("kwargs")
+    if not isinstance(args, list) or not isinstance(kwargs, dict):
+        raise ValueError("contract invocation must contain args and kwargs")
+    if len(args) > 256 or len(kwargs) > 256:
+        raise ValueError("contract invocation contains too many arguments")
+    if any(
+        not isinstance(name, str)
+        or not name.isidentifier()
+        or keyword.iskeyword(name)
+        or len(name) > 128
+        for name in kwargs
+    ):
+        raise ValueError("contract invocation contains an invalid keyword")
+    bindings: list[tuple[str, str]] = []
+
+    def visit(node: Any, path: str) -> None:
+        if not isinstance(node, dict):
+            raise ValueError("contract invocation contains an invalid value")
+        kind = node.get("kind")
+        if kind == "arrow" and set(node) == {"kind", "file"}:
+            filename = node.get("file")
+            if not isinstance(filename, str):
+                raise ValueError("contract invocation contains an invalid Arrow binding")
+            bindings.append((path, _safe_file(filename)))
+            return
+        if kind == "json" and set(node) == {"kind", "value"}:
+            try:
+                json.dumps(node.get("value"), allow_nan=True)
+            except (TypeError, ValueError) as error:
+                raise ValueError("contract invocation contains an invalid JSON value") from error
+            return
+        if kind == "frames" and set(node) == {"kind", "container", "items"}:
+            container = node.get("container")
+            items = node.get("items")
+            if container not in {"list", "tuple"} or not isinstance(items, list):
+                raise ValueError("contract invocation contains an invalid frame sequence")
+            if len(items) > 256:
+                raise ValueError("contract frame sequence contains too many items")
+            for index, item in enumerate(items):
+                visit(item, f"{path}/{index}")
+            return
+        raise ValueError("contract invocation contains an invalid value")
+
+    for index, node in enumerate(args):
+        visit(node, f"args/{index}")
+    for name, node in kwargs.items():
+        visit(node, f"kwargs/{name}")
+    return bindings
+
+
+def _replace_invocation_files(document: Any, replacements: Mapping[str, str]) -> Any:
+    if isinstance(document, InvocationDocument):
+        document = document.model_dump(mode="python")
+    if isinstance(document, dict):
+        if document.get("kind") == "arrow" and set(document) == {"kind", "file"}:
+            filename = document.get("file")
+            if not isinstance(filename, str) or filename not in replacements:
+                raise ValueError("invocation Arrow binding has no replacement")
+            return {"kind": "arrow", "file": replacements[filename]}
+        return {
+            key: _replace_invocation_files(value, replacements) for key, value in document.items()
+        }
+    if isinstance(document, list):
+        return [_replace_invocation_files(value, replacements) for value in document]
+    return document
+
+
 class ContractPathBase(StrictModel):
     """Portable project-root binding for one contract directory."""
 
@@ -100,13 +178,6 @@ class ContractInput(StrictModel):
 
     name: str = Field(min_length=1)
     file: str = Field(min_length=1)
-
-    @field_validator("name")
-    @classmethod
-    def valid_input_name(cls, value: str) -> str:
-        if not value.isidentifier() or keyword.iskeyword(value):
-            raise ValueError("contract input names must be valid Python identifiers")
-        return value
 
     @field_validator("file")
     @classmethod
@@ -192,7 +263,8 @@ class ContractExample(StrictModel):
     """One minimized input and its immutable reference expectation."""
 
     finding_signature: str = Field(pattern=r"^ms3:[0-9a-f]{64}$")
-    inputs: list[ContractInput] = Field(min_length=1, max_length=3)
+    invocation: InvocationDocument
+    inputs: list[ContractInput] = Field(default_factory=list, max_length=512)
     expected: ContractExpectation
 
     @model_validator(mode="after")
@@ -201,6 +273,10 @@ class ContractExample(StrictModel):
         files = [item.file for item in self.inputs]
         if len(names) != len(set(names)) or len(files) != len(set(files)):
             raise ValueError("contract example inputs must have unique names and files")
+        if _invocation_file_bindings(self.invocation) != [
+            (item.name, item.file) for item in self.inputs
+        ]:
+            raise ValueError("contract invocation Arrow bindings must exactly match its inputs")
         return self
 
 
@@ -210,21 +286,11 @@ class DistilledCase(StrictModel):
     name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_.-]+$")
     candidate: CallableSpec
     comparison: ComparisonPolicy = Field(default_factory=ComparisonPolicy)
-    static_args: list[JsonValue] = Field(default_factory=list)
-    static_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
-    candidate_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
     timeout_seconds: float = Field(default=30.0, gt=0, le=3_600)
-    input_binding: Literal["single", "keyword", "positional"]
     examples: list[ContractExample] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_candidate_invocation(self) -> DistilledCase:
-        overlap = self.static_kwargs.keys() & self.candidate_kwargs.keys()
-        if overlap:
-            raise ValueError(f"candidate_kwargs overlap static_kwargs: {sorted(overlap)}")
-        invocation = (self.static_args, self.static_kwargs, self.candidate_kwargs)
-        if any(_contains_redaction(value) for value in invocation):
-            raise ValueError("redacted candidate arguments cannot form a distilled contract")
         candidate = self.candidate.model_dump(mode="json")
         if _contains_redaction(candidate.get("command")):
             raise ValueError("a redacted candidate command cannot form a distilled contract")
@@ -235,19 +301,9 @@ class DistilledCase(StrictModel):
         signatures = [example.finding_signature for example in self.examples]
         if len(signatures) != len(set(signatures)):
             raise ValueError("finding signatures must be unique within a distilled case")
-        input_names = [item.name for item in self.examples[0].inputs]
-        if any([item.name for item in example.inputs] != input_names for example in self.examples):
-            raise ValueError("all examples in a distilled case must use the same ordered inputs")
-        if self.input_binding == "single" and input_names != ["input"]:
-            raise ValueError("single-input contracts require exactly one input named 'input'")
-        if self.input_binding != "single" and not 2 <= len(input_names) <= 3:
-            raise ValueError("bundled contracts require two or three inputs")
-        if self.input_binding == "keyword":
-            collisions = set(input_names) & (
-                self.static_kwargs.keys() | self.candidate_kwargs.keys()
-            )
-            if collisions:
-                raise ValueError(f"input names collide with candidate kwargs: {sorted(collisions)}")
+        for example in self.examples:
+            if _contains_redaction(example.invocation.model_dump(mode="json")):
+                raise ValueError("redacted invocations cannot form a distilled contract")
         return self
 
 
@@ -279,7 +335,7 @@ class ContractRetirement(StrictModel):
 class DistilledContractManifest(StrictModel):
     """Versioned, candidate-only distilled contract stored as ``contract.json``."""
 
-    version: Literal[2]
+    version: Literal[3]
     created_at: datetime
     parity_version: str
     source_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -289,7 +345,7 @@ class DistilledContractManifest(StrictModel):
     baseline: Literal["reference", "candidate"]
     retirement: ContractRetirement | None = None
     cases: list[DistilledCase] = Field(min_length=1)
-    files: dict[str, ContractFile] = Field(min_length=1, max_length=1_024)
+    files: dict[str, ContractFile] = Field(default_factory=dict, max_length=1_024)
 
     @field_validator("files")
     @classmethod
@@ -396,7 +452,7 @@ def _source_artifact(
         _REPLAY_BLOCKER_MESSAGES,
         _artifact_root,
         _replay_execution_root,
-        _replay_inputs,
+        _replay_invocation,
         _resolve_replay_paths,
         _verify_manifest,
     )
@@ -413,7 +469,7 @@ def _source_artifact(
     if stored.finding_signature != signature:
         raise ContractError("report finding signature does not match its artifact")
     replay = _bound_json(root, manifest, "replay.json")
-    if replay.get("version") != 2 or not isinstance(replay.get("case"), dict):
+    if replay.get("version") != 3 or not isinstance(replay.get("case"), dict):
         raise ContractError("artifact has no supported replay contract; rerun parity check")
     blockers = replay.get("replay_blockers", {})
     if not isinstance(blockers, dict) or any(
@@ -430,7 +486,9 @@ def _source_artifact(
         )
     try:
         project_root = _replay_execution_root(replay, root)
-        replay_inputs = _replay_inputs(replay, manifest, root)
+        _replay_invocation(replay, manifest, root)
+        replay_document = replay.get("invocation")
+        replay_bindings = _invocation_file_bindings(replay_document)
     except Exception as exc:
         raise ContractError(
             "artifact has no project-relative candidate replay; rerun parity check"
@@ -440,15 +498,6 @@ def _source_artifact(
     candidate_data = case_data.get("candidate")
     if not isinstance(candidate_data, dict) or _contains_redaction(candidate_data):
         raise ContractError("artifact does not contain a complete candidate configuration")
-    invocation = (
-        case_data.get("static_args", []),
-        case_data.get("static_kwargs", {}),
-        case_data.get("candidate_kwargs", {}),
-    )
-    if any(_contains_redaction(value) for value in invocation):
-        raise ContractError(
-            "candidate arguments were redacted; remove secrets from arguments and rerun parity check"
-        )
     try:
         candidate_probe = {"candidate": json.loads(json.dumps(candidate_data))}
         _resolve_replay_paths(candidate_probe, project_root, sides=("candidate",))
@@ -457,13 +506,21 @@ def _source_artifact(
             "candidate project paths are no longer reconstructable; repair them and rerun "
             "parity check"
         ) from exc
-    bundle = case_data.get("input_bundle")
-    if bundle is None:
-        binding: Literal["single", "keyword", "positional"] = "single"
-    elif isinstance(bundle, dict) and bundle.get("binding") in {"keyword", "positional"}:
-        binding = bundle["binding"]
-    else:
-        raise ContractError("artifact contains an invalid input binding")
+    placeholder_files = {
+        filename: f"placeholder-{index}.arrow"
+        for index, (_name, filename) in enumerate(replay_bindings)
+    }
+
+    def placeholder_invocation(value: Any) -> Any:
+        if isinstance(value, dict):
+            if value.get("kind") == "arrow" and set(value) == {"kind", "file"}:
+                return {"kind": "arrow", "file": placeholder_files[value["file"]]}
+            return {key: placeholder_invocation(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [placeholder_invocation(item) for item in value]
+        return value
+
+    placeholder_document = placeholder_invocation(replay_document)
     try:
         candidate = CallableSpec.model_validate(candidate_data)
         comparison = ComparisonPolicy.model_validate(case_data.get("comparison", {}))
@@ -471,17 +528,14 @@ def _source_artifact(
             name=case_name,
             candidate=candidate,
             comparison=comparison,
-            static_args=case_data.get("static_args", []),
-            static_kwargs=case_data.get("static_kwargs", {}),
-            candidate_kwargs=case_data.get("candidate_kwargs", {}),
             timeout_seconds=case_data.get("timeout_seconds", 30.0),
-            input_binding=binding,
             examples=[
                 ContractExample(
                     finding_signature=signature,
+                    invocation=placeholder_document,
                     inputs=[
                         ContractInput(name=name, file=f"placeholder-{index}.arrow")
-                        for index, name in enumerate(replay_inputs)
+                        for index, (name, _filename) in enumerate(replay_bindings)
                     ],
                     expected=ContractExpectation(
                         outcome="returned",
@@ -519,8 +573,8 @@ def _source_artifact(
             f"Parity {__version__}"
         ) from exc
     inputs = [
-        (name, *_source_file(root, manifest, path.name, suffix=".arrow"))
-        for name, path in replay_inputs.items()
+        (name, *_source_file(root, manifest, filename, suffix=".arrow"))
+        for name, filename in replay_bindings
     ]
     return {
         "root": root,
@@ -647,10 +701,12 @@ def distill_contract(
             example_index = len(builder["examples"])
             prefix = f"cases/{case_index:03d}/examples/{example_index:03d}"
             inputs: list[ContractInput] = []
+            invocation_files: dict[str, str] = {}
             for input_index, (name, source_path, metadata) in enumerate(source["inputs"]):
                 relative = f"{prefix}/input-{input_index:03d}.arrow"
                 files[relative] = _copy_verified(source_path, temporary / relative, metadata)
                 inputs.append(ContractInput(name=name, file=relative))
+                invocation_files[blueprint.examples[0].inputs[input_index].file] = relative
             expected: ContractExpectation = source["expected"]
             output_source = source["output_source"]
             output: ContractOutput | None = None
@@ -664,17 +720,21 @@ def distill_contract(
             expected_payload["output"] = output.model_dump(mode="json") if output else None
             contract_example = ContractExample(
                 finding_signature=blueprint.examples[0].finding_signature,
+                invocation=_replace_invocation_files(
+                    blueprint.examples[0].invocation,
+                    invocation_files,
+                ),
                 inputs=inputs,
                 expected=ContractExpectation.model_validate(expected_payload),
             )
             # Fail during distillation, not during the first future gate, when
             # an otherwise hash-valid source contains unreadable Arrow/JSON.
             _expected_observation(temporary, contract_example.expected)
-            _bound_inputs(temporary, contract_example, blueprint.input_binding)
+            _bound_invocation(temporary, contract_example)
             builder["examples"].append(contract_example.model_dump(mode="json"))
 
         manifest = DistilledContractManifest(
-            version=2,
+            version=3,
             created_at=datetime.now(UTC),
             parity_version=__version__,
             source_report_sha256=hashlib.sha256(raw_report).hexdigest(),
@@ -744,7 +804,7 @@ def _load_contract(path: str | Path) -> tuple[Path, DistilledContractManifest, s
         raise ContractError("contract.json is missing or invalid") from exc
     if not isinstance(payload, dict) or type(payload.get("version")) is not int:
         raise ContractError("contract.json is missing or invalid")
-    if payload["version"] != 2:
+    if payload["version"] != 3:
         raise ContractError("unsupported distilled contract version; rerun parity contract distill")
     try:
         manifest = DistilledContractManifest.model_validate(payload)
@@ -808,19 +868,33 @@ def _expected_observation(root: Path, expected: ContractExpectation) -> Observat
     )
 
 
-def _bound_inputs(
-    root: Path,
-    example: ContractExample,
-    binding: Literal["single", "keyword", "positional"],
-) -> ArrowInputBundle:
-    items = [
-        (item.name, load_arrow_fixture(_contained_file(root, item.file))) for item in example.inputs
-    ]
-    if binding == "single":
-        return items[0][1]
-    if binding == "positional":
-        return tuple(table for _name, table in items)
-    return dict(items)
+def _bound_invocation(root: Path, example: ContractExample) -> Invocation:
+    bindings = {(item.name, item.file): item for item in example.inputs}
+
+    def bind(node: Any, path: str) -> Any:
+        kind = node.get("kind")
+        if kind == "arrow":
+            filename = node["file"]
+            if (path, filename) not in bindings:
+                raise ContractError("contract invocation does not bind its Arrow input")
+            return load_arrow_fixture(_contained_file(root, filename))
+        if kind == "json":
+            return node["value"]
+        if kind == "frames":
+            return FrameSequence(
+                tuple(bind(item, f"{path}/{index}") for index, item in enumerate(node["items"])),
+                node["container"],
+            )
+        raise ContractError("contract invocation contains an invalid value")
+
+    document = example.invocation.model_dump(mode="python")
+    try:
+        return Invocation(
+            tuple(bind(node, f"args/{index}") for index, node in enumerate(document["args"])),
+            {name: bind(node, f"kwargs/{name}") for name, node in document["kwargs"].items()},
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ContractError("contract invocation contains an invalid value") from error
 
 
 def _error_failure(source: str) -> ExampleResult:
@@ -860,18 +934,15 @@ def _verify_case(root: Path, project_root: Path, case: DistilledCase) -> CaseRes
             elapsed_seconds=time.perf_counter() - started,
         )
 
-    kwargs = {**case.static_kwargs, **case.candidate_kwargs}
     for index, example in enumerate(case.examples):
         examples_run += 1
         source = f"contract:{index + 1}"
         try:
             expected = _expected_observation(root, example.expected)
-            inputs = _bound_inputs(root, example, case.input_binding)
+            invocation = _bound_invocation(root, example)
             observed = execute_isolated(
                 candidate,
-                inputs,
-                static_args=case.static_args,
-                static_kwargs=kwargs,
+                invocation,
                 timeout_seconds=case.timeout_seconds,
             )
         except Exception:
@@ -964,21 +1035,16 @@ def _retirement_observations(
     unapproved: set[tuple[str, str]] = set()
     for case in manifest.cases:
         candidate = _resolved_candidate(project_root, case)
-        kwargs = {**case.static_kwargs, **case.candidate_kwargs}
         for index, example in enumerate(case.examples):
             expected = _expected_observation(root, example.expected)
             first = execute_isolated(
                 candidate,
-                _bound_inputs(root, example, case.input_binding),
-                static_args=case.static_args,
-                static_kwargs=kwargs,
+                _bound_invocation(root, example),
                 timeout_seconds=case.timeout_seconds,
             )
             second = execute_isolated(
                 candidate,
-                _bound_inputs(root, example, case.input_binding),
-                static_args=case.static_args,
-                static_kwargs=kwargs,
+                _bound_invocation(root, example),
                 timeout_seconds=case.timeout_seconds,
             )
             if _infrastructure_error(first) or _infrastructure_error(second):
@@ -1128,13 +1194,14 @@ def retire_contract(
                 examples.append(
                     ContractExample(
                         finding_signature=example.finding_signature,
+                        invocation=example.invocation,
                         inputs=inputs,
                         expected=expected,
                     )
                 )
             retired_cases.append(case.model_copy(update={"examples": examples}))
         retired_manifest = DistilledContractManifest(
-            version=2,
+            version=3,
             created_at=datetime.now(UTC),
             parity_version=__version__,
             source_report_sha256=manifest.source_report_sha256,

@@ -98,7 +98,23 @@ def test_configuration_reference_tables_cover_every_schema_field() -> None:
             section(text, "## Migration workspace", "## Retained"),
             after="source mapping is symmetric:",
         ),
-        "case": first_table_keys(section(text, "## Case", "## Input bundles"), after="cases"),
+        "case": first_table_keys(section(text, "## Case", "## Invocation"), after="cases"),
+        "invocation": first_table_keys(
+            section(text, "## Invocation", "## Callable specification"),
+            after="expanded as `*args`.",
+        ),
+        "frame_argument": first_table_keys(
+            section(text, "## Invocation", "## Callable specification"),
+            after="A `frame` accepts:",
+        ),
+        "json_argument": first_table_keys(
+            section(text, "## Invocation", "## Callable specification"),
+            after="A `json` argument accepts:",
+        ),
+        "frames_argument": first_table_keys(
+            section(text, "## Invocation", "## Callable specification"),
+            after="A `frames` argument accepts:",
+        ),
         "callable": first_table_keys(
             section(text, "## Callable specification", "## Frame schema"), after="accept:"
         ),
@@ -106,7 +122,7 @@ def test_configuration_reference_tables_cover_every_schema_field() -> None:
             section(text, "## Frame schema", "### Frame constraints"), after="accepts:"
         ),
         "column": first_table_keys(
-            section(text, "## Frame schema", "### Frame constraints"), after="Declare a column"
+            section(text, "## Frame schema", "### Frame constraints"), after="Declare columns"
         ),
         "comparison": first_table_keys(
             section(text, "## Comparison policy", "## Generation policy"),
@@ -125,6 +141,10 @@ def test_configuration_reference_tables_cover_every_schema_field() -> None:
         "top": set(config["properties"]),
         "workspace": set(workspace["properties"]),
         "case": set(definitions["CaseConfig"]["properties"]),
+        "invocation": set(definitions["InvocationConfig"]["properties"]),
+        "frame_argument": set(definitions["FrameArgument"]["properties"]),
+        "json_argument": set(definitions["JsonArgument"]["properties"]),
+        "frames_argument": set(definitions["FrameSequenceArgument"]["properties"]),
         "callable": set(definitions["CallableSpec"]["properties"]),
         "frame": set(definitions["FrameSchema"]["properties"]),
         "column": set(definitions["ColumnSchema"]["properties"]),

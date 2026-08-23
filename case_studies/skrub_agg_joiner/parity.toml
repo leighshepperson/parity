@@ -1,11 +1,13 @@
-version = 1
+version = 2
 artifact_dir = ".parity-skrub"
 fail_fast = false
 
 [[cases]]
 name = "aggregate-numeric-control"
-fixture = "fixtures/baseline_numeric.json"
 tags = ["control", "low-level", "native", "matrix"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/baseline_numeric.json"
 
 [cases.reference]
 target = "skrub_parity:pandas_aggregate_numeric"
@@ -37,8 +39,10 @@ enabled = false
 
 [[cases]]
 name = "aggjoiner-numeric-control"
-fixture = "fixtures/baseline_numeric.json"
 tags = ["control", "public-api", "native", "matrix"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/baseline_numeric.json"
 
 [cases.reference]
 target = "skrub_parity:pandas_aggjoiner_numeric"
@@ -70,8 +74,10 @@ enabled = false
 
 [[cases]]
 name = "aggregate-unique-mode-control"
-fixture = "fixtures/unique_mode.json"
 tags = ["control", "low-level", "mode", "native", "matrix"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/unique_mode.json"
 
 [cases.reference]
 target = "skrub_parity:pandas_aggregate_mode"
@@ -103,8 +109,10 @@ enabled = false
 
 [[cases]]
 name = "aggregate-arrow-null-control"
-fixture = "fixtures/arrow_null.arrow"
 tags = ["control", "low-level", "arrow", "null", "matrix"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/arrow_null.arrow"
 
 [cases.reference]
 target = "skrub_parity:pandas_aggregate_basic"
@@ -136,8 +144,10 @@ enabled = false
 
 [[cases]]
 name = "aggregate-null-key-finding"
-fixture = "fixtures/null_group_key.json"
 tags = ["finding", "durable", "low-level", "native", "null", "matrix"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/null_group_key.json"
 
 [cases.reference]
 target = "skrub_parity:pandas_aggregate_basic"
@@ -169,8 +179,10 @@ enabled = false
 
 [[cases]]
 name = "aggjoiner-tied-mode-finding"
-fixture = "fixtures/tied_mode.json"
 tags = ["finding", "durable", "public-api", "native", "mode", "matrix"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/tied_mode.json"
 
 [cases.reference]
 target = "skrub_parity:pandas_aggjoiner_mode"
@@ -202,8 +214,10 @@ enabled = false
 
 [[cases]]
 name = "aggjoiner-ieee-nan-finding"
-fixture = "fixtures/ieee_nan.arrow"
 tags = ["finding", "version-sensitive", "public-api", "native", "nan", "matrix"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/ieee_nan.arrow"
 
 [cases.reference]
 target = "skrub_parity:pandas_aggjoiner_numeric"

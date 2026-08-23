@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 
 from parity.execution import ExecutionOutcome, IsolatedExecutionSession, execute_isolated
+from parity.invocation import FrameSequence, Invocation
 from parity.models import CallableSpec
 from parity.target_adapter import AdapterError, require_executable
 
@@ -100,22 +101,26 @@ def test_command_adapter_returns_arrow_and_json(tmp_path: Path) -> None:
             return Return(
                 pa.table({"result": [value + 1]}),
                 return_type="legacy.ArrowResult",
-                mutated_inputs=("input",),
+                mutated_inputs=("args/0",),
             )
         return {"result": value + 2, "labels": ["json", "canonical"]}
         """,
         return_type="legacy.JsonResult",
     )
 
-    arrow = execute_isolated(_spec(script), _mode_table("arrow", 40), timeout_seconds=5)
-    json_value = execute_isolated(_spec(script), _mode_table("json", 40), timeout_seconds=5)
+    arrow = execute_isolated(
+        _spec(script), Invocation(args=(_mode_table("arrow", 40),)), timeout_seconds=5
+    )
+    json_value = execute_isolated(
+        _spec(script), Invocation(args=(_mode_table("json", 40),)), timeout_seconds=5
+    )
 
     assert arrow.outcome is ExecutionOutcome.RETURNED
     assert arrow.table == pa.table({"result": [41]})
     assert arrow.value is None
     assert not arrow.has_value
     assert arrow.return_type == "legacy.ArrowResult"
-    assert arrow.mutated_inputs == ("input",)
+    assert arrow.mutated_inputs == ("args/0",)
 
     assert json_value.outcome is ExecutionOutcome.RETURNED
     assert json_value.table is None
@@ -125,12 +130,10 @@ def test_command_adapter_returns_arrow_and_json(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("inputs", "static_args", "static_kwargs", "expected"),
+    ("invocation", "expected"),
     [
         (
-            pa.table({"value": [1]}),
-            [9],
-            {"scale": 2},
+            Invocation(args=(pa.table({"value": [1]}), 9), kwargs={"scale": 2}),
             {
                 "positional_tables": [1],
                 "positional_scalars": [9],
@@ -139,9 +142,10 @@ def test_command_adapter_returns_arrow_and_json(tmp_path: Path) -> None:
             },
         ),
         (
-            (pa.table({"value": [2]}), pa.table({"value": [3]})),
-            [10],
-            {"scale": 4},
+            Invocation(
+                args=(pa.table({"value": [2]}), pa.table({"value": [3]}), 10),
+                kwargs={"scale": 4},
+            ),
             {
                 "positional_tables": [2, 3],
                 "positional_scalars": [10],
@@ -150,9 +154,13 @@ def test_command_adapter_returns_arrow_and_json(tmp_path: Path) -> None:
             },
         ),
         (
-            {"left": pa.table({"value": [4]}), "right": pa.table({"value": [5]})},
-            [],
-            {"scale": 3},
+            Invocation(
+                kwargs={
+                    "left": pa.table({"value": [4]}),
+                    "right": pa.table({"value": [5]}),
+                    "scale": 3,
+                }
+            ),
             {
                 "positional_tables": [],
                 "positional_scalars": [],
@@ -162,11 +170,9 @@ def test_command_adapter_returns_arrow_and_json(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_command_adapter_preserves_input_binding_and_static_arguments(
+def test_command_adapter_preserves_complete_invocation(
     tmp_path: Path,
-    inputs,
-    static_args: list[int],
-    static_kwargs: dict[str, int],
+    invocation: Invocation,
     expected: dict[str, object],
 ) -> None:
     script = _write_adapter(
@@ -197,15 +203,51 @@ def test_command_adapter_preserves_input_binding_and_static_arguments(
 
     observation = execute_isolated(
         _spec(script),
-        inputs,
-        static_args=static_args,
-        static_kwargs=static_kwargs,
+        invocation,
         timeout_seconds=5,
     )
 
     assert observation.outcome is ExecutionOutcome.RETURNED
     assert observation.has_value
     assert observation.value == expected
+
+
+def test_command_adapter_preserves_frame_sequence_and_expanded_varargs(tmp_path: Path) -> None:
+    script = _write_adapter(
+        tmp_path,
+        """
+        operation, *frames = args
+        batches = kwargs["batches"]
+        return {
+            "operation": operation,
+            "varargs": [table.column("value")[0].as_py() for table in frames],
+            "batch_container": type(batches).__name__,
+            "batches": [table.column("value")[0].as_py() for table in batches],
+            "descending": kwargs["descending"],
+        }
+        """,
+    )
+    invocation = Invocation(
+        args=("sum", pa.table({"value": [1]}), pa.table({"value": [2]})),
+        kwargs={
+            "batches": FrameSequence(
+                (pa.table({"value": [3]}), pa.table({"value": [4]})),
+                "tuple",
+            ),
+            "descending": False,
+        },
+    )
+
+    observation = execute_isolated(_spec(script), invocation, timeout_seconds=5)
+
+    assert observation.outcome is ExecutionOutcome.RETURNED
+    assert observation.value == {
+        "operation": "sum",
+        "varargs": [1, 2],
+        "batch_container": "tuple",
+        "batches": [3, 4],
+        "descending": False,
+    }
 
 
 def test_command_adapter_distinguishes_target_raise_and_adapter_errors(
@@ -221,7 +263,7 @@ def test_command_adapter_distinguishes_target_raise_and_adapter_errors(
                 module="legacy.domain",
                 exception_type="DomainRejected",
                 details={"error_codes": ["expired"]},
-                mutated_inputs=("input",),
+                mutated_inputs=("args/0",),
             )
         if mode == "adapter-error":
             raise AdapterError("invalid_output", "legacy output was invalid")
@@ -231,16 +273,22 @@ def test_command_adapter_distinguishes_target_raise_and_adapter_errors(
         """,
     )
 
-    raised = execute_isolated(_spec(script), _mode_table("raised"), timeout_seconds=5)
-    adapter_error = execute_isolated(_spec(script), _mode_table("adapter-error"), timeout_seconds=5)
-    unexpected = execute_isolated(_spec(script), _mode_table("unexpected"), timeout_seconds=5)
+    raised = execute_isolated(
+        _spec(script), Invocation(args=(_mode_table("raised"),)), timeout_seconds=5
+    )
+    adapter_error = execute_isolated(
+        _spec(script), Invocation(args=(_mode_table("adapter-error"),)), timeout_seconds=5
+    )
+    unexpected = execute_isolated(
+        _spec(script), Invocation(args=(_mode_table("unexpected"),)), timeout_seconds=5
+    )
 
     assert raised.outcome is ExecutionOutcome.RAISED
     assert raised.exception is not None
     assert raised.exception.module == "legacy.domain"
     assert raised.exception.type == "DomainRejected"
     assert raised.exception.details == {"error_codes": ["expired"]}
-    assert raised.mutated_inputs == ("input",)
+    assert raised.mutated_inputs == ("args/0",)
 
     assert adapter_error.outcome is ExecutionOutcome.ERROR
     assert adapter_error.exception is not None
@@ -311,7 +359,7 @@ def test_command_adapter_default_serve_allows_configured_arguments(tmp_path: Pat
 
     observation = execute_isolated(
         _spec(script, arguments=("--compat",)),
-        pa.table({"value": [1]}),
+        Invocation(args=(pa.table({"value": [1]}),)),
         timeout_seconds=5,
     )
 
@@ -334,7 +382,7 @@ def test_command_adapter_accepts_a_symlinked_session_ancestor(
     monkeypatch.setattr(tempfile, "tempdir", str(linked_temporary))
     table = pa.table({"value": [1, 2]})
 
-    observation = execute_isolated(_spec(script), table, timeout_seconds=5)
+    observation = execute_isolated(_spec(script), Invocation(args=(table,)), timeout_seconds=5)
 
     assert observation.outcome is ExecutionOutcome.RETURNED
     assert observation.table == table
@@ -360,8 +408,8 @@ def test_command_adapter_session_preserves_state_and_runtime_identity(tmp_path: 
 
     with IsolatedExecutionSession(_spec(script), timeout_seconds=5) as session:
         preflight = session.preflight_runtime()
-        first = session.execute(pa.table({"value": [1]}))
-        second = session.execute(pa.table({"value": [2]}))
+        first = session.execute(Invocation(args=(pa.table({"value": [1]}),)))
+        second = session.execute(Invocation(args=(pa.table({"value": [2]}),)))
 
     assert preflight.outcome is ExecutionOutcome.RETURNED
     assert preflight.runtime is not None

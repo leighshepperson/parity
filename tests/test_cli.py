@@ -27,7 +27,9 @@ from parity.models import (
     CaseResult,
     ColumnSchema,
     ExampleResult,
+    FrameArgument,
     FrameSchema,
+    InvocationConfig,
     ParityConfig,
     Status,
     SuiteResult,
@@ -44,7 +46,15 @@ def _config(tmp_path: Path) -> ParityConfig:
                 name="orders",
                 reference=CallableSpec(target="old:transform", adapter="pandas"),
                 candidate=CallableSpec(target="new:transform", adapter="polars"),
-                input_schema=FrameSchema(columns=[ColumnSchema(name="id", dtype="int64")]),
+                invocation=InvocationConfig(
+                    args=[
+                        FrameArgument(
+                            input_schema=FrameSchema(
+                                columns=[ColumnSchema(name="id", dtype="int64")]
+                            )
+                        )
+                    ]
+                ),
                 tags={"critical"},
             )
         ],
@@ -327,7 +337,7 @@ def test_migration_run_json_only_advertises_executable_replay_contracts(
     (replayable / "replay.json").write_text(
         json.dumps(
             {
-                "version": 2,
+                "version": 3,
                 "path_base": {"kind": "artifact_ancestor", "levels": 2},
                 "command": ["parity", "replay", "<artifact-path>"],
             }
@@ -337,7 +347,7 @@ def test_migration_run_json_only_advertises_executable_replay_contracts(
     (evidence_only / "replay.json").write_text(
         json.dumps(
             {
-                "version": 2,
+                "version": 3,
                 "path_base": {"kind": "artifact_ancestor", "levels": 2},
                 "replay_blockers": {"reference": "live_callable"},
             }
@@ -347,7 +357,7 @@ def test_migration_run_json_only_advertises_executable_replay_contracts(
     (legacy / "replay.json").write_text(
         json.dumps(
             {
-                "version": 1,
+                "version": 2,
                 "path_base": {"kind": "artifact_ancestor", "levels": 2},
                 "command": ["parity", "replay", "<artifact-path>"],
             }
@@ -499,7 +509,8 @@ def test_init_project_mode_writes_only_a_runnable_config(tmp_path: Path) -> None
     assert raw["cases"][0]["reference"]["target"] == raw["cases"][0]["candidate"]["target"]
     assert raw["cases"][0]["comparison"] == {"row_order": "keyed", "row_keys": ["id"]}
     configured = cli.load_config(config_path)
-    assert configured.cases[0].fixture == fixture.resolve()
+    assert configured.cases[0].invocation is not None
+    assert configured.cases[0].invocation.args[0].fixture == fixture.resolve()
 
 
 def test_default_init_prints_the_immediate_next_command(
@@ -711,7 +722,7 @@ def test_doctor_config_reports_workers_side_by_side_and_filters_case(
                     workdir=tmp_path,
                     record_distributions=["pytest"],
                 ),
-                fixture=tmp_path / "unused.json",
+                invocation=InvocationConfig(args=[FrameArgument(fixture=tmp_path / "unused.json")]),
             )
             for name in ("orders", "customers")
         ]
@@ -755,7 +766,7 @@ def test_doctor_config_uses_exit_two_for_missing_distribution(tmp_path: Path, mo
                 name="orders",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
-                fixture=tmp_path / "unused.json",
+                invocation=InvocationConfig(args=[FrameArgument(fixture=tmp_path / "unused.json")]),
             )
         ]
     )

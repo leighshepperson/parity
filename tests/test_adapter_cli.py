@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from parity import cli
 from parity.execution import ExecutionOutcome, execute_isolated
+from parity.invocation import Invocation
 from parity.models import CallableSpec
 
 runner = CliRunner()
@@ -193,7 +194,9 @@ def test_adapter_serve_runs_a_completed_scaffold_through_the_protocol(
     adapter_path.write_text(source.replace(placeholder, "return frame"), encoding="utf-8")
     table = pa.table({"value": [1.5, -2.0]})
 
-    observation = execute_isolated(_serve_spec(adapter_path), table, timeout_seconds=5)
+    observation = execute_isolated(
+        _serve_spec(adapter_path), Invocation(args=(table,)), timeout_seconds=5
+    )
 
     assert observation.outcome is ExecutionOutcome.RETURNED
     assert observation.table == table
@@ -213,7 +216,7 @@ def test_generated_placeholder_is_an_infrastructure_error(
 
     observation = execute_isolated(
         _serve_spec(adapter_path),
-        pa.table({"value": [1]}),
+        Invocation(args=(pa.table({"value": [1]}),)),
         timeout_seconds=5,
     )
 
@@ -248,7 +251,7 @@ def test_generated_scaffold_can_classify_an_explicit_domain_rejection(
 
     observation = execute_isolated(
         _serve_spec(adapter_path),
-        pa.table({"value": [1]}),
+        Invocation(args=(pa.table({"value": [1]}),)),
         timeout_seconds=5,
     )
 
