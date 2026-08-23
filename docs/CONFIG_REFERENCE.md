@@ -230,17 +230,25 @@ parity migration init \
 parity migration run
 ```
 
-`--target` sets both callable targets; side-specific `--reference-target` and
-`--candidate-target` override it. Scaffolding requires a fixture and both effective targets, then
-creates the minimal `migrations/parity.toml` before deriving the starter ledger. It may also set
-`--case-name`, side adapters, repeatable recorded distributions and repeatable row keys. These are
-reviewable contract inputs, not API discovery. If `parity.toml` already exists, all case-scaffolding
+When the config is absent, choose one of two creation modes:
+
+- `--scaffold` creates a deliberately incomplete Arrow wrapper, tiny JSON fixture, minimal config
+  and explicit review checklist. It cannot be combined with target, fixture, adapter, distribution
+  or row-key options.
+- Explicit mode requires `--fixture` plus either `--target` or both side-specific targets.
+  `--target` supplies both sides; `--reference-target` and `--candidate-target` may override it.
+  This mode may also set `--case-name`, side adapters, repeatable recorded distributions and
+  repeatable row keys. It creates no wrapper module, so its targets must already exist.
+
+Both modes derive the starter migration ledger from the resulting config. These files are
+reviewable contract inputs, not API discovery. If `parity.toml` already exists, all case-creation
 options are rejected: omit them to load the reviewed contract. `--force` applies only to
-`parity.workspace.toml` and never replaces `parity.toml`. `--fixture` is interpreted from the
-invocation directory and serialized relative to the generated `parity.toml`. Targets must already
-name importable callables; scaffolding does not create wrapper modules. Managed wrappers are
-imported from the workspace directory. Initialization validates import-target spelling and fixture
-readability, but the target import itself is preflighted by `migration run` after environment setup.
+`parity.workspace.toml` and never replaces `parity.toml` or scaffold files. In explicit mode,
+`--fixture` is interpreted from the invocation directory and serialized relative to the generated
+config. Managed wrappers are imported from the workspace directory. Initialization validates
+import-target spelling and fixture readability; `migration run` preflights target imports after
+environment setup. `migration validate` also rejects an unresolved generated checklist or the
+untouched scaffold adapter without creating environments.
 
 By default `migration init` writes a strict workspace v3 at
 `migrations/parity.workspace.toml`, uses the current
@@ -251,7 +259,7 @@ schema; its source mapping is symmetric:
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
-| `version` | integer | `2` | Workspace format; only version 2 is accepted. |
+| `version` | integer | `3` | Workspace format; only version 3 is accepted. |
 | `reference_package` | exact requirement | conditional | Released reference; CLI `--reference-package`. |
 | `reference_path` | path | conditional | Local reference; CLI `--reference-path`. Exactly one reference source field is required. |
 | `candidate_package` | exact requirement | conditional | Released candidate; CLI `--candidate-package`. |
@@ -261,6 +269,7 @@ schema; its source mapping is symmetric:
 | `candidate_python` | `major.minor` | `python` | Candidate target Python override, at least 3.8. |
 | `config` | path | `parity.toml` | Parity case configuration. |
 | `manifest` | path | `migration.toml` | Migration inventory. |
+| `checklist` | path/null | none | Optional agent-review checklist; unresolved items make validation non-passing. |
 | `report_dir` | contained path | `.parity/workspace/reports` | Per-lane migration JSON reports. |
 | `lanes` | array of tables | one `default` lane | Unique dependency lanes. |
 

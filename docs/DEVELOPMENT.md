@@ -147,9 +147,10 @@ promoter accepts only final releases, verifies the source version, rejects rollb
 release identity and uses a force-with-lease against the observed remote tag.
 
 The separate `workflow_dispatch` entry point exists only for a dry-run or deliberate recovery
-against an immutable release tag; ordinary pushes to `main` never move the Action channel. Leave
-`dry_run` enabled while reviewing the validated commit, and disable it only for the intended
-recovery. The same monotonic and lease guards apply; do not create or force-move the alias by hand.
+against an immutable release tag; it is not a second normal release path. The automated release
+job moves the Action channel only after publication succeeds. Leave `dry_run` enabled while
+reviewing the validated commit, and disable it only for the intended recovery. The same monotonic
+and lease guards apply; do not create or force-move the alias by hand.
 
 Before a workspace feature is published, build its wheel, install that wheel and the workspace
 dependencies into a clean controller environment, and run the integration smoke from there:
