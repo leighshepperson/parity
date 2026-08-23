@@ -2,48 +2,43 @@
 
 **Behavioural compatibility testing for software migrations.**
 
-Parity tries to disprove that a candidate preserves the behaviour of a reference. It sends the
-same canonical inputs to both sides, compares their observable outcomes, shrinks generated
-counterexamples, classifies independent differences, and preserves evidence for exact replay.
+Parity runs a reference and a candidate on the same inputs, compares what they return or raise,
+searches for differences, shrinks failing inputs and saves replayable evidence.
 
 ```text
-canonical inputs
-      ├──> reference environment ──┐
-      └──> candidate environment ──┴──> compare ──> shrink ──> persist/replay
+canonical input ──┬──> reference ──┐
+                  └──> candidate ──┴──> compare ──> shrink ──> replay
 ```
 
-The two sides do not need the same dependency versions, API, implementation, language, runtime or
-architecture. They need a shared behavioural contract. That makes Parity useful for dependency
-upgrades, refactors, branch/worktree regression testing, backend changes, rewrites and
-cross-language replacements.
+The two sides can use different dependency versions, APIs, implementations, Python environments or
+languages. They only need a small shared behavioural contract.
 
-Parity is an open-source verification engine, not an AI migration product. A human, script or
-migration agent can use its deterministic results as a gate, but Parity does not generate or repair
-the candidate.
+Use Parity for dependency upgrades, refactors, backend changes, branch/worktree comparisons and
+cross-language rewrites. It verifies a migration; it does not write or repair one.
 
-> Parity produces evidence, not a proof of equivalence. `PASSED` means no difference was found in
-> the configured domain and search budget.
+> `PASSED` means Parity found no difference in the configured domain and search budget. It is
+> executable evidence, not a proof of equivalence.
 
-## Quick start
+## Five-minute start
 
-The controller requires Python 3.11 or later.
+The Parity controller requires Python 3.11 or later.
 
 ```bash
 python -m pip install parity-check
-parity --version
 parity init
 parity check
 ```
 
-The base install uses Arrow and does not install pandas or Polars. Install
-`parity-check[pandas]`, `parity-check[polars]`, or both extras when those adapters are part of the
-contract. Managed released-package environments use `parity-check[workspace]`.
+`parity init` creates a runnable `parity.toml` and `parity_example.py`. Edit the two example
+functions to call the old and new behaviour, then rerun `parity check`.
 
-`parity init` creates a runnable `parity.toml` and example module. Replace the example functions
-with small reference and candidate adapters around the behaviour you care about, then run
-`parity check`. Parity handles process isolation, generation, shrinking, artifacts and reporting.
+The base package uses Arrow and does not install pandas or Polars. Add `parity-check[pandas]` or
+`parity-check[polars]` when targets in the controller environment use those adapters. Managed
+package-upgrade environments use `parity-check[workspace]`.
 
-A compact real-project case is:
+## Put it around real code
+
+A useful first case needs a representative input and an explicit comparison policy:
 
 ```toml
 version = 1
@@ -55,12 +50,10 @@ fixture = "tests/fixtures/orders.parquet"
 [cases.reference]
 target = "migration_adapters:reference_orders"
 adapter = "pandas"
-record_distributions = ["orders-lib"]
 
 [cases.candidate]
 target = "migration_adapters:candidate_orders"
 adapter = "polars"
-record_distributions = ["orders-lib"]
 
 [cases.comparison]
 row_order = "keyed"
@@ -71,264 +64,63 @@ rtol = 1e-7
 [cases.generation]
 max_examples = 250
 max_findings = 4
-seed = 20260820
+
+[cases.performance]
+enabled = false
 ```
 
-Run the suite, one case, or a tag:
+Paths are relative to `parity.toml`. Targets use `module:callable` syntax and should be small,
+project-owned wrappers around the public behaviour being migrated.
 
 ```bash
-parity check
+parity doctor --config parity.toml
+parity check --config parity.toml
 parity check --case orders --max-examples 1000
-parity check --tag critical --json .parity/report.json --junit .parity/junit.xml
+parity check --json .parity/report.json --junit .parity/junit.xml
 ```
 
-Exit `0` means `PASSED`, exit `1` means `FAILED` because behaviour or an enforced performance gate
-differed, and exit `2` means `ERROR` because Parity could not perform a reliable comparison.
+The CLI has a stable outcome contract:
 
-## What a run provides
+- exit `0`: `PASSED`;
+- exit `1`: `FAILED` because behaviour or an enforced performance policy differed; and
+- exit `2`: `ERROR` because configuration or execution could not produce reliable evidence.
 
-- Fixtures, deterministic boundary cases, Hypothesis search and shrinking.
-- First-class `Return(canonical_value)` and
-  `Raise(exception_type, normalized_message, structured_details)` outcomes.
-- Stable `ms3:` finding signatures that separate unrelated value, API and exception changes while
-  ignoring volatile paths, addresses, timestamps, IDs and version text.
-- Several independently confirmed findings per campaign, with deduplication and tiny witnesses
-  where shrinking applies.
-- Isolated reference and candidate processes, timeouts, mutation tracking and runtime/dependency
-  provenance.
-- Replayable Arrow inputs, integrity-bound manifests and the effective comparison contract.
-- Candidate-only distilled contracts that retain found regressions after the reference is removed.
-- Reviewable compatibility budgets that allow known case/signature differences without hiding a
-  new class, plus stable candidate-baseline promotion for final reference retirement.
-- Ordered case-level parallelism without parallel Hypothesis shrinking.
-- Median performance ratios with deterministic bootstrap confidence intervals and optional gates.
-- Terminal, JSON, Markdown, JUnit and GitHub step-summary output.
-- A CLI, Python API, pytest fixture and migration-inventory gate.
+## What Parity checks
 
-## Different APIs are normal
+- Arrow, pandas and Polars inputs, including two- and three-frame joins or lookups.
+- Returned frames and JSON-like values, raised exceptions and input mutation.
+- Column and row order, keyed rows, dtypes, null/NaN rules, numeric tolerances and datetimes.
+- Fixtures, deterministic edge cases, Hypothesis generation and shrinking.
+- Several independent mismatch classes in one run, each with a stable `ms3:` identifier.
+- Runtime and selected dependency provenance for each isolated target.
+- Optional paired runtime and peak-memory regression evidence after semantic success.
 
-Reference and candidate functions do not need matching signatures. Put the translation at the
-boundary and keep the canonical contract stable:
+Reference and candidate signatures do not need to match. Adapt each side into the shared input and
+output contract:
 
 ```python
 def reference_quote(frame):
-    # Import only the implementation available in the reference environment.
-    from legacy import calculate as old_calculate
+    from legacy import calculate
 
     row = frame.iloc[0]
-    return old_calculate(row.x, row.y, row.currency)
+    return calculate(row.x, row.y, row.currency)
 
 
 def candidate_quote(frame):
-    # Import only the implementation available in the candidate environment.
     from rewritten import Data, Engine
 
     row = frame.iloc[0]
     return Engine(row.currency).calculate(Data(row.x, row.y))
 ```
 
-Shared `static_args`/`static_kwargs` and side-specific `reference_kwargs`/`candidate_kwargs` cover
-simple declarative differences. For richer changes, these small project-owned functions are the
-explicit adapters; Parity does not require old and new APIs to resemble each other.
-When the sides have conflicting dependencies, keep their imports inside the side-specific
-functions as above, or put the functions in separate modules. Importing both implementations at
-the top of one shared module would make preflight fail in an environment that intentionally
-contains only one of them.
+Keep side-specific imports inside their wrappers when the two environments intentionally contain
+different packages. A configured `canonicalizer` can project a successful domain object into an
+Arrow or JSON-like result. Target exceptions remain observable behaviour.
 
-If a target returns a domain object, add an output canonicalizer in that target environment:
+## Upgrade two released packages
 
-```toml
-[cases.candidate]
-target = "migration_adapters:candidate_quote"
-canonicalizer = "migration_adapters:quote_to_contract"
-adapter = "arrow"
-```
-
-The canonicalizer receives the successful raw return value and produces an Arrow-compatible frame
-or JSON-compatible value. Exceptions raised by the target remain semantic outcomes; a failure to
-import or execute the adapter/canonicalizer is infrastructure `ERROR`.
-
-## Target environments stay independent
-
-For Python targets in another environment, set `python` on each side. The target environment needs
-only PyArrow, the selected adapter dependency, and the application under test. It does **not** need
-`parity-check`, Pydantic, Hypothesis, Rich or Typer. The controller launches a dependency-light
-portable worker and validates transport, imports and requested distribution constraints before
-invoking user code.
-
-```toml
-[cases.reference]
-target = "migration_adapters:reference_orders"
-python = ".venv-reference/bin/python"
-adapter = "pandas"
-
-[cases.candidate]
-target = "migration_adapters:candidate_orders"
-python = ".venv-candidate/bin/python"
-adapter = "pandas"
-```
-
-This supports conflicting dependencies and older Python target environments without coupling them
-to the controller's dependency graph. Use `parity doctor --config parity.toml` for two-phase
-preflight: it validates both transports/runtimes and declared requirements before importing either
-endpoint, then checks target, canonicalizer and adapter imports. It never invokes the target. If one
-transport fails, the other endpoint is reported as `not_checked` with error code
-`TargetEndpointNotChecked`, rather than producing misleading one-sided import evidence.
-
-An arbitrary executable can instead be a first-class target:
-
-```toml
-[cases.reference]
-command = ["./bin/legacy-adapter"]
-
-[cases.candidate]
-command = ["./bin/new-adapter", "--mode", "compatibility"]
-```
-
-Command targets implement the small versioned process protocol; they may be Python, Rust, Java,
-C/C++, Fortran or anything else that can read/write JSON and Arrow IPC. For a Python boundary around
-an external program, scaffold the protocol mechanics and implement only the project mapping:
-
-```bash
-parity adapter init adapters/legacy.py
-```
-
-The generated module uses the command-adapter SDK and is configured as
-`command = ["parity", "adapter", "serve", "adapters/legacy.py"]`. See the
-[adapter SDK guide](docs/TARGET_ADAPTER_SDK.md), the normative
-[target protocol](docs/TARGET_PROTOCOL.md) and the executable
-[single-container Fortran-to-Python proof](case_studies/fortran_python/README.md).
-The [stateful C++-to-Python order-book proof](case_studies/cpp_python_orderbook/README.md) adds
-multi-table generation, native domain exceptions, five independently minimized findings and a
-persistent-adapter soak.
-
-## Inputs and domain generation
-
-A fixture anchors the campaign in realistic structure. A reviewed schema then makes the explored
-domain explicit: numeric and string bounds, nullability, enums, dates/datetimes, time zones, useful
-examples, uniqueness, ordering and row relationships.
-
-```toml
-[cases.schema]
-min_rows = 0
-max_rows = 50
-
-[[cases.schema.constraints]]
-kind = "row_comparison"
-left = "start_date"
-operator = "le"
-right = "end_date"
-
-[[cases.schema.columns]]
-name = "status"
-dtype = "string"
-nullable = false
-categories = ["open", "closed"]
-```
-
-For domain objects or cross-object rules that do not fit the compact schema, use project-owned
-generation code:
-
-```toml
-[cases.generation]
-generator = "tests.generators:portfolios"
-max_examples = 500
-```
-
-The factory may return a Hypothesis strategy, preserving shrinking through the ordinary finding
-pipeline, or a bounded iterable from an existing corpus/generator. Parity deliberately keeps this
-escape hatch first-class instead of growing `parity.toml` into a proprietary data language.
-
-## Findings and replay
-
-A mismatch creates an isolated directory:
-
-```text
-.parity/orders/<timestamp>-<input-hash>/
-├── input.arrow
-├── input.parquet        # when the schema is representable
-├── manifest.json
-├── reference.json
-├── reference.arrow      # or reference-value.json; absent for a raised outcome
-├── replay.json
-└── result.json
-```
-
-Multi-input cases use opaque Arrow filenames bound to their logical names in `replay.json`. Replay
-checks artifact hashes, effective configuration and recorded runtime/source identities before
-running trusted project code:
-
-```bash
-parity replay .parity/orders/<timestamp>-<input-hash>
-parity evidence verify .parity/report.json --json .parity/evidence-status.json
-```
-
-`parity replay` preserves the finding's semantic status: a successfully reproduced
-incompatibility is still `FAILED` and exits `1`. Use `parity evidence verify` when the question is
-whether report-referenced findings reproduced; that command exits `0` when every one did.
-
-Once findings have been reviewed, preserve them without preserving or executing the old
-implementation:
-
-```bash
-parity budget init .parity/report.json compatibility.toml
-parity budget approve compatibility.toml CASE ms3:... \
-  --reason "reviewed intentional contract change"
-# Add compatibility_budget = "compatibility.toml" to parity.toml, then rerun parity check.
-parity contract distill .parity/report.json .parity/contracts/upgrade
-parity contract retire .parity/contracts/upgrade .parity/contracts/retired \
-  --budget compatibility.toml
-# The old reference code/package/runtime can now be removed.
-parity contract verify .parity/contracts/retired --json .parity/contract-status.json
-```
-
-The budget approves only exact case/signature pairs and never hides a new difference class.
-Retirement observes the candidate twice, rejects unapproved or unstable behaviour, and freezes its
-reviewed outputs as the new baseline with an audit digest of the prior contract. The private
-contract is a focused regression corpus for signed findings, not a recording of every passing
-example. See the [compatibility-budget](docs/COMPATIBILITY_BUDGETS.md) and
-[distilled-contract](docs/DISTILLED_CONTRACTS.md) guides.
-
-Replay v2 binds interpreter, workdir and path-like command locations to an ancestor of the artifact
-itself, so the same artifact command works from the project root, a sibling directory or an
-unrelated current directory. Moving the complete project preserves that relationship; moving an
-artifact by itself fails closed. If a live callable, external artifact root/interpreter/workdir/
-command or missing local executable prevents reconstruction, the artifact remains inspectable and
-replay reports the bounded reason and the concrete change needed to collect replayable evidence.
-
-Each finding explains what class of behaviour changed and carries an `ms3:` mismatch-shape
-fingerprint. It is a deterministic deduplication/replay key, not a cryptographic signature, source
-attestation, root-cause claim or bug ID. Exception findings show data-safe reference/candidate
-outcomes and well-known qualified types plus allow-listed Pydantic error codes/location shapes and
-NumPy API tokens. Custom identifier-shaped metadata remains opaque; raw messages and witness
-values remain private. Terminal output prints the complete replay signature.
-
-## Parallelism and performance
-
-Run independent cases concurrently:
-
-```bash
-parity check --jobs 8 --native-threads 1
-```
-
-Results return in configuration order and each case owns separate target sessions and artifact paths.
-Search and shrinking inside a case remain serial and deterministic. `--native-threads` caps common
-BLAS/OpenMP pools in target processes, avoiding jobs × native-thread oversubscription. Parallel
-fail-fast is rejected because its result would depend on scheduling.
-
-Performance starts only after semantic success. Parity alternates nearby reference/candidate
-invocations, reports paired median speed and peak-memory ratios with deterministic bootstrap
-confidence intervals, and fails an enforced gate only when the interval's lower bound exceeds its
-threshold. Use `jobs = 1`, enough repeats and a controlled runner for meaningful performance
-evidence; concurrent cases contend for the same host even when their performance policy is
-report-only. Point estimates from busy shared hosts are not a defensible release gate.
-
-## Managed migrations and local regression testing
-
-For a declared library migration, keep the cases and any wrappers in `migrations/`. One initializer
-can create the first fixture-backed case, starter inventory and workspace; review the generated
-adapter contract and inventory before using either as a completion gate. The workspace prepares
-separately locked environments and runs every lane:
+The managed workspace creates separate, locked target environments. The controller and targets do
+not share a dependency graph.
 
 ```bash
 python -m pip install "parity-check[workspace]"
@@ -337,21 +129,23 @@ parity migration init \
   --candidate-package 'your-library==2.0.0' \
   --scaffold \
   --json
-# Review migration_adapters.py, fixtures/input.json, parity.toml and migration.toml,
-# then mark the four checklist decisions resolved.
+```
+
+This creates a deliberately incomplete adapter, tiny JSON fixture, case configuration, migration
+inventory, workspace and four-item review checklist under `migrations/`. Implement the adapter,
+review the fixture/domain and comparison policy, resolve the checklist, then run:
+
+```bash
 parity migration validate --json
 parity migration run --json
 ```
 
-`--scaffold` creates a deliberately incomplete Arrow adapter, tiny fixture, starter ledger and
-four-item `migration.checklist.json`; it never overwrites any of them. `migration validate` loads
-the workspace/config/ledger/fixtures without creating environments or invoking targets, exits `1`
-while review decisions remain, and exits `0` only when the authored contract is structurally ready.
-For an existing wrapper and fixture, use `--target` (or side-specific targets) plus `--fixture`
-instead. Existing reviewed contracts are never overwritten; `--force` replaces only the workspace.
+Validation does not create environments or invoke targets. It remains non-passing until the
+generated contract has been reviewed. The final run prepares both sides, checks every declared
+case in every dependency lane and writes a data-safe report per lane.
 
-For a branch or worktree comparison, point both sides at existing checkouts (and either scaffold as
-above or reuse an existing contract):
+Each side may instead be an existing checkout, so the same workflow covers released/local and
+local/local comparisons:
 
 ```bash
 parity migration init \
@@ -360,89 +154,54 @@ parity migration init \
 parity migration run
 ```
 
-Each side is independently an exact released requirement or a local checkout, so released→released,
-released→local, local→released and local→local checks use one workflow. The reference requires
-exactly one package/path flag. Candidate package/path flags are mutually exclusive; omitting both is
-shorthand for `--candidate-path .`. The saved workspace always contains exactly one source field per
-side.
-`migration init` creates the active workspace and, when needed, a starter ledger that maps every
-configured case to `core-regression`; review that inventory before relying on it. `migration run`
-resolves a separate hash-pinned lock for each side and dependency lane, reuses those locks on later
-runs, prepares the isolated environments, verifies every local editable install and both exact
-released versions, and writes one data-safe JSON report per lane. Pass `--refresh-locks` only to
-deliberately update dependency selection. Every local target reports a path-free Git/content
-identity that is bound into findings and replay, so each local source must be a Git worktree with a
-committed HEAD. Local/local runs additionally take paired driver snapshots throughout execution,
-fail if either checkout changes, and write a two-source `source-provenance.json`; mixed runs do not
-write that paired report. Target environments need the package, its adapter dependencies and
-PyArrow, not Parity; use `--reference-python` and `--candidate-python` for different Python 3.8+
-runtimes. Parity never creates, switches or modifies worktrees. For automatic replay, the workspace
-directory and its managed environments must be contained by the directory holding `parity.toml`;
-managed initialization rejects other layouts, and the default `migrations/` layout colocates them.
-See the
-[user guide](docs/USER_GUIDE.md#managed-migration-workspaces).
+Parity does not clone, switch or edit worktrees. It installs each checkout separately and binds its
+Git/content identity into the evidence. See the [user guide](docs/USER_GUIDE.md) for custom targets,
+dependency lanes and rolling A→B→C upgrades.
 
-`migration init`, `migration validate`, `migration run` and `replay` accept boolean `--json` and
-emit exactly one versioned, data-safe document to stdout while preserving exit codes `0`/`1`/`2`.
-Suggested commands are argv arrays, not shell strings. Discover every authored/output contract with
-`parity schema list` and print one Draft 2020-12 schema with, for example,
-`parity schema compatibility-budget`, `parity schema distilled-contract` or
-`parity schema agent-result`. Published schema bytes are frozen with their contract version and do
-not depend on the installed Pydantic release.
+## Cross-language targets
 
-Migrations are one active adjacent pair. Keep reusable controls/core cases, replace
-transition-specific cases, and advance after promoting the candidate:
+Any local executable can be a reference or candidate through Parity's versioned Arrow/JSON target
+protocol. For a Python boundary around C, C++, Fortran, Rust, Java or a legacy CLI, scaffold the
+protocol process and implement only the domain translation:
 
 ```bash
-parity migration advance --reference-package "$NEXT_REFERENCE_PACKAGE_SPEC"
-parity migration run
+parity adapter init adapters/legacy.py --program bin/legacy-target
 ```
 
-`advance` changes only the reference. For a released candidate, update `candidate_package` to the
-next release or regenerate the reviewed workspace with `migration init --force` before running the
-next pair. Historical transitions do not accumulate in the completion gate. See the
-[user guide](docs/USER_GUIDE.md#managed-migration-workspaces) and
-[migration completion protocol](docs/AGENT_MIGRATION.md).
-
-## Other supported uses
-
-The same contracts currently support dependency-version checks, large refactors, local versus
-local Git comparisons, release regressions, alternative backends, Python rewrites and external
-command implementations. Cross-language verification is available through the target protocol,
-not a language-specific plugin. Capturing files, databases, HTTP calls and other effects is a
-future contract extension; today those effects should be projected into an explicit return value
-by a reviewed adapter. See [use cases and boundaries](docs/USE_CASES.md).
-
-## Python and pytest
-
-```python
-from parity import check, verify
-
-suite = check("parity.toml", cases={"orders"})
-assert suite.passed
-
-suite = verify(
-    reference_orders,
-    candidate_orders,
-    fixture=sample,
-    reference_adapter="pandas",
-    candidate_adapter="polars",
-    artifact_dir=".parity/live-orders",
-)
-assert suite.passed
+```toml
+[cases.reference]
+command = ["parity", "adapter", "serve", "adapters/legacy.py"]
 ```
 
-The pytest plugin exposes the same assertion as a fixture:
+The adapter process needs Parity; the wrapped program does not. Compilation, images and dependency
+installation stay outside the behavioural contract. Start with the
+[adapter SDK guide](docs/TARGET_ADAPTER_SDK.md); implement the
+[language-neutral protocol](docs/TARGET_PROTOCOL.md) directly only when Python is unsuitable.
 
-```python
-def test_orders_migration(parity):
-    parity.check("parity.toml", cases={"orders"})
+## Findings and replay
+
+A confirmed difference creates a private artifact containing the minimized Arrow input, hashes,
+comparison contract, runtime identities and exact replay information:
+
+```bash
+parity replay .parity/orders/<finding-directory>
+parity evidence verify .parity/report.json --json .parity/evidence-status.json
 ```
 
-Python APIs return typed result models and never terminate the process. The CLI adds the stable
-`0`/`1`/`2` exit contract.
+`replay` reproduces the semantic result, so a reproduced incompatibility still exits `1`.
+`evidence verify` answers a different question and exits `0` when every report-referenced finding
+reproduces its recorded mismatch class.
 
-## GitHub Actions
+Terminal, JSON, Markdown and JUnit reports omit compared values. Counterexample and distilled
+contract directories contain real inputs and outputs; keep them private and upload them only when
+your data policy permits it.
+
+Reviewed intentional differences can be recorded as exact case/finding approvals. Discovered
+regressions can also be distilled into a candidate-only contract before the old implementation is
+removed. See [compatibility budgets](docs/COMPATIBILITY_BUDGETS.md) and
+[distilled contracts](docs/DISTILLED_CONTRACTS.md).
+
+## CI
 
 ```yaml
 permissions:
@@ -453,44 +212,32 @@ steps:
   - uses: leighshepperson/parity@v0
     with:
       config: parity.toml
-      upload-artifact: "false"
+      performance: "false"
 ```
 
-Reports are data-safe projections, but replay artifacts contain input values. Upload them only
-under an appropriate access and retention policy. Pin a reviewed full commit SHA when the Action
-revision itself must be immutable. See the [Action guide](docs/GITHUB_ACTION.md).
+The moving `v0` Action installs the same Parity source revision as the selected action. Pin a
+reviewed full commit SHA when CI must be immutable. Artifact upload is opt-in because findings can
+contain sensitive inputs. See the [GitHub Action guide](docs/GITHUB_ACTION.md).
 
-## Boundaries
+## Read next
 
-Parity answers: *did these executable contracts differ anywhere we looked?* It does not decide
-which side expresses business intent, prove correctness outside the input domain, infer a complete
-public API, justify a weakened policy, migrate code, or securely sandbox hostile targets.
+| Need | Document |
+|---|---|
+| Build a practical campaign | [User guide](docs/USER_GUIDE.md) |
+| Look up every TOML field | [Configuration reference](docs/CONFIG_REFERENCE.md) |
+| Decide whether Parity fits | [Use cases and boundaries](docs/USE_CASES.md) |
+| Verify a coding-agent migration | [Agent migration protocol](docs/AGENT_MIGRATION.md) |
+| Use pytest | [Pytest integration](docs/PYTEST.md) |
+| Understand internals and contracts | [Architecture](docs/ARCHITECTURE.md) |
+| Handle artifacts and untrusted code | [Security and privacy](docs/SECURITY.md) |
+| Explore executable examples | [Fault corpus](examples/pandas_polars/README.md) and [case studies](case_studies/ADOPTION_LOG.md) |
 
-Current comparison understands canonical frames, series, arrays, mappings, sequences, scalars,
-returns, raises and input mutation. Broader effect capture is intentionally future work. Run unknown
-code in a container or hardened runner.
+## Boundaries and status
 
-## Documentation
+Parity compares canonical returns, raises, mutation and process performance. A reviewed wrapper can
+project a CLI, file or database result into that contract, but Parity does not yet capture and
+restore filesystem, database or network effects itself. Target processes isolate failures; they are
+not a security sandbox for hostile code.
 
-- [User guide](docs/USER_GUIDE.md)
-- [Reference-free distilled contracts](docs/DISTILLED_CONTRACTS.md)
-- [Compatibility budgets and reference retirement](docs/COMPATIBILITY_BUDGETS.md)
-- [Use cases and current boundaries](docs/USE_CASES.md)
-- [Configuration reference](docs/CONFIG_REFERENCE.md)
-- [Python command-adapter SDK](docs/TARGET_ADAPTER_SDK.md)
-- [External target protocol](docs/TARGET_PROTOCOL.md)
-- [Stateful C++-to-Python migration proof](case_studies/cpp_python_orderbook/README.md)
-- [Architecture and artifact contracts](docs/ARCHITECTURE.md)
-- [Migration completion protocol](docs/AGENT_MIGRATION.md)
-- [Security and privacy](docs/SECURITY.md) and [threat model](docs/THREAT_MODEL.md)
-- [Pytest integration](docs/PYTEST.md) and [GitHub Action](docs/GITHUB_ACTION.md)
-- [External validation log](case_studies/ADOPTION_LOG.md) and [fault corpus](docs/FAULT_CORPUS.md)
-- [Roadmap](docs/ROADMAP.md), [development guide](docs/DEVELOPMENT.md) and
-  [release notes](CHANGELOG.md)
-
-## Development status
-
-Parity is pre-1.0 and supports its latest minor release. Minor releases may simplify configuration,
-artifacts and APIs; patch releases preserve their minor line's contracts.
-
-Licensed under the [Apache License 2.0](LICENSE).
+Parity is Apache-2.0 licensed and pre-1.0. The current minor release is the supported line, and a
+minor release may deliberately change public contracts before 1.0.

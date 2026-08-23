@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.1
+
+### Documentation audit and shorter onboarding
+
+- Replace the reference-heavy README and user guide with a layered quick start, practical campaign
+  workflow and concise command map, while keeping exhaustive configuration, protocol, security and
+  architecture details in their specialist references.
+- Correct the managed-workspace reference to workspace format 3, document the `checklist` field and
+  distinguish generated `--scaffold` mode from explicit target/fixture configuration.
+- Add documentation regression checks for relative links, TOML syntax and complete
+  configuration-schema field coverage.
+
 ## 0.19.0
 
 ### Stateful cross-language migration proof
