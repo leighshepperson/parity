@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.20.0
+
+### Complete invocation contracts
+
+- Replace the single-frame/input-bundle/static-argument model with one explicit shared
+  `callable(*args, **kwargs)` invocation. Cases can exercise zero or many positional and keyword
+  frames, JSON values, list/tuple dataframe sequences, expanded `*frames`, and jointly generated
+  relational joins.
+- Require custom generators and the live Python API to use `parity.Invocation`, preserving complete
+  call shape through generation, shrinking, isolation, command adapters, artifacts, replay and
+  candidate-only distilled contracts.
+- Add path-selected comparison overrides for heterogeneous nested returns, including RFC 6901
+  escaping and one-segment wildcards.
+- Introduce configuration and target protocol v2 plus artifact, replay and distilled-contract v3.
+  Version 1 configuration, target protocol v1, legacy generator values and older replay/distilled
+  formats are intentionally unsupported rather than translated.
+- Bound public invocations consistently across execution modes and block automatic replay when a
+  sanitized JSON argument would make the saved call inexact.
+- Add a maintained JSON-only JavaScript-to-Python rules-engine proof. It verifies a correct port,
+  discovers and shrinks eager-evaluation, first-match and threshold defects in a naive port, retains
+  those behaviours as regressions and replays every finding without any tabular input or output.
+- Reframe the README and zero-option starter around general complete-call compatibility. The
+  generated project now uses positional and keyword JSON values with a nested JSON result; pandas,
+  Polars and dataframe migrations remain supported specialisations rather than the default story.
+- Start coverage before pytest auto-loads Parity's own plugin and ratchet the accurately measured
+  branch-coverage gate from 68% to 75%.
+
 ## 0.19.1
 
 ### Documentation audit and shorter onboarding

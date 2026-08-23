@@ -11,7 +11,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from parity.models import CompatibilityBudget, ParityConfig
+from parity.models import (
+    CompatibilityBudget,
+    FrameArgument,
+    FrameSequenceArgument,
+    ParityConfig,
+)
 from parity.provenance import normalize_distribution_requirements
 
 
@@ -57,6 +62,7 @@ class _ComparisonDefaults(_StrictDocumentModel):
     atol: float | None = None
     datetime_tolerance_ns: int | None = None
     ignored_columns: list[str] | None = None
+    overrides: list[dict[str, Any]] | None = None
 
 
 class _GenerationDefaults(_StrictDocumentModel):
@@ -96,15 +102,13 @@ class _CaseDefaults(_StrictDocumentModel):
     comparison: _ComparisonDefaults | None = None
     generation: _GenerationDefaults | None = None
     performance: _PerformanceDefaults | None = None
-    reference_kwargs: dict[str, Any] | None = None
-    candidate_kwargs: dict[str, Any] | None = None
     timeout_seconds: float | None = None
 
 
 class _ConfigDocument(_StrictDocumentModel):
     """Root TOML syntax before reusable cases are expanded."""
 
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     artifact_dir: Path = Path(".parity")
     cases: list[dict[str, Any]] | None = None
     cases_file: Path | None = None
@@ -124,7 +128,7 @@ class _ConfigDocument(_StrictDocumentModel):
 class _CasesDocument(_StrictDocumentModel):
     """Non-recursive file containing only reusable case declarations."""
 
-    version: Literal[1]
+    version: Literal[2]
     cases: list[dict[str, Any]] = Field(min_length=1)
 
 
@@ -133,12 +137,19 @@ def _resolve_paths(config: ParityConfig, base: Path) -> ParityConfig:
     config.artifact_dir = (base / config.artifact_dir).resolve()
     for case in config.cases:
         case._base_directory = base.resolve()
-        if case.fixture is not None:
-            case.fixture = (base / case.fixture).resolve()
-        if case.input_bundle is not None:
-            for input_spec in case.input_bundle.inputs.values():
-                if input_spec.fixture is not None:
-                    input_spec.fixture = (base / input_spec.fixture).resolve()
+        if case.invocation is not None:
+            arguments = [
+                *case.invocation.args,
+                *case.invocation.kwargs.values(),
+                *([case.invocation.varargs] if case.invocation.varargs is not None else []),
+            ]
+            for argument in arguments:
+                if isinstance(argument, FrameArgument) and argument.fixture is not None:
+                    argument.fixture = (base / argument.fixture).resolve()
+                elif isinstance(argument, FrameSequenceArgument):
+                    argument.fixtures = [
+                        (base / fixture).resolve() for fixture in argument.fixtures
+                    ]
         for implementation in (case.reference, case.candidate):
             if implementation.python is not None:
                 # Interpreter launch paths often end in a virtual-environment

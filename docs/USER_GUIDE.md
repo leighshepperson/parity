@@ -4,6 +4,12 @@ This guide takes a real migration from one representative example to a repeatabl
 For every TOML field and validation rule, use the
 [configuration reference](CONFIG_REFERENCE.md).
 
+The running example uses a dataframe backend change to make ordering, dtype and null policies
+concrete; those are optional specialisations. `parity init` starts with ordinary positional and
+keyword JSON instead, and the maintained
+[JavaScript-to-Python rules-engine study](../case_studies/javascript_python_rules/README.md) is a
+fully executable non-tabular proof.
+
 ## 1. Choose the behavioural contract
 
 Parity compares observations, not source code. Start with a boundary a user or downstream system
@@ -77,13 +83,16 @@ and refuses to replace an existing file unless `--force` is explicit.
 A case usually starts with a small, non-sensitive fixture and a comparison policy:
 
 ```toml
-version = 1
+version = 2
 artifact_dir = ".parity"
 
 [[cases]]
 name = "orders"
-fixture = "tests/fixtures/orders.parquet"
 tags = ["critical"]
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "tests/fixtures/orders.parquet"
 
 [cases.reference]
 target = "migration_adapters:reference_total"
@@ -114,8 +123,8 @@ stability_repeats = 2
 enabled = false
 ```
 
-Paths resolve beside the root `parity.toml`, not from the shell's current directory. TOML scalar
-case fields such as `fixture` and `tags` must appear before child tables.
+Paths resolve beside the root `parity.toml`, not from the shell's current directory. Both sides
+receive this exact positional frame; use wrappers if their internal signatures differ.
 
 Choose policies from consumer behaviour, not from whatever makes the first run green. In
 particular, decide whether output order is positional, irrelevant, or keyed by a unique business
@@ -152,8 +161,8 @@ matching hidden state cannot create a false pass.
 ## 4. Review and replay findings
 
 A confirmed finding is saved under the configured artifact root. The directory contains a
-minimized Arrow input, hash-bound metadata, the private reference observation and the exact replay
-contract. Reports point to the artifact but omit compared values.
+minimized invocation, hash-bound Arrow leaves, the private reference observation and the exact
+replay contract. Reports point to the artifact but omit compared values.
 
 ```bash
 parity replay migrations/.parity/orders/<finding-directory>
@@ -208,7 +217,7 @@ command = ["./bin/new-adapter", "--compat"]
 ```
 
 Commands are argument vectors, not shell strings. They own input adaptation and output
-canonicalization through [target protocol v1](TARGET_PROTOCOL.md). If Python is a suitable boundary
+canonicalization through [target protocol v2](TARGET_PROTOCOL.md). If Python is a suitable boundary
 around the external program, `parity adapter init` generates a small SDK adapter so project code
 only implements target inspection and translation. See the
 [command-adapter SDK guide](TARGET_ADAPTER_SDK.md).
@@ -351,27 +360,27 @@ A fixture anchors real structure. Add a reviewed schema when its inferred values
 narrow:
 
 ```toml
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 0
 max_rows = 50
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "status"
 dtype = "string"
 nullable = false
 categories = ["open", "closed"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "start_date"
 dtype = "date"
 nullable = false
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "end_date"
 dtype = "date"
 nullable = false
 
-[[cases.schema.constraints]]
+[[cases.invocation.args.schema.constraints]]
 kind = "row_comparison"
 left = "start_date"
 operator = "le"
@@ -381,9 +390,38 @@ right = "end_date"
 Schemas support bounds, nullability, enums, examples, text constraints, time zones, uniqueness,
 frame ordering and per-row comparisons. Deterministic boundary inputs run before generated search.
 
-For joins or other multi-frame operations, use an `input_bundle` with two or three named inputs and
-optional foreign-key, overlap, row-count or cardinality relationships. For a domain that does not
-fit the compact schema, configure a project-owned generator factory:
+An invocation is not limited to one case or one frame. Repeat `[[cases.invocation.args]]` for as
+many fixed positional arguments as the callable needs, use `[cases.invocation.kwargs.<name>]` for
+keyword frames or JSON modes, and add foreign-key, overlap, row-count or cardinality relationships
+between named frames. Parity generates the complete call jointly and sends exactly the same call to
+both sides.
+
+For one list of dataframes, declare an argument with `kind = "frames"`. For a reduce that accepts
+`*frames`, use a variable-length sequence expanded as varargs:
+
+```toml
+[cases.invocation.varargs]
+kind = "frames"
+name = "parts"
+min_items = 1
+max_items = 32
+container = "tuple"
+
+[cases.invocation.varargs.schema]
+min_rows = 0
+max_rows = 100
+
+[[cases.invocation.varargs.schema.columns]]
+name = "value"
+dtype = "float64"
+```
+
+An empty `[cases.invocation]` table tests a zero-argument callable. The built-in contract supports
+up to 256 positional/keyword call slots and 256 items per frame sequence; these are protocol safety
+bounds, not the old one-to-three-frame model.
+
+For a heterogeneous or dependent call shape that does not fit the compact argument strategies,
+configure a project-owned generator factory instead of `[cases.invocation]`:
 
 ```toml
 [cases.generation]
@@ -391,8 +429,22 @@ generator = "tests.generators:portfolios"
 max_examples = 500
 ```
 
-The factory may return a Hypothesis strategy, retaining shrinking, or a bounded iterable from an
-existing deterministic corpus. Generator code is trusted project code and runs in the controller.
+The factory returns a Hypothesis strategy of `parity.Invocation` objects, retaining shrinking, or a
+bounded iterable of them from an existing deterministic corpus. Each object contains the complete
+`args` and `kwargs`. Generator code is trusted project code and runs in the controller.
+
+If a returned mapping contains several tables with different semantics, keep one case and patch the
+comparison at an output JSON Pointer instead of weakening every result:
+
+```toml
+[[cases.comparison.overrides]]
+path = "/joined"
+row_order = "keyed"
+row_keys = ["id"]
+```
+
+`*` matches one path segment; JSON Pointer escapes are `~0` for `~` and `~1` for `/`. A selected
+policy is inherited by that subtree, and later matching overrides refine earlier broad ones.
 
 For an exact fixture-only contract, set both `search = false` and
 `adversarial_examples = false`. A searchless case without a deterministic input is rejected rather
@@ -474,7 +526,8 @@ one machine-readable document to standard output.
 
 ## Current boundaries
 
-Parity supports canonical Arrow/frame inputs, Python callables and arbitrary local command targets.
+Parity supports canonical positional/keyword invocations with Arrow/frame and JSON values, Python
+callables and arbitrary local command targets.
 Returns, raised exceptions, input mutation and process performance are first-class observations.
 It does not yet capture and restore filesystem, database, network or subprocess effects itself.
 

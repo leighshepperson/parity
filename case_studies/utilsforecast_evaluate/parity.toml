@@ -1,11 +1,13 @@
-version = 1
+version = 2
 artifact_dir = ".parity-utilsforecast"
 fail_fast = false
 
 [[cases]]
 name = "evaluate-mae-rmse"
-fixture = "fixtures/forecast.json"
 tags = ["control", "external", "keyed-output", "pandas", "polars"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/forecast.json"
 
 [cases.reference]
 target = "utilsforecast_parity:pandas_evaluate"

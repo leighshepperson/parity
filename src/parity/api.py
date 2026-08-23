@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
+
+from hypothesis.strategies import SearchStrategy
 
 from parity.config import load_config
+from parity.invocation import Invocation
 from parity.models import (
     AdapterName,
     CaseConfig,
     ComparisonPolicy,
-    FrameSchema,
     GenerationConfig,
     PandasInput,
     PerformanceConfig,
-    Relationship,
     SuiteResult,
 )
 
@@ -46,12 +47,8 @@ def verify(
     reference: Callable[..., Any],
     candidate: Callable[..., Any],
     *,
-    fixture: Any | None = None,
-    schema: FrameSchema | None = None,
-    input_fixtures: Mapping[str, Any] | None = None,
-    input_schemas: Mapping[str, FrameSchema] | None = None,
-    relationships: Sequence[Relationship] = (),
-    input_binding: Literal["keyword", "positional"] = "keyword",
+    invocation: Invocation,
+    strategy: SearchStrategy[Invocation] | None = None,
     comparison: ComparisonPolicy | None = None,
     generation: GenerationConfig | None = None,
     performance: PerformanceConfig | None = None,
@@ -65,15 +62,17 @@ def verify(
 ) -> SuiteResult:
     """Verify two live callables without requiring a configuration file.
 
-    Explicit adapters are recommended when the functions are unannotated or
-    accept different dataframe implementations. Pandas inputs use Arrow-backed
-    extension dtypes by default; select ``native`` materialization only when a
-    callable depends on pandas' conventional NumPy/object dtype behavior.
+    Auto mode infers annotated dataframe implementations and otherwise uses the
+    dependency-light Arrow adapter, so ordinary JSON calls need no dataframe
+    dependency. Explicit adapters are recommended for unannotated dataframe
+    functions or functions accepting different dataframe implementations.
+    Pandas inputs use Arrow-backed extension dtypes by default; select ``native``
+    materialization only when a callable depends on pandas' conventional
+    NumPy/object dtype behavior.
     ``reference_distributions`` and ``candidate_distributions`` add explicitly
     named target-library versions to each side's runtime provenance.
-    Multi-input callables use ``input_fixtures``/``input_schemas`` with two or
-    three named frames; relational constraints are generated and shrunk as one
-    atomic bundle.
+    ``invocation`` represents the complete positional and keyword call. An
+    optional Hypothesis strategy can generate and shrink additional invocations.
     """
 
     from parity.engine import run_live
@@ -81,12 +80,8 @@ def verify(
     return run_live(
         reference,
         candidate,
-        fixture=fixture,
-        schema=schema,
-        input_fixtures=input_fixtures,
-        input_schemas=input_schemas,
-        relationships=relationships,
-        input_binding=input_binding,
+        invocation=invocation,
+        strategy=strategy,
         comparison=comparison or ComparisonPolicy(),
         generation=generation or GenerationConfig(),
         performance=performance or PerformanceConfig(),

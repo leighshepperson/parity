@@ -11,11 +11,11 @@ environments and languages independent of the controller implementation.
 parity.toml / Python API
           │
           ▼
-  validated campaign ───── fixture/schema/custom generator
+  validated campaign ───── invocation contract/custom generator
           │                      │
           │                      ▼
           │              adversarial + generated
-          │                 Arrow inputs
+          │              complete invocations
           ▼                      │
 reference target ◀── target protocol ──┼── target protocol ──▶ candidate target
           │                      │                       │
@@ -55,16 +55,16 @@ ordinary `parity check` uses the case configuration and suite-result contracts d
 
 ### Canonical contracts and adapters
 
-Every input is represented canonically as an Apache Arrow table. Built-in adapters convert it to
-pandas, Polars or Arrow at a Python callable boundary. Small project adapters may instead map the
-canonical input into unrelated APIs or domain objects. A per-target output canonicalizer can map a
-successful raw return into the shared Arrow/JSON semantic contract. This reduces pairwise
-conversion from an implementation-by-implementation matrix to one boundary per target.
+Every input is represented by one canonical `Invocation`: an ordered positional tuple and keyword
+mapping containing Arrow tables, portable JSON-like values and homogeneous dataframe sequences.
+Built-in adapters materialize every Arrow leaf as pandas, Polars or Arrow at the callable boundary,
+then invoke both sides with exactly `callable(*args, **kwargs)`. Small project wrappers map that
+shared call into unrelated APIs or domain objects. A per-target output canonicalizer can map a
+successful raw return into the shared Arrow/JSON semantic contract.
 
-Reference and candidate signatures are deliberately independent. Shared and side-specific static
-arguments cover simple differences; explicit wrapper functions cover architectural changes. A
-canonicalizer is applied only to successful returns, so target-raised exceptions remain observable
-behaviour.
+The two endpoint boundaries accept the same invocation shape; their wrapped internal APIs can be
+completely different. A canonicalizer is applied only to successful returns, so target-raised
+exceptions remain observable behaviour.
 
 Arrow is a transport representation, not the definition of equivalence. Comparison retains semantic
 families and applies explicit policies for concrete dtypes, names, order, missing values, numerical
@@ -82,19 +82,19 @@ arbitrary pairing.
 Schema-aware deterministic cases run first so common faults have stable names and reproduce without
 random search. Hypothesis then explores and shrinks the remaining domain. `unique` and
 `unique_together` constraints are enforced in strategies. Frame-local ordering and row-comparison
-constraints are constructed as part of the strategy and revalidated after relational bundle key
-rewrites, so search and shrinking remain inside the declared valid domain. Generated tables
-preserve types even when empty.
+constraints are constructed as part of the strategy and revalidated after relational invocation
+rewrites, so search and shrinking remain inside the declared valid domain. Unrelated frames, JSON
+choices, dataframe sequences and expanded varargs are composed into one jointly shrinking call.
+Generated tables preserve types even when empty.
 
 Fixture-only cases infer a portable schema. Explicit schemas are preferable for high-value contracts
 because sample inference cannot know business bounds or invariants.
 
 A project generator is a deliberately small alternate input-provider seam. Its importable factory
-runs in the driver and returns either a Hypothesis strategy or a bounded iterable. Strategy values
-are converted to canonical Arrow *inside* the Hypothesis strategy, so dataframe conversion remains
-part of generation and the resulting Arrow input still shrinks. Plain iterables are deterministic
-corpora rather than property strategies and do not claim shrinking. Both forms feed the ordinary
-comparison, finding, artifact and exact-replay pipeline.
+runs in the driver and returns a Hypothesis strategy or bounded iterable of complete `Invocation`
+objects. Plain iterables are deterministic corpora rather than property strategies and do not
+claim shrinking. Both forms feed the ordinary comparison, finding, artifact and exact-replay
+pipeline.
 
 ### Execution
 
@@ -120,8 +120,9 @@ allow-listed reason metadata, not raw caught exception text or tracebacks.
 Configured campaigns keep two target sessions alive: one for the reference and one for the
 candidate. A Python target runs through a dependency-light portable worker that imports no Parity,
 Pydantic, Hypothesis, Rich or Typer; its environment needs PyArrow, the selected adapter dependency
-and the application. A command target is any executable implementing protocol v1. Both forms use a
-new private Arrow/JSON call directory for every invocation and adapt into a fresh input object.
+and the application. A command target is any executable implementing protocol v2. Both forms use a
+new private Arrow/JSON call directory for every invocation and adapt every frame into a fresh input
+object.
 
 Preflight has two phases. `runtime` proves that both transports work and checks runtime identity
 plus declared dependency requirements without importing user targets. Only after both sides pass
@@ -132,7 +133,7 @@ contract is in [the target protocol](TARGET_PROTOCOL.md).
 
 Module globals, import caches, threads and other process state intentionally persist from one
 example to the next within each session, including into performance warmups and repeats. Callables
-should therefore be deterministic functions of their explicit inputs and static arguments. A
+should therefore be deterministic functions of their explicit invocation. A
 timeout, native crash or invalid protocol response terminates the affected target process and marks
 its session unusable; it is never silently restarted with reset state. Campaign teardown explicitly
 terminates both process groups and their descendants. The lower-level `execute_isolated` API remains
@@ -196,9 +197,8 @@ existing directory:
 
 ```text
 <artifact-root>/<safe-case>/<UTC timestamp>-<input hash>/
-  input.arrow  # single-frame case
-  input.parquet  # present when representable
-  # or input-000.arrow, input-001.arrow, ... for a bundle
+  input-000.arrow, input-001.arrow, ...  # one per Arrow leaf; none for zero-frame calls
+  input-000.parquet, ...  # convenience copies when representable
   manifest.json
   reference.json
   reference.arrow  # or reference-value.json for a JSON-compatible return
@@ -207,10 +207,11 @@ existing directory:
 ```
 
 Arrow IPC files are the lossless replay authority; Parquet is only a human/tooling convenience and
-is omitted for schemas it cannot represent. Bundle filenames are opaque: `replay.json` binds each
-file to its logical input name. `manifest.json` binds case/config metadata, hashes and
+is omitted for schemas it cannot represent. Input filenames are opaque: `replay.json` recursively
+binds each file to its positional, keyword or frame-sequence location and retains JSON values.
+`manifest.json` binds case/config metadata, hashes and
 artifact schema. `replay.json` contains the sanitized executable contract and argument vector
-needed to reproduce the case. Replay v2 records the project base as a bounded ancestor count from
+needed to reproduce the case. Replay v3 records the project base as a bounded ancestor count from
 the artifact. The reader walks from the artifact and never falls back to `Path.cwd()`, so a complete
 project tree remains replayable after relocation. Configured runs use the directory containing the
 loaded `parity.toml`; direct live runs use their invocation directory. Import roots, interpreters,
@@ -228,15 +229,16 @@ are rejected before setup so automatic replay paths cannot silently become exter
 Reports are separate projections that omit frame and value data. Artifact writes use a temporary
 directory and final rename so interrupted runs do not look complete.
 
-Manifest contract 2 hash-binds every artifact file. Replay contract 2 represents one to three named
-inputs through a single `inputs` list; a single-frame case uses the reserved logical name `input`.
+Manifest contract 3 hash-binds every artifact file. Replay contract 3 stores the complete recursive
+invocation, including zero-frame calls, JSON arguments, many fixed call slots and dataframe
+sequences.
 Every automatic replay binds target runtime fingerprints and the data-safe effective-configuration
 hash. Replay preflights both target sessions and blocks both implementations on drift or incomplete
 provenance. Evidence without those bindings remains inspectable but is not executable through
 automatic replay. JSON report schema 4 carries data-free mismatch signatures, approval state,
 compatibility-budget outcomes and distinct-finding counts.
 
-Distilled-contract manifest 2 is a separate candidate-only boundary. `contract distill` verifies
+Distilled-contract manifest 3 is a separate candidate-only boundary. `contract distill` verifies
 signed report artifacts, copies their minimized inputs and reference observations into a new atomic
 private directory, and removes the reference endpoint entirely. `contract verify` validates every
 bound file, reconstructs only the project-relative candidate, starts a fresh candidate process per
@@ -260,7 +262,7 @@ inventory was exhaustive.
 
 ## Extension seams
 
-- **Target adapter:** canonical input-to-API mapping plus successful-output canonicalisation.
+- **Target adapter:** canonical invocation-to-API mapping plus successful-output canonicalisation.
 - **Input provider:** fixture, generated schema, captured production shape or future contract source.
 - **Comparator:** explicit semantic type with policy validation; never an opaque “close enough”.
 - **Executor:** portable Python and arbitrary local protocol commands today; containers, remote

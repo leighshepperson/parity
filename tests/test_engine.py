@@ -4,7 +4,7 @@ import hashlib
 import json
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -12,18 +12,27 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pytest
+from hypothesis import strategies as st
 
 import parity.engine as engine
 from parity.artifacts import ArtifactStore
 from parity.config import load_config
 from parity.custom_generation import CustomGenerator
-from parity.engine import replay_artifact, run_live
+from parity.engine import replay_artifact
+from parity.engine import run_live as _engine_run_live
 from parity.execution import (
     ExceptionInfo,
     ExecutionOutcome,
     IsolatedExecutionSession,
     Observation,
 )
+from parity.generation import (
+    adversarial_bundle_cases,
+    adversarial_cases,
+    bundle_strategy,
+    frame_strategy,
+)
+from parity.invocation import Invocation, ResolvedInvocation
 from parity.models import (
     CallableSpec,
     CaseConfig,
@@ -34,10 +43,13 @@ from parity.models import (
     CompatibilityDecision,
     CompatibilityFinding,
     ExampleResult,
+    FrameArgument,
     FrameSchema,
     GenerationConfig,
     InputBundle,
     InputSpec,
+    InvocationConfig,
+    JsonArgument,
     Mismatch,
     MismatchKind,
     PandasInput,
@@ -51,6 +63,209 @@ from parity.models import (
 from parity.performance import benchmark_observations
 from parity.provenance import collect_runtime_provenance
 from parity.reporting import render_terminal
+from parity.schema import infer_schema
+
+
+def _test_invocation(value: Any) -> Invocation:
+    """Adapt historical engine test values to the intentionally breaking call model."""
+
+    if isinstance(value, Invocation):
+        return value
+    if isinstance(value, Mapping):
+        return Invocation(kwargs=dict(value))
+    return Invocation(args=(value,))
+
+
+def _test_value(invocation: Invocation) -> Any:
+    """Expose the old test callback shape without adding production compatibility."""
+
+    if len(invocation.args) == 1 and not invocation.kwargs:
+        return invocation.args[0]
+    if not invocation.args:
+        return dict(invocation.kwargs)
+    return (*invocation.args, dict(invocation.kwargs))
+
+
+def _campaign(**options: Any) -> CaseResult:
+    """Translate legacy private-engine fixtures used by behavioural tests only."""
+
+    schema = options.pop("schema", None)
+    fixture = options.pop("fixture", None)
+    input_bundle = options.pop("input_bundle", None)
+    bundle_schemas = options.pop("bundle_schemas", None)
+    custom = options.pop("custom_generator", None)
+    generation: GenerationConfig = options["generation"]
+    exact_only = options.get("exact_only", False)
+    exact_input = options.get("exact_input")
+
+    resolved: ResolvedInvocation | None = None
+    if custom is not None:
+        custom = CustomGenerator(
+            strategy=(
+                custom.strategy.map(_test_invocation) if custom.strategy is not None else None
+            ),
+            examples=tuple(_test_invocation(value) for value in custom.examples),
+        )
+    elif input_bundle is not None:
+        assert bundle_schemas is not None
+        fixtures = (
+            {
+                name: pa.table(value) if not isinstance(value, pa.Table) else value
+                for name, value in fixture.items()
+            }
+            if isinstance(fixture, Mapping)
+            else None
+        )
+        cases = adversarial_bundle_cases(
+            input_bundle,
+            bundle_schemas,
+            fixtures=fixtures,
+        )
+        deterministic = (
+            cases if generation.adversarial_examples else cases[:1] if fixtures is not None else []
+        )
+        resolved = ResolvedInvocation(
+            tuple((case.name, Invocation(kwargs=case.tables)) for case in deterministic),
+            (
+                bundle_strategy(input_bundle, bundle_schemas).map(
+                    lambda values: Invocation(kwargs=values)
+                )
+                if generation.search
+                else None
+            ),
+        )
+    else:
+        deterministic: list[tuple[str, Invocation]] = []
+        if schema is not None:
+            cases = (
+                adversarial_cases(schema, fixture=fixture)
+                if generation.adversarial_examples
+                else adversarial_cases(schema, fixture=fixture)[:1]
+                if fixture is not None
+                else []
+            )
+            deterministic = [(case.name, Invocation(args=(case.table,))) for case in cases]
+            strategy = (
+                frame_strategy(schema).map(lambda value: Invocation(args=(value,)))
+                if generation.search
+                else None
+            )
+        else:
+            deterministic = [("fixture", _test_invocation(fixture))] if fixture is not None else []
+            strategy = None
+        resolved = ResolvedInvocation(tuple(deterministic), strategy)
+
+    if exact_only and exact_input is None:
+        if fixture is None:
+            raise AssertionError("test-only exact campaign requires fixture")
+        options["exact_input"] = _test_invocation(fixture)
+
+    for runner_name in ("reference_runner", "candidate_runner"):
+        runner = options[runner_name]
+        options[runner_name] = lambda value, runner=runner: runner(_test_value(value))
+    if (benchmark := options.get("benchmark")) is not None:
+        options["benchmark"] = lambda value: benchmark(_test_value(value))
+    options["resolved_invocation"] = resolved
+    options["custom_generator"] = custom
+    return engine._campaign(**options)
+
+
+def _json_argument(value: Any) -> JsonArgument:
+    return JsonArgument(values=[str(value) if isinstance(value, Path) else value])
+
+
+def _case(**options: Any) -> CaseConfig:
+    """Build a v2 case from compact fixtures used by legacy engine tests."""
+
+    if "invocation" in options or options.get("generation", GenerationConfig()).generator:
+        return CaseConfig(**options)
+
+    fixture = options.pop("fixture", None)
+    schema = options.pop("input_schema", None)
+    bundle = options.pop("input_bundle", None)
+    static_args = options.pop("static_args", [])
+    static_kwargs = options.pop("static_kwargs", {})
+    reference_kwargs = options.pop("reference_kwargs", {})
+    candidate_kwargs = options.pop("candidate_kwargs", {})
+    if reference_kwargs != candidate_kwargs:
+        raise TypeError("endpoint-specific arguments were removed; invocation is shared")
+
+    args: list[Any] = []
+    kwargs: dict[str, Any] = {}
+    relationships = []
+    if bundle is not None:
+        relationships = bundle.relationships
+        frames = {
+            name: FrameArgument(
+                fixture=spec.fixture,
+                input_schema=spec.input_schema,
+                name=name,
+            )
+            for name, spec in bundle.inputs.items()
+        }
+        if bundle.binding == "positional":
+            args.extend(frames.values())
+        else:
+            kwargs.update(frames)
+    elif fixture is not None or schema is not None:
+        args.append(FrameArgument(fixture=fixture, input_schema=schema))
+    args.extend(_json_argument(value) for value in static_args)
+    for name, value in {**static_kwargs, **reference_kwargs}.items():
+        kwargs[name] = _json_argument(value)
+    options["invocation"] = InvocationConfig(
+        args=args,
+        kwargs=kwargs,
+        relationships=relationships,
+    )
+    return CaseConfig(**options)
+
+
+def run_live(
+    reference: Any,
+    candidate: Any,
+    *,
+    fixture: Any | None,
+    schema: FrameSchema | None,
+    input_fixtures: Mapping[str, Any] | None = None,
+    **options: Any,
+):
+    """Exercise the new public API while retaining compact historical test setup."""
+
+    generation: GenerationConfig = options["generation"]
+    if input_fixtures is not None:
+        invocation = Invocation(kwargs=dict(input_fixtures))
+        schemas = {name: infer_schema(value) for name, value in input_fixtures.items()}
+        strategy = (
+            st.fixed_dictionaries(
+                {name: frame_strategy(value) for name, value in schemas.items()}
+            ).map(lambda values: Invocation(kwargs=values))
+            if generation.search
+            else None
+        )
+    else:
+        resolved_schema = schema or (infer_schema(fixture) if fixture is not None else None)
+        if fixture is None:
+            if resolved_schema is None:
+                invocation = Invocation()
+            else:
+                cases = adversarial_cases(resolved_schema)
+                if not cases:
+                    raise ValueError("invocation schema has no deterministic example")
+                invocation = Invocation(args=(cases[0].table,))
+        else:
+            invocation = Invocation(args=(fixture,))
+        strategy = (
+            frame_strategy(resolved_schema).map(lambda value: Invocation(args=(value,)))
+            if resolved_schema is not None and generation.search
+            else None
+        )
+    return _engine_run_live(
+        reference,
+        candidate,
+        invocation=invocation,
+        strategy=strategy,
+        **options,
+    )
 
 
 def identity(frame: pd.DataFrame) -> pd.DataFrame:
@@ -208,7 +423,7 @@ def _run_stable_contract_failure(
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    return engine._campaign(
+    return _campaign(
         name="stable-contract-failure",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -246,7 +461,7 @@ def test_live_engine_consumes_generated_strategy_when_adversarial_disabled(tmp_p
     assert case.deterministic_examples == 0
     assert case.generated_examples > 0
     assert len(case.failures) == 1
-    assert case.failures[0].source == "generated:shrunk"
+    assert case.failures[0].source == "generated:custom:shrunk"
     assert case.failures[0].artifact is not None
 
 
@@ -273,7 +488,7 @@ def test_generated_only_campaign_runs_enforced_performance_gate(tmp_path: Path) 
         benchmark_inputs.append(value)
         return measured
 
-    result = engine._campaign(
+    result = _campaign(
         name="generated-performance",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -348,7 +563,7 @@ def test_approved_exception_does_not_replace_benchmarkable_representative(
         benchmark_inputs.append(value)
         return measured
 
-    result = engine._campaign(
+    result = _campaign(
         name="approved-exception-performance",
         schema=None,
         fixture=None,
@@ -388,7 +603,7 @@ def test_approved_exception_does_not_replace_benchmarkable_representative(
 def test_enabled_performance_without_validated_input_is_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(engine, "find_unseen_counterexample", lambda *_args: None)
+    monkeypatch.setattr(engine, "find_unseen_custom_counterexample", lambda *_args: None)
 
     def returned(value: pa.Table) -> Observation:
         return Observation(
@@ -400,7 +615,7 @@ def test_enabled_performance_without_validated_input_is_an_error(
     def unexpected_benchmark(_value: Any) -> PerformanceResult:
         pytest.fail("benchmark must not run without a validated input")
 
-    result = engine._campaign(
+    result = _campaign(
         name="missing-performance-input",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -447,7 +662,7 @@ def test_enabled_performance_without_benchmark_runner_is_an_error(tmp_path: Path
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    result = engine._campaign(
+    result = _campaign(
         name="missing-performance-runner",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -498,7 +713,7 @@ def test_invalid_enforced_timing_evidence_is_a_case_error(tmp_path: Path) -> Non
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    result = engine._campaign(
+    result = _campaign(
         name="invalid-performance-timing",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -539,7 +754,7 @@ def test_invalid_enforced_timing_evidence_is_a_case_error(tmp_path: Path) -> Non
     ]
 
 
-def test_live_engine_passes_equal_functions_across_both_generation_layers(tmp_path: Path) -> None:
+def test_live_engine_passes_equal_functions_across_baseline_and_strategy(tmp_path: Path) -> None:
     result = _run(
         tmp_path,
         identity,
@@ -547,8 +762,8 @@ def test_live_engine_passes_equal_functions_across_both_generation_layers(tmp_pa
     )
     case = result.cases[0]
     assert result.status is Status.PASSED
-    assert case.deterministic_examples > 0
-    assert case.generated_examples >= 20
+    assert case.deterministic_examples == 0
+    assert case.generated_examples >= 21
     assert case.failures == []
 
 
@@ -575,7 +790,7 @@ def test_live_engine_can_run_only_the_exact_fixture(
     def unexpected_search(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("property search must be disabled")
 
-    monkeypatch.setattr(engine, "find_unseen_counterexample", unexpected_search)
+    monkeypatch.setattr(engine, "find_unseen_custom_counterexample", unexpected_search)
     result = run_live(
         identity,
         identity,
@@ -598,26 +813,24 @@ def test_live_engine_can_run_only_the_exact_fixture(
     assert case.failures == []
 
 
-def test_live_engine_rejects_searchless_campaign_without_deterministic_inputs(
+def test_live_engine_uses_explicit_invocation_for_searchless_campaign(
     tmp_path: Path,
 ) -> None:
     def local_identity(frame: pd.DataFrame) -> pd.DataFrame:
         return frame.copy()
 
-    with pytest.raises(ValueError, match="requires at least one deterministic input"):
-        run_live(
-            local_identity,
-            local_identity,
-            fixture=None,
-            schema=FrameSchema(columns=[ColumnSchema(name="x", dtype="int64", nullable=False)]),
-            comparison=ComparisonPolicy(),
-            generation=GenerationConfig(
-                search=False,
-                adversarial_examples=False,
-            ),
-            performance=PerformanceConfig(enabled=False),
-            artifact_dir=tmp_path,
-        )
+    result = _engine_run_live(
+        local_identity,
+        local_identity,
+        invocation=Invocation(args=(pa.table({"x": [1]}),)),
+        comparison=ComparisonPolicy(),
+        generation=GenerationConfig(search=False, adversarial_examples=False),
+        performance=PerformanceConfig(enabled=False),
+        artifact_dir=tmp_path,
+    )
+
+    assert result.status is Status.PASSED
+    assert result.cases[0].deterministic_examples == 1
 
 
 def test_live_engine_accepts_named_input_bundle(tmp_path: Path) -> None:
@@ -642,8 +855,8 @@ def test_live_engine_accepts_named_input_bundle(tmp_path: Path) -> None:
     assert result.cases[0].generated_examples >= 2
 
 
-def test_live_engine_rejects_bundle_options_for_single_input(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="apply only"):
+def test_live_engine_rejects_removed_input_binding_option(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument 'input_binding'"):
         run_live(
             identity,
             identity,
@@ -758,7 +971,7 @@ def test_live_importable_failure_outside_project_is_inspection_only(tmp_path: Pa
     assert artifact is not None
     replay_payload = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     replay_contract = replay_payload["case"]
-    assert replay_payload["version"] == 2
+    assert replay_payload["version"] == 3
     assert replay_payload["expected_runtime"]["reference"]["python_version"]
     assert len(replay_payload["config_sha256"]) == 64
     assert replay_contract["reference"]["adapter"] == "pandas"
@@ -813,7 +1026,7 @@ def test_rebound_live_function_is_not_claimed_as_replayable(
     assert engine._importable_spec(original, adapter="pandas") is None
 
 
-def test_deterministic_witness_skips_redundant_property_search(tmp_path: Path) -> None:
+def test_live_witness_stops_after_requested_finding_count(tmp_path: Path) -> None:
     result = _run(
         tmp_path,
         corrupt_everything,
@@ -822,7 +1035,8 @@ def test_deterministic_witness_skips_redundant_property_search(tmp_path: Path) -
     case = result.cases[0]
     assert result.status is Status.FAILED
     assert case.failures
-    assert case.generated_examples == 0
+    assert 0 < case.generated_examples < 500
+    assert case.findings_discovered == 1
 
 
 def test_engine_discovers_and_orders_two_distinct_mismatch_signatures(tmp_path: Path) -> None:
@@ -968,7 +1182,7 @@ def test_deterministic_side_nondeterminism_is_an_error(tmp_path: Path) -> None:
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    result = engine._campaign(
+    result = _campaign(
         name="nondeterministic",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -1009,7 +1223,7 @@ def test_stability_probe_detects_synchronized_changing_outputs_and_stops(
         nonlocal benchmark_called
         benchmark_called = True
 
-    result = engine._campaign(
+    result = _campaign(
         name="synchronized-state",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -1070,7 +1284,7 @@ def test_stability_probe_attributes_one_sided_drift(tmp_path: Path) -> None:
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    result = engine._campaign(
+    result = _campaign(
         name="one-sided-state",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -1109,7 +1323,7 @@ def test_stability_probe_allows_stable_outputs_for_configured_repeat_count(
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    result = engine._campaign(
+    result = _campaign(
         name="stable",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -1145,7 +1359,7 @@ def test_stability_repeats_one_disables_repeat_observations(tmp_path: Path) -> N
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    result = engine._campaign(
+    result = _campaign(
         name="stability-disabled",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -1176,7 +1390,7 @@ def test_fixture_constraints_apply_when_adversarial_examples_are_disabled(
     )
 
     with pytest.raises(ValueError, match="fixture does not satisfy"):
-        engine._campaign(
+        _campaign(
             name="invalid-fixture",
             schema=schema,
             fixture=pa.table({"x": [2, 1]}),
@@ -1209,7 +1423,7 @@ def test_bundle_fixture_constraints_apply_when_adversarial_examples_are_disabled
     )
 
     with pytest.raises(ValueError, match="does not satisfy its declared frame constraints"):
-        engine._campaign(
+        _campaign(
             name="invalid-bundle-fixture",
             schema=None,
             fixture={"left": pa.table({"x": [2, 1]}), "right": pa.table({"x": [1]})},
@@ -1244,7 +1458,7 @@ def test_stability_probe_detects_exception_contract_drift(tmp_path: Path) -> Non
         candidate_calls += 1
         return raised("initial rejection" if candidate_calls == 1 else "different rejection")
 
-    result = engine._campaign(
+    result = _campaign(
         name="exception-state",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -1292,7 +1506,7 @@ def test_stability_probe_sanitizes_repeat_infrastructure_failure(tmp_path: Path)
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    result = engine._campaign(
+    result = _campaign(
         name="repeat-crash",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="integer", nullable=False)],
@@ -1340,7 +1554,7 @@ def candidate(frame):
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="stateful",
                 reference=CallableSpec(
                     target="stateful_transforms:reference",
@@ -1407,7 +1621,7 @@ def candidate(_frame):
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="replay-stability",
                 reference=CallableSpec(
                     target="changing_transforms:reference",
@@ -1447,7 +1661,7 @@ def candidate(_frame):
     assert replay_failure.artifact == failure.artifact
 
 
-def test_configured_campaign_passes_shared_and_endpoint_specific_kwargs(
+def test_configured_campaign_passes_shared_json_kwargs(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "endpoint_transform.py").write_text(
@@ -1466,9 +1680,8 @@ def transform(frame, *, scale, engine, log_path):
     table = pa.table({"x": [1]})
     with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
         writer.write_table(table)
-    reference_log = tmp_path / "reference.log"
-    candidate_log = tmp_path / "candidate.log"
-    case = CaseConfig(
+    shared_log = tmp_path / "shared.log"
+    case = _case(
         name="endpoint-kwargs",
         reference=CallableSpec(
             target="endpoint_transform:transform",
@@ -1481,9 +1694,7 @@ def transform(frame, *, scale, engine, log_path):
             workdir=tmp_path,
         ),
         fixture=fixture,
-        static_kwargs={"scale": 2},
-        reference_kwargs={"engine": "pandas", "log_path": str(reference_log)},
-        candidate_kwargs={"engine": "polars", "log_path": str(candidate_log)},
+        static_kwargs={"scale": 2, "engine": "shared", "log_path": str(shared_log)},
         generation=GenerationConfig(
             max_examples=1,
             adversarial_examples=False,
@@ -1503,61 +1714,22 @@ def transform(frame, *, scale, engine, log_path):
     result = engine.run_suite(ParityConfig(artifact_dir=tmp_path / ".parity", cases=[case]))
 
     assert result.status is Status.PASSED
-    assert reference_log.read_text(encoding="utf-8").splitlines() == ["pandas"] * 3
-    assert candidate_log.read_text(encoding="utf-8").splitlines() == ["polars"] * 3
+    assert shared_log.read_text(encoding="utf-8").splitlines() == ["shared"] * 6
 
 
-def test_endpoint_specific_kwargs_survive_confirmation_artifact_and_replay(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("field", ["reference_kwargs", "candidate_kwargs"])
+def test_endpoint_specific_kwargs_are_rejected_without_compatibility(
+    tmp_path: Path, field: str
 ) -> None:
-    (tmp_path / "endpoint_failure.py").write_text(
-        """
-def transform(frame, *, engine):
-    if engine == "polars":
-        return frame.append_column("candidate_only", frame.column(0))
-    return frame
-""",
-        encoding="utf-8",
-    )
-    fixture = tmp_path / "fixture.arrow"
-    table = pa.table({"x": [1]})
-    with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
-        writer.write_table(table)
-    monkeypatch.chdir(tmp_path)
-    case = CaseConfig(
-        name="endpoint-replay",
-        reference=CallableSpec(
-            target="endpoint_failure:transform", adapter="arrow", workdir=tmp_path
-        ),
-        candidate=CallableSpec(
-            target="endpoint_failure:transform", adapter="arrow", workdir=tmp_path
-        ),
-        fixture=fixture,
-        reference_kwargs={"engine": "pandas"},
-        candidate_kwargs={"engine": "polars"},
-        generation=GenerationConfig(
-            max_examples=1,
-            adversarial_examples=False,
-            search=False,
-            stability_repeats=1,
-        ),
-        performance=PerformanceConfig(enabled=False),
-    )
-
-    result = engine.run_suite(ParityConfig(artifact_dir=tmp_path / ".parity", cases=[case]))
-
-    failure = result.cases[0].failures[0]
-    assert result.status is Status.FAILED
-    assert failure.finding_signature is not None
-    assert failure.artifact is not None
-    replay_contract = json.loads((failure.artifact / "replay.json").read_text(encoding="utf-8"))
-    assert replay_contract["case"]["reference_kwargs"] == {"engine": "pandas"}
-    assert replay_contract["case"]["candidate_kwargs"] == {"engine": "polars"}
-
-    replayed = replay_artifact(failure.artifact)
-
-    assert replayed.status is Status.FAILED
-    assert replayed.cases[0].failures[0].finding_signature == failure.finding_signature
+    arguments = {field: {"engine": "removed"}}
+    with pytest.raises(ValueError, match=field):
+        CaseConfig(
+            name="removed-endpoint-kwargs",
+            reference=CallableSpec(target="test_engine:identity"),
+            candidate=CallableSpec(target="test_engine:identity"),
+            invocation=InvocationConfig(args=[FrameArgument(fixture=tmp_path / "fixture.arrow")]),
+            **arguments,
+        )
 
 
 def test_importable_live_failure_is_confirmed_in_a_fresh_process(tmp_path: Path) -> None:
@@ -1589,7 +1761,7 @@ def test_exact_replay_observes_saved_input_once_per_side(tmp_path: Path) -> None
             metrics=RunMetrics(duration_seconds=0),
         )
 
-    result = engine._campaign(
+    result = _campaign(
         name="exact",
         schema=FrameSchema(
             columns=[ColumnSchema(name="x", dtype="int64", nullable=False)],
@@ -1649,7 +1821,7 @@ def test_generated_infrastructure_error_stops_without_shrinking(
     case = result.cases[0]
     assert result.status is Status.ERROR
     assert case.generated_examples == 1
-    assert case.failures[0].source == "generated:error"
+    assert case.failures[0].source == "generated:custom:1"
     assert calls == 2
 
 
@@ -1693,7 +1865,7 @@ def test_matching_unsupported_configured_returns_are_an_error(tmp_path: Path) ->
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="unsupported-return",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
@@ -1754,7 +1926,7 @@ def test_matching_failed_tabular_canonicalization_is_an_error_configured(
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="complex-output",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
@@ -1825,7 +1997,7 @@ def test_matching_failed_polars_input_materialization_is_an_error_configured(
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="polars-input",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
@@ -1865,7 +2037,7 @@ def test_matching_import_time_system_exit_is_an_error_configured(tmp_path: Path)
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="import-exit",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
@@ -1932,7 +2104,7 @@ def string_key(_frame):
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="mapping-key-coercion",
                 reference=CallableSpec(
                     target="mapping_key_transforms:integer_key",
@@ -1970,7 +2142,7 @@ def test_vanished_shrunk_witness_is_reported_as_error(
         assert classifier(table) is not None
         return type("Found", (), {"table": pa.table({"x": [7]}), "source": "generated:shrunk"})()
 
-    monkeypatch.setattr(engine, "find_unseen_counterexample", find)
+    monkeypatch.setattr(engine, "find_unseen_custom_counterexample", find)
     calls = 0
 
     def observe(*_args, **_kwargs):
@@ -2026,7 +2198,7 @@ def record_process(frame, log_path):
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="persistent-sessions",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
@@ -2074,7 +2246,7 @@ def test_configured_campaign_records_each_worker_distribution_version(tmp_path: 
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="separate-runtime-provenance",
                 reference=CallableSpec(
                     target="provenance_transform:identity",
@@ -2133,7 +2305,7 @@ def test_configured_campaign_rejects_matching_runtime_failures_before_import(
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="runtime-contract",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
@@ -2184,7 +2356,7 @@ def test_configured_campaign_does_not_require_target_side_parity(
     config = ParityConfig(
         artifact_dir=tmp_path / ".parity",
         cases=[
-            CaseConfig(
+            _case(
                 name="parity-version-contract",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
@@ -2216,7 +2388,7 @@ def test_artifact_replay_resolves_import_root_from_artifact_bound_base(
         "def identity(frame):\n    return frame.copy()\n", encoding="utf-8"
     )
     monkeypatch.chdir(tmp_path)
-    case = CaseConfig(
+    case = _case(
         name="replay-workdir",
         reference=CallableSpec(
             target="replay_transform:identity", adapter="pandas", workdir=transform_root
@@ -2231,7 +2403,7 @@ def test_artifact_replay_resolves_import_root_from_artifact_bound_base(
     runtime = _portable_runtime(case.reference)
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         case,
-        pa.table({"x": [1, 2]}),
+        Invocation(args=(pa.table({"x": [1, 2]}),)),
         ExampleResult(source="test", status=Status.FAILED),
         runtime_provenance=CaseProvenance(
             reference=runtime,
@@ -2278,7 +2450,7 @@ def test_configured_named_bundle_failure_replays_atomically(
         with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
             writer.write_table(table)
     monkeypatch.chdir(tmp_path)
-    case = CaseConfig(
+    case = _case(
         name="named-bundle-replay",
         reference=CallableSpec(
             target="join_transforms:reference", adapter="pandas", workdir=tmp_path
@@ -2303,8 +2475,12 @@ def test_configured_named_bundle_failure_replays_atomically(
     assert result.status is Status.FAILED
     assert artifact is not None
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 2
-    assert [item["name"] for item in replay["inputs"]] == ["left", "right"]
+    assert replay["version"] == 3
+    assert list(replay["invocation"]["kwargs"]) == ["left", "right"]
+    assert [item["file"] for item in replay["invocation"]["kwargs"].values()] == [
+        "input-000.arrow",
+        "input-001.arrow",
+    ]
 
     replayed = replay_artifact(artifact)
     assert replayed.status is Status.FAILED
@@ -2326,7 +2502,7 @@ def test_configured_worker_and_replay_detect_large_integer_precision_loss(
     with pa.OSFile(str(fixture), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
         writer.write_table(table)
     monkeypatch.chdir(tmp_path)
-    case = CaseConfig(
+    case = _case(
         name="numeric-precision-replay",
         reference=CallableSpec(
             target="precision_transforms:reference", adapter="pandas", workdir=tmp_path
@@ -2355,7 +2531,7 @@ def test_positional_bundle_replay_restores_hash_bound_input_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    case = CaseConfig(
+    case = _case(
         name="positional-order",
         reference=CallableSpec(target="test_engine:identity", adapter="pandas"),
         candidate=CallableSpec(target="test_engine:identity", adapter="pandas"),
@@ -2371,10 +2547,9 @@ def test_positional_bundle_replay_restores_hash_bound_input_order(
     )
     artifact = ArtifactStore(tmp_path / ".parity", invocation_directory=tmp_path).write_failure(
         case,
-        {
-            "zebra": pa.table({"x": [1]}),
-            "alpha": pa.table({"x": [2]}),
-        },
+        Invocation(
+            args=(pa.table({"x": [1]}), pa.table({"x": [2]})),
+        ),
         ExampleResult(source="test", status=Status.FAILED),
         runtime_provenance=CaseProvenance(
             reference=collect_runtime_provenance(),
@@ -2383,24 +2558,28 @@ def test_positional_bundle_replay_restores_hash_bound_input_order(
         config_sha256="a" * 64,
     )
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
-    assert list(replay["case"]["input_bundle"]["inputs"]) == ["alpha", "zebra"]
-    assert [item["name"] for item in replay["inputs"]] == ["zebra", "alpha"]
+    assert replay["case"]["invocation"] == {}
+    assert [item["file"] for item in replay["invocation"]["args"]] == [
+        "input-000.arrow",
+        "input-001.arrow",
+    ]
 
     observed: dict[str, tuple[str, ...]] = {}
 
     class CapturedCase(Exception):
         pass
 
-    def capture_case(replay_case: CaseConfig, *_args: Any, **_kwargs: Any) -> None:
-        assert replay_case.input_bundle is not None
-        observed["names"] = tuple(replay_case.input_bundle.inputs)
+    def capture_case(_replay_case: CaseConfig, *_args: Any, **kwargs: Any) -> None:
+        invocation = kwargs["exact_input"]
+        assert isinstance(invocation, Invocation)
+        observed["names"] = tuple(str(value.column("x")[0].as_py()) for value in invocation.args)
         raise CapturedCase
 
     monkeypatch.setattr(engine, "_configured_case", capture_case)
     with pytest.raises(CapturedCase):
         replay_artifact(artifact)
 
-    assert observed["names"] == ("zebra", "alpha")
+    assert observed["names"] == ("1", "2")
 
 
 def test_replay_runtime_drift_blocks_both_callables_before_import(
@@ -2418,7 +2597,7 @@ def test_replay_runtime_drift_blocks_both_callables_before_import(
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
-    case = CaseConfig(
+    case = _case(
         name="runtime-drift",
         reference=CallableSpec(target="drift_transform:touch", adapter="pandas", workdir=tmp_path),
         candidate=CallableSpec(target="drift_transform:touch", adapter="pandas", workdir=tmp_path),
@@ -2429,7 +2608,7 @@ def test_replay_runtime_drift_blocks_both_callables_before_import(
     runtime = _portable_runtime(case.reference)
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         case,
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.FAILED),
         runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
         config_sha256="b" * 64,
@@ -2468,7 +2647,7 @@ def test_replay_keeps_verified_provenance_when_callable_crashes(
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
-    case = CaseConfig(
+    case = _case(
         name="verified-crash",
         reference=CallableSpec(
             target="crash_transform:identity", adapter="pandas", workdir=tmp_path
@@ -2481,7 +2660,7 @@ def test_replay_keeps_verified_provenance_when_callable_crashes(
     runtime = _portable_runtime(case.reference)
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         case,
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.ERROR),
         runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
         config_sha256="c" * 64,
@@ -2603,7 +2782,7 @@ def test_artifact_replay_runs_through_project_virtualenv_entrypoint(
     assert runtime_observation.outcome is ExecutionOutcome.RETURNED
     assert runtime_observation.runtime is not None
     runtime = runtime_observation.runtime
-    case = CaseConfig(
+    case = _case(
         name="venv-replay",
         reference=spec,
         candidate=spec.model_copy(deep=True),
@@ -2613,7 +2792,7 @@ def test_artifact_replay_runs_through_project_virtualenv_entrypoint(
     monkeypatch.chdir(tmp_path)
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         case,
-        pa.table({"id": [1, 2]}),
+        Invocation(args=(pa.table({"id": [1, 2]}),)),
         ExampleResult(source="test", status=Status.FAILED),
         runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
         config_sha256="e" * 64,
@@ -2650,7 +2829,7 @@ def test_configured_artifact_fingerprint_distinguishes_virtualenv_entrypoints(
     monkeypatch.chdir(tmp_path)
 
     def run(reference_python: Path, candidate_python: Path) -> tuple[str, Path]:
-        case = CaseConfig(
+        case = _case(
             name="versions",
             reference=CallableSpec(
                 target="fingerprint_transform:reference",
@@ -2699,10 +2878,13 @@ def test_run_suite_hash_uses_loaded_config_base_for_virtualenv_paths(
     config_path = tmp_path / "parity.toml"
     config_path.write_text(
         """
-version = 1
+version = 2
 
 [[cases]]
 name = "versions"
+
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixture.arrow"
 
 [cases.reference]
@@ -2745,10 +2927,13 @@ def test_run_suite_uses_loaded_config_directory_for_replay_paths(
     config_path = project / "parity.toml"
     config_path.write_text(
         """
-version = 1
+version = 2
 
 [[cases]]
 name = "stable-root"
+
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixture.csv"
 
 [cases.reference]
@@ -2766,7 +2951,7 @@ target = "project:candidate"
         artifacts.append(
             store.write_failure(
                 case,
-                pa.table({"id": [1]}),
+                Invocation(args=(pa.table({"id": [1]}),)),
                 ExampleResult(source="test", status=Status.FAILED),
                 runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
                 config_sha256=kwargs["config_sha256"],
@@ -2789,7 +2974,7 @@ target = "project:candidate"
 def test_replay_manifest_must_bind_every_consumed_file(tmp_path: Path) -> None:
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "manifest",
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.FAILED),
     )
     manifest_path = artifact / "manifest.json"
@@ -2817,7 +3002,7 @@ def test_replay_contract_is_current_and_fail_closed(
     runtime = collect_runtime_provenance()
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "bound-contract",
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.FAILED),
         runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
         config_sha256="d" * 64,
@@ -2868,7 +3053,7 @@ def test_replay_rejects_invalid_artifact_ancestor_contract(
     runtime = collect_runtime_provenance()
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "invalid-anchor",
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.FAILED),
         reference=CallableSpec(target="test_engine:identity", adapter="pandas"),
         candidate=CallableSpec(target="test_engine:identity", adapter="pandas"),
@@ -2890,7 +3075,7 @@ def test_replay_rejects_artifact_ancestor_that_walks_past_filesystem_root(
     runtime = collect_runtime_provenance()
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "escaping-anchor",
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.FAILED),
         reference=CallableSpec(target="test_engine:identity", adapter="pandas"),
         candidate=CallableSpec(target="test_engine:identity", adapter="pandas"),
@@ -2911,7 +3096,7 @@ def test_replay_rejects_artifact_ancestor_that_walks_past_filesystem_root(
 def test_inspection_only_artifact_cannot_execute_automatically(tmp_path: Path) -> None:
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "inspection-only",
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.FAILED),
     )
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
@@ -2927,7 +3112,7 @@ def test_replay_rejects_unsupported_manifest_version(
 ) -> None:
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "manifest-version",
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.FAILED),
     )
     manifest_path = artifact / "manifest.json"
@@ -2942,10 +3127,10 @@ def test_replay_rejects_unsupported_manifest_version(
 def test_replay_manifest_rejects_symlinked_external_file(tmp_path: Path) -> None:
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         "manifest-symlink",
-        pa.table({"x": [1]}),
+        Invocation(args=(pa.table({"x": [1]}),)),
         ExampleResult(source="test", status=Status.FAILED),
     )
-    input_path = artifact / "input.arrow"
+    input_path = artifact / "input-000.arrow"
     external = tmp_path / "external.arrow"
     external.write_bytes(input_path.read_bytes())
     input_path.unlink()
@@ -2959,32 +3144,34 @@ def test_replay_manifest_rejects_symlinked_external_file(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("field", "argument"),
+    ("binding", "argument"),
     [
-        ("static_args", "/private/customer.csv"),
-        ("static_args", "API_TOKEN=secret"),
-        ("reference_kwargs", "API_TOKEN=reference-secret"),
-        ("candidate_kwargs", "/private/candidate.csv"),
+        ("positional", "/private/customer.csv"),
+        ("positional", "API_TOKEN=secret"),
+        ("keyword", "API_TOKEN=reference-secret"),
+        ("keyword", "/private/candidate.csv"),
     ],
 )
-def test_replay_rejects_sanitized_static_arguments(
-    tmp_path: Path, field: str, argument: str
+def test_replay_rejects_redacted_json_invocation_arguments(
+    tmp_path: Path, binding: str, argument: str
 ) -> None:
-    arguments: dict[str, object] = (
-        {field: [argument]} if field == "static_args" else {field: {"option": argument}}
-    )
-    monkey_case = CaseConfig(
+    monkey_case = _case(
         name="sanitized-argument",
         reference=CallableSpec(target="test_engine:identity", adapter="pandas"),
         candidate=CallableSpec(target="test_engine:identity", adapter="pandas"),
         fixture=tmp_path / "unused.parquet",
-        **arguments,
         generation=GenerationConfig(adversarial_examples=False, max_examples=1),
         performance=PerformanceConfig(enabled=False),
     )
+    table = pa.table({"x": [1]})
+    invocation = (
+        Invocation(args=(table, argument))
+        if binding == "positional"
+        else Invocation(args=(table,), kwargs={"option": argument})
+    )
     artifact = ArtifactStore(tmp_path / ".parity", invocation_directory=tmp_path).write_failure(
         monkey_case,
-        pa.table({"x": [1]}),
+        invocation,
         ExampleResult(source="test", status=Status.FAILED),
         runtime_provenance=CaseProvenance(
             reference=collect_runtime_provenance(),
@@ -2994,6 +3181,7 @@ def test_replay_rejects_sanitized_static_arguments(
     )
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     assert "command" not in replay
+    assert replay["replay_blockers"] == {"artifact": "redacted_invocation"}
 
-    with pytest.raises(engine.ReplayError, match="redacted static arguments"):
+    with pytest.raises(engine.ReplayError, match="redacted path or secret arguments"):
         replay_artifact(artifact)

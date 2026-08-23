@@ -25,9 +25,9 @@ from parity.engine import run_suite
 from parity.models import (
     CallableSpec,
     CaseConfig,
+    FrameArgument,
     GenerationConfig,
-    InputBundle,
-    InputSpec,
+    InvocationConfig,
     ParityConfig,
     PerformanceConfig,
     Status,
@@ -80,7 +80,7 @@ def candidate(table):
             adapter="arrow",
             workdir=project,
         ),
-        fixture=fixture,
+        invocation=InvocationConfig(args=[FrameArgument(fixture=fixture)]),
         generation=GenerationConfig(
             search=False,
             adversarial_examples=False,
@@ -451,12 +451,11 @@ def candidate(left, right):
         candidate=CallableSpec(
             target="upgrade_target:candidate", adapter="arrow", workdir=tmp_path
         ),
-        input_bundle=InputBundle(
-            binding="positional",
-            inputs={
-                "left": InputSpec(fixture=left),
-                "right": InputSpec(fixture=right),
-            },
+        invocation=InvocationConfig(
+            args=[
+                FrameArgument(name="left", fixture=left),
+                FrameArgument(name="right", fixture=right),
+            ]
         ),
         generation=GenerationConfig(
             search=False,
@@ -486,8 +485,15 @@ def candidate(left, right):
     manifest = DistilledContractManifest.model_validate_json(
         (destination / "contract.json").read_text(encoding="utf-8")
     )
-    assert manifest.cases[0].input_binding == "positional"
-    assert [item.name for item in manifest.cases[0].examples[0].inputs] == ["left", "right"]
+    example = manifest.cases[0].examples[0]
+    assert [item.name for item in example.inputs] == ["args/0", "args/1"]
+    assert example.invocation.model_dump(mode="json") == {
+        "args": [
+            {"kind": "arrow", "file": example.inputs[0].file},
+            {"kind": "arrow", "file": example.inputs[1].file},
+        ],
+        "kwargs": {},
+    }
 
 
 def test_contract_integrity_rejects_tampered_private_data(

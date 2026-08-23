@@ -37,14 +37,19 @@ selection entirely to run every configured case.
 ## Live assertion
 
 ```python
-from parity import ComparisonPolicy, FrameSchema
+import pyarrow as pa
+
+from parity import ComparisonPolicy, Invocation
 
 
-def test_live_pair(parity, schema: FrameSchema):
+def test_live_pair(parity):
     parity.verify(
         reference_transform,
         candidate_transform,
-        schema=schema,
+        invocation=Invocation(
+            args=(pa.table({"order_id": [1, 2], "amount": [10.0, 20.0]}),),
+            kwargs={"currency": "GBP"},
+        ),
         reference_adapter="pandas",
         candidate_adapter="polars",
         comparison=ComparisonPolicy(row_order="ignore"),
@@ -52,7 +57,10 @@ def test_live_pair(parity, schema: FrameSchema):
     )
 ```
 
-All keyword arguments are forwarded to the public `parity.verify` API.
+`Invocation` is the complete `callable(*args, **kwargs)` input and supports zero or many frames,
+JSON-like values and `FrameSequence` arguments. Pass `strategy=SearchStrategy[Invocation]` to add
+property generation and shrinking. All keyword arguments are forwarded to the public
+`parity.verify` API.
 
 ## One externally selected case
 

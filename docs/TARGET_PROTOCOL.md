@@ -1,9 +1,9 @@
 # External target protocol
 
-Protocol version 1 lets any local executable participate as a reference or candidate without
+Protocol version 2 lets any local executable participate as a reference or candidate without
 installing Parity or using Python. The executable is a thin contract adapter: it receives canonical
-Arrow inputs, invokes the implementation under test, and reports a canonical return, a target-raised
-exception, or an adapter/infrastructure error.
+Arrow/JSON invocations, invokes the implementation under test, and reports a canonical return, a
+target-raised exception, or an adapter/infrastructure error.
 
 Use a command endpoint when the target is not an importable Python callable or when a process
 boundary is the natural integration point:
@@ -79,7 +79,7 @@ restart it with different state.
 
 ## Operations
 
-Every request has `protocol_version = 1` and one of three operations:
+Every request has `protocol_version = 2` and one of three operations:
 
 - `runtime` validates the transport and returns a bounded runtime identity. It must not import or
   invoke the application target.
@@ -100,39 +100,56 @@ the current private call directory.
 
 ```json
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "operation": "execute",
   "endpoint": {
     "kind": "command",
     "record_distributions": []
   },
-  "inputs": {
-    "kind": "single",
-    "items": [
-      {"name": "input", "path": "/private/session/call-.../input-00000000.arrow"}
-    ]
+  "invocation": {
+    "args": [
+      {"kind": "json", "value": "sum"},
+      {"kind": "arrow", "path": "/private/session/call-.../input-00000000.arrow"}
+    ],
+    "kwargs": {
+      "batches": {
+        "kind": "frames",
+        "container": "list",
+        "items": [
+          {"kind": "arrow", "path": "/private/session/call-.../input-00000001.arrow"}
+        ]
+      },
+      "descending": {"kind": "json", "value": false}
+    }
   },
   "output": {
     "arrow": "/private/session/call-.../output.arrow",
     "json": "/private/session/call-.../output.json"
-  },
-  "static_args": [],
-  "static_kwargs": {}
+  }
 }
 ```
 
-`inputs.kind` is:
+`invocation.args` is ordered and `invocation.kwargs` preserves the configured keyword names. Each
+value is exactly one recursive node:
 
-- `single`, with exactly one item named `input`;
-- `positional`, with ordered item names `0`, `1`, …; or
-- `keyword`, with unique Python-identifier names.
+- `{"kind":"arrow","path":"..."}` binds one Arrow IPC file;
+- `{"kind":"json","value":...}` carries one portable JSON-like value; or
+- `{"kind":"frames","container":"list"|"tuple","items":[...]}` carries one dataframe
+  sequence. Its items are Arrow nodes.
 
-Every input file is an Arrow IPC file and is the canonical transport authority. The command must
-not modify it. `static_args` and `static_kwargs` contain the configured JSON-compatible invocation
-arguments. A non-Python adapter may interpret them according to its declared behavioural contract.
+The adapter reconstructs those nodes and invokes its application boundary with exactly
+`execute(*args, **kwargs)`. Zero arguments, many arguments, list/tuple-valued frame arguments and
+ordinary `*frames` calls are therefore unambiguous; expanded varargs already appear as separate
+top-level `args` nodes.
 
-The request still contains inputs and output paths for `runtime` and `inspect`; those operations
-must not read, invoke or write behavioural output.
+There are at most 256 positional slots, 256 keyword slots and 256 items in one frame sequence.
+Keyword names are non-keyword Python identifiers of at most 128 characters. Each JSON value is at
+most 256 KiB and all JSON arguments total at most 512 KiB. `request.json` is limited to 1 MiB.
+Arrow files do not count toward that JSON limit and remain the canonical frame authority. The
+command must not modify them.
+
+Requests for `runtime` and `inspect` also contain an invocation and output paths, but those
+operations must not read inputs, invoke behaviour or write behavioural output.
 
 ## Response
 
@@ -140,7 +157,7 @@ Each operation writes exactly these top-level fields:
 
 ```json
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "outcome": "returned",
   "duration_seconds": 0.00125,
   "exception": null,
@@ -207,10 +224,11 @@ the case as `ERROR`, not as a behavioural incompatibility.
 Do not map a normal application exception to `error`; use `raised`. Conversely, do not map adapter
 failure to a domain exception merely to obtain `FAILED`.
 
-`mutated_inputs` is an ordered subset of the request's input names. It reports application-visible
-mutation of deserialized input objects, not changes to transport files. Use an empty list if the
-adapter cannot expose mutation as part of its contract. `return_type` is a bounded descriptive label
-for a successful raw application result, or `null` otherwise.
+`mutated_inputs` is an ordered subset of top-level call labels: `args/0`, `args/1`, … followed by
+`kwargs/name`. A frame sequence is tracked as its containing call argument. The field reports
+application-visible mutation of deserialized objects, not changes to transport files. Use an empty
+list if the adapter cannot expose mutation as part of its contract. `return_type` is a bounded
+descriptive label for a successful raw application result, or `null` otherwise.
 
 ## Runtime and source identity
 
@@ -261,7 +279,7 @@ An adapter is ready when it can:
 1. accept the appended session-root argument and read call tokens from standard input;
 2. respond successfully to `runtime` without importing the application;
 3. respond to `inspect` after checking target-side imports/configuration but without invocation;
-4. read every declared Arrow input and apply the canonical-to-target mapping;
+4. reconstruct every invocation node and apply the canonical-to-target mapping;
 5. distinguish `returned`, application `raised`, and adapter `error` outcomes;
 6. write canonical Arrow/JSON output and an atomic strict response;
 7. report stable runtime/source provenance; and

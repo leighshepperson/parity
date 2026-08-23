@@ -173,7 +173,7 @@ stale, and `2` means verification errored. Treat `ms3:...` as a data-free classi
 signature or proof of source identity. This command re-executes project code; do not run an
 unreviewed checkout or artifact outside a sandbox.
 
-Replay v2 locates the directory containing `parity.toml` from a bounded ancestor of the artifact,
+Replay v3 locates the directory containing `parity.toml` from a bounded ancestor of the artifact,
 never from the agent process's current directory. Keep the managed workspace and its environments
 inside that configuration directory, and keep wrappers in the workspace directory.
 Interpreters, workdirs and path-like command executables must remain configuration-local. If a live

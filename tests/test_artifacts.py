@@ -11,14 +11,15 @@ import pytest
 
 from parity.artifacts import ArtifactStore
 from parity.engine import ReplayError, replay_artifact
+from parity.invocation import Invocation
 from parity.models import (
     CallableSpec,
     CaseConfig,
     CaseProvenance,
     ComparisonPolicy,
     ExampleResult,
-    InputBundle,
-    InputSpec,
+    FrameArgument,
+    InvocationConfig,
     Mismatch,
     MismatchKind,
     Status,
@@ -36,11 +37,12 @@ def _case(tmp_path: Path) -> CaseConfig:
             environment={"API_TOKEN": "do-not-store"},
         ),
         candidate=CallableSpec(target="new:transform", adapter="polars"),
-        fixture=tmp_path / "source.parquet",
-        static_kwargs={"api_key": "also-secret", "mode": "strict"},
-        reference_kwargs={"engine": "pandas", "reference_token": "reference-secret"},
-        candidate_kwargs={"engine": "polars", "candidate_token": "candidate-secret"},
+        invocation=InvocationConfig(args=[FrameArgument(fixture=tmp_path / "source.parquet")]),
     )
+
+
+def _invocation(*args: object, **kwargs: object) -> Invocation:
+    return Invocation(args=args, kwargs=kwargs)
 
 
 def _result() -> ExampleResult:
@@ -63,12 +65,18 @@ def test_inspection_artifact_is_complete_hashed_and_not_claimed_as_replayable(
 ) -> None:
     destination = ArtifactStore(tmp_path / "artifacts").write_failure(
         _case(tmp_path),
-        pa.table({"account": ["customer-a"], "amount": [10]}),
+        _invocation(pa.table({"account": ["customer-a"], "amount": [10]})),
         _result(),
         source="generated",
         seed=17,
     )
-    expected = {"input.arrow", "input.parquet", "result.json", "replay.json", "manifest.json"}
+    expected = {
+        "input-000.arrow",
+        "input-000.parquet",
+        "result.json",
+        "replay.json",
+        "manifest.json",
+    }
     assert {path.name for path in destination.iterdir()} == expected
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["case"] == "orders"
@@ -80,29 +88,19 @@ def test_inspection_artifact_is_complete_hashed_and_not_claimed_as_replayable(
         assert len(content) == metadata["bytes"]
     replay_text = (destination / "replay.json").read_text(encoding="utf-8")
     replay = json.loads(replay_text)
-    assert replay["version"] == 2
+    assert replay["version"] == 3
     assert "expected_runtime" not in replay
     assert "config_sha256" not in replay
     assert "command" not in replay
     assert "path_base" not in replay
-    assert replay["inputs"] == [{"name": "input", "file": "input.arrow"}]
-    assert replay["case"]["fixture"] == "input.arrow"
+    assert replay["invocation"] == {
+        "args": [{"kind": "arrow", "file": "input-000.arrow"}],
+        "kwargs": {},
+    }
+    assert replay["case"]["invocation"] == {}
     assert replay["case"]["reference"] is None
     assert replay["replay_blockers"] == {"reference": "external_workdir"}
-    assert replay["case"]["static_kwargs"]["api_key"] == "<redacted>"
-    assert replay["case"]["static_kwargs"]["mode"] == "strict"
-    assert replay["case"]["reference_kwargs"] == {
-        "engine": "pandas",
-        "reference_token": "<redacted>",
-    }
-    assert replay["case"]["candidate_kwargs"] == {
-        "candidate_token": "<redacted>",
-        "engine": "polars",
-    }
     assert "do-not-store" not in replay_text
-    assert "also-secret" not in replay_text
-    assert "reference-secret" not in replay_text
-    assert "candidate-secret" not in replay_text
     assert str(tmp_path) not in replay_text
 
 
@@ -131,7 +129,7 @@ def test_artifact_can_use_a_stable_project_root_from_an_unrelated_cwd(
             workdir=project,
             python=candidate_python,
         ),
-        fixture=project / "fixture.arrow",
+        invocation=InvocationConfig(args=[FrameArgument(fixture=project / "fixture.arrow")]),
     )
     runtime = collect_runtime_provenance()
     monkeypatch.chdir(unrelated)
@@ -141,7 +139,7 @@ def test_artifact_can_use_a_stable_project_root_from_an_unrelated_cwd(
         invocation_directory=project,
     ).write_failure(
         case,
-        pa.table({"id": [1]}),
+        _invocation(pa.table({"id": [1]})),
         _result(),
         runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
         config_sha256="d" * 64,
@@ -169,7 +167,7 @@ def test_replayable_artifact_outside_project_root_records_bounded_blocker(
         name="external-artifact",
         reference=CallableSpec(target="project:reference"),
         candidate=CallableSpec(target="project:candidate"),
-        fixture=project / "fixture.arrow",
+        invocation=InvocationConfig(args=[FrameArgument(fixture=project / "fixture.arrow")]),
     )
 
     destination = ArtifactStore(
@@ -177,7 +175,7 @@ def test_replayable_artifact_outside_project_root_records_bounded_blocker(
         invocation_directory=project,
     ).write_failure(
         case,
-        pa.table({"id": [1]}),
+        _invocation(pa.table({"id": [1]})),
         _result(),
         runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
         config_sha256="e" * 64,
@@ -195,11 +193,11 @@ def test_replayable_artifact_outside_project_root_records_bounded_blocker(
 
 def test_artifact_root_is_self_ignoring_without_replacing_user_policy(tmp_path: Path) -> None:
     root = tmp_path / ".parity"
-    ArtifactStore(root).write_failure("orders", pa.table({"id": [1]}), _result())
+    ArtifactStore(root).write_failure("orders", _invocation(pa.table({"id": [1]})), _result())
     assert (root / ".gitignore").read_text(encoding="utf-8") == "*\n"
 
     (root / ".gitignore").write_text("# user policy\n", encoding="utf-8")
-    ArtifactStore(root).write_failure("customers", pa.table({"id": [2]}), _result())
+    ArtifactStore(root).write_failure("customers", _invocation(pa.table({"id": [2]})), _result())
     assert (root / ".gitignore").read_text(encoding="utf-8") == "# user policy\n"
 
 
@@ -219,21 +217,21 @@ def test_artifact_records_complete_runtime_and_config_bindings(
             adapter="polars",
             required_distributions={"numpy": ">=1"},
         ),
-        fixture=tmp_path / "source.arrow",
+        invocation=InvocationConfig(args=[FrameArgument(fixture=tmp_path / "source.arrow")]),
         comparison=ComparisonPolicy(row_order="keyed", row_keys=["account", "sequence"]),
     )
     destination = ArtifactStore(
         tmp_path / "artifacts", invocation_directory=tmp_path
     ).write_failure(
         case,
-        pa.table({"account": ["A"], "sequence": [1], "value": [10]}),
+        _invocation(pa.table({"account": ["A"], "sequence": [1], "value": [10]})),
         _result(),
         runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
         config_sha256="a" * 64,
     )
 
     replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 2
+    assert replay["version"] == 3
     assert replay["path_base"] == {"kind": "artifact_ancestor", "levels": 3}
     assert replay["command"] == ["parity", "replay", "<artifact-path>"]
     assert replay["config_sha256"] == "a" * 64
@@ -256,7 +254,7 @@ def test_artifact_preserves_partial_runtime_for_inspection_without_replay_comman
         tmp_path / "artifacts", invocation_directory=tmp_path
     ).write_failure(
         "partial-runtime",
-        pa.table({"x": [1]}),
+        _invocation(pa.table({"x": [1]})),
         _result(),
         reference=CallableSpec(target="project:reference"),
         candidate=CallableSpec(target="project:candidate"),
@@ -290,16 +288,16 @@ def test_artifact_preserves_project_virtualenv_python_entrypoint(tmp_path: Path)
             python=interpreter,
             workdir=tmp_path,
         ),
-        fixture=tmp_path / "source.arrow",
+        invocation=InvocationConfig(args=[FrameArgument(fixture=tmp_path / "source.arrow")]),
     )
 
     config_sha256 = effective_config_sha256(
-        {"version": 1, "cases": [case.model_dump(mode="python", by_alias=True)]}
+        {"version": 2, "cases": [case.model_dump(mode="python", by_alias=True)]}
     )
     alternate = case.model_copy(deep=True)
     alternate.candidate.python = tmp_path / ".venv-other" / "bin" / "python"
     alternate_hash = effective_config_sha256(
-        {"version": 1, "cases": [alternate.model_dump(mode="python", by_alias=True)]}
+        {"version": 2, "cases": [alternate.model_dump(mode="python", by_alias=True)]}
     )
     assert config_sha256 != alternate_hash
 
@@ -308,7 +306,7 @@ def test_artifact_preserves_project_virtualenv_python_entrypoint(tmp_path: Path)
         os.chdir(tmp_path)
         destination = ArtifactStore(tmp_path / "artifacts").write_failure(
             case,
-            pa.table({"id": [1]}),
+            _invocation(pa.table({"id": [1]})),
             _result(),
             runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
             config_sha256=config_sha256,
@@ -357,7 +355,7 @@ def test_external_target_paths_record_an_actionable_replay_reason(
         name=f"external-{field}",
         reference=reference,
         candidate=CallableSpec(target="project:candidate"),
-        fixture=project / "source.arrow",
+        invocation=InvocationConfig(args=[FrameArgument(fixture=project / "source.arrow")]),
     )
 
     old_directory = Path.cwd()
@@ -365,7 +363,7 @@ def test_external_target_paths_record_an_actionable_replay_reason(
         os.chdir(project)
         destination = ArtifactStore(project / "artifacts").write_failure(
             case,
-            pa.table({"id": [1]}),
+            _invocation(pa.table({"id": [1]})),
             _result(),
             runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
             config_sha256="c" * 64,
@@ -387,7 +385,7 @@ def test_artifact_rejects_malformed_config_fingerprint(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="config_sha256"):
         ArtifactStore(tmp_path / "artifacts").write_failure(
             "bad-fingerprint",
-            pa.table({"x": [1]}),
+            _invocation(pa.table({"x": [1]})),
             _result(),
             runtime_provenance=CaseProvenance(reference=runtime, candidate=runtime),
             config_sha256="bad",
@@ -401,7 +399,7 @@ def test_artifact_failure_leaves_no_partial_campaign(tmp_path: Path, monkeypatch
     monkeypatch.setattr("parity.artifacts.pq.write_table", fail)
     root = tmp_path / "artifacts"
     with pytest.raises(OSError, match="disk full"):
-        ArtifactStore(root).write_failure("case", pa.table({"x": [1]}), _result())
+        ArtifactStore(root).write_failure("case", _invocation(pa.table({"x": [1]})), _result())
     assert not list(root.rglob(".pending-*"))
 
 
@@ -411,25 +409,25 @@ def test_artifact_keeps_lossless_arrow_when_parquet_cannot_represent_schema(
     table = pa.table({"metadata": pa.array([{}, None], type=pa.struct([]))})
 
     destination = ArtifactStore(tmp_path / "artifacts").write_failure(
-        "empty-struct", table, _result()
+        "empty-struct", _invocation(table), _result()
     )
 
-    assert (destination / "input.arrow").is_file()
-    assert not (destination / "input.parquet").exists()
+    assert (destination / "input-000.arrow").is_file()
+    assert not (destination / "input-000.parquet").exists()
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
-    assert "input.arrow" in manifest["files"]
-    assert "input.parquet" not in manifest["files"]
+    assert "input-000.arrow" in manifest["files"]
+    assert "input-000.parquet" not in manifest["files"]
 
 
-def test_artifact_persists_named_input_bundle_atomically(tmp_path: Path) -> None:
+def test_artifact_persists_named_invocation_atomically(tmp_path: Path) -> None:
     destination = ArtifactStore(
         tmp_path / "artifacts", invocation_directory=tmp_path
     ).write_failure(
         "orders-join",
-        {
-            "orders": pa.table({"customer_id": [1, 2], "amount": [10, 20]}),
-            "customers": pa.table({"id": [1, 2], "name": ["A", "B"]}),
-        },
+        _invocation(
+            orders=pa.table({"customer_id": [1, 2], "amount": [10, 20]}),
+            customers=pa.table({"id": [1, 2], "name": ["A", "B"]}),
+        ),
         _result(),
         source="generated:shrunk",
     )
@@ -445,47 +443,41 @@ def test_artifact_persists_named_input_bundle_atomically(tmp_path: Path) -> None
         "result.json",
     }
     replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
-    assert replay["version"] == 2
+    assert replay["version"] == 3
     assert replay["path_base"] == {"kind": "artifact_ancestor", "levels": 3}
-    assert replay["inputs"] == [
-        {"name": "orders", "file": "input-000.arrow"},
-        {"name": "customers", "file": "input-001.arrow"},
-    ]
-    assert replay["case"]["input_bundle"]["inputs"] == {
-        "orders": {"fixture": "input-000.arrow"},
-        "customers": {"fixture": "input-001.arrow"},
+    assert replay["invocation"] == {
+        "args": [],
+        "kwargs": {
+            "orders": {"kind": "arrow", "file": "input-000.arrow"},
+            "customers": {"kind": "arrow", "file": "input-001.arrow"},
+        },
     }
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == 2
+    assert manifest["version"] == 3
     assert set(manifest["files"]) == names - {"manifest.json"}
     for name, metadata in manifest["files"].items():
         content = (destination / name).read_bytes()
         assert hashlib.sha256(content).hexdigest() == metadata["sha256"]
 
 
-def test_artifact_rejects_empty_or_invalid_input_bundles(tmp_path: Path) -> None:
+def test_artifact_accepts_zero_or_many_inputs_and_rejects_legacy_values(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "artifacts")
-    with pytest.raises(ValueError, match="two or three"):
-        store.write_failure("empty", {}, _result())
-    with pytest.raises(TypeError, match=r"pyarrow\.Table"):
-        store.write_failure("invalid", {"orders": object()}, _result())  # type: ignore[dict-item]
-    with pytest.raises(ValueError, match="two or three"):
-        store.write_failure("one", {"orders": pa.table({"x": [1]})}, _result())
-    with pytest.raises(ValueError, match="two or three"):
-        store.write_failure(
-            "four",
-            {name: pa.table({"x": [1]}) for name in ("one", "two", "three", "four")},
-            _result(),
-        )
-    with pytest.raises(TypeError, match="Arrow table or a map"):
-        store.write_failure(  # type: ignore[arg-type]
-            "sequence",
-            [pa.table({"x": [1]}), pa.table({"x": [2]})],
-            _result(),
-        )
+    empty = store.write_failure("empty", Invocation(), _result())
+    replay = json.loads((empty / "replay.json").read_text(encoding="utf-8"))
+    assert replay["invocation"] == {"args": [], "kwargs": {}}
+
+    many = store.write_failure(
+        "many",
+        Invocation(args=tuple(pa.table({"x": [index]}) for index in range(7))),
+        _result(),
+    )
+    assert len(list(many.glob("input-*.arrow"))) == 7
+
+    with pytest.raises(TypeError, match=r"parity\.Invocation"):
+        store.write_failure("legacy", {"orders": pa.table({"x": [1]})}, _result())  # type: ignore[arg-type]
 
 
-def test_configured_bundle_artifact_requires_exact_names_and_order_without_path_leaks(
+def test_configured_invocation_preserves_exact_bindings_without_fixture_path_leaks(
     tmp_path: Path,
 ) -> None:
     private_fixture = tmp_path.parent / "private-third.arrow"
@@ -493,32 +485,30 @@ def test_configured_bundle_artifact_requires_exact_names_and_order_without_path_
         name="strict-bundle",
         reference=CallableSpec(target="old:transform"),
         candidate=CallableSpec(target="new:transform"),
-        input_bundle=InputBundle(
-            inputs={
-                "zebra": InputSpec(fixture=tmp_path / "zebra.arrow"),
-                "alpha": InputSpec(fixture=tmp_path / "alpha.arrow"),
-                "third": InputSpec(fixture=private_fixture),
-            }
+        invocation=InvocationConfig(
+            kwargs={
+                "zebra": FrameArgument(fixture=tmp_path / "zebra.arrow"),
+                "alpha": FrameArgument(fixture=tmp_path / "alpha.arrow"),
+                "third": FrameArgument(fixture=private_fixture),
+            },
         ),
     )
     store = ArtifactStore(tmp_path / "artifacts")
-    tables = {
-        "zebra": pa.table({"x": [1]}),
-        "alpha": pa.table({"x": [2]}),
+    destination = store.write_failure(
+        case,
+        _invocation(
+            zebra=pa.table({"x": [1]}),
+            alpha=pa.table({"x": [2]}),
+            third=pa.table({"x": [3]}),
+        ),
+        _result(),
+    )
+    replay = json.loads((destination / "replay.json").read_text(encoding="utf-8"))
+    assert replay["invocation"]["kwargs"] == {
+        "zebra": {"kind": "arrow", "file": "input-000.arrow"},
+        "alpha": {"kind": "arrow", "file": "input-001.arrow"},
+        "third": {"kind": "arrow", "file": "input-002.arrow"},
     }
-
-    with pytest.raises(ValueError, match="names and order"):
-        store.write_failure(case, tables, _result())
-    with pytest.raises(ValueError, match="names and order"):
-        store.write_failure(
-            case,
-            {
-                "alpha": tables["alpha"],
-                "zebra": tables["zebra"],
-                "third": pa.table({"x": [3]}),
-            },
-            _result(),
-        )
 
     persisted_text = "\n".join(
         path.read_text(encoding="utf-8") for path in (tmp_path / "artifacts").rglob("*.json")

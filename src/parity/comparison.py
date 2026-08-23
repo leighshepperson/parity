@@ -458,6 +458,38 @@ def _numeric_equal(reference: Any, candidate: Any, policy: ComparisonPolicy) -> 
     return difference <= allowed
 
 
+def _decode_pointer_segment(segment: str) -> str:
+    return segment.replace("~1", "/").replace("~0", "~")
+
+
+def _override_matches(path: str, pointer: str) -> bool:
+    """Match an output path against an RFC 6901 pointer with ``*`` segments."""
+
+    pattern = r"^\$"
+    for raw in pointer[1:].split("/"):
+        segment = _decode_pointer_segment(raw)
+        if segment == "*":
+            pattern += r"\[[^\]]+\]"
+        elif segment.isdecimal():
+            pattern += rf"(?:\[{int(segment)}\]|\[{re.escape(repr(segment))}\])"
+        else:
+            pattern += rf"\[{re.escape(repr(segment))}\]"
+    return re.fullmatch(pattern, path) is not None
+
+
+def _policy_for_output_path(policy: ComparisonPolicy, path: str) -> ComparisonPolicy:
+    selected = policy.model_dump(mode="python", exclude={"overrides"})
+    matched = False
+    for override in policy.overrides:
+        if not _override_matches(path, override.path):
+            continue
+        selected.update(override.model_dump(mode="python", exclude={"path"}, exclude_none=True))
+        matched = True
+    if not matched:
+        return policy
+    return ComparisonPolicy.model_validate({**selected, "overrides": policy.overrides})
+
+
 def _value_mismatches(
     reference: Any,
     candidate: Any,
@@ -466,6 +498,7 @@ def _value_mismatches(
     *,
     max_mismatches: int,
 ) -> list[Mismatch]:
+    policy = _policy_for_output_path(policy, path)
     reference = canonicalize(reference)
     candidate = canonicalize(candidate)
 

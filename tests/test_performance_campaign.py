@@ -9,7 +9,9 @@ from parity.engine import run_suite
 from parity.models import (
     CallableSpec,
     CaseConfig,
+    FrameArgument,
     GenerationConfig,
+    InvocationConfig,
     ParityConfig,
     PerformanceConfig,
     Status,
@@ -54,7 +56,7 @@ def test_isolated_cpu_heavy_campaign_enforces_statistical_slowdown_gate(
             workdir=tmp_path,
             native_threads=1,
         ),
-        fixture=fixture,
+        invocation=InvocationConfig(args=[FrameArgument(fixture=fixture)]),
         generation=GenerationConfig(
             max_examples=1,
             stability_repeats=1,

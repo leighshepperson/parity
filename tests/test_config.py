@@ -9,12 +9,11 @@ from parity.config import ConfigError, load_config
 from parity.provenance import effective_config_sha256
 
 VALID = """
-version = 1
+version = 2
 artifact_dir = "artifacts"
 
 [[cases]]
 name = "orders"
-fixture = "fixtures/orders.csv"
 
 [cases.reference]
 target = "transforms:legacy"
@@ -24,6 +23,10 @@ record_distributions = ["Scikit_Learn", "skrub"]
 [cases.candidate]
 target = "transforms:rewritten"
 adapter = "polars"
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/orders.csv"
 """
 
 
@@ -35,7 +38,9 @@ def test_load_config_resolves_paths_from_config_directory(tmp_path: Path) -> Non
     config = load_config(config_path)
 
     assert config.artifact_dir == (config_path.parent / "artifacts").resolve()
-    assert config.cases[0].fixture == (config_path.parent / "fixtures/orders.csv").resolve()
+    invocation = config.cases[0].invocation
+    assert invocation is not None
+    assert invocation.args[0].fixture == (config_path.parent / "fixtures/orders.csv").resolve()
     assert config.cases[0].reference.workdir == config_path.parent.resolve()
     assert config.cases[0].reference.pandas_input == "native"
     assert config.cases[0].reference.record_distributions == ["scikit-learn", "skrub"]
@@ -46,7 +51,7 @@ def test_load_config_accepts_custom_generation_and_parallel_limits(tmp_path: Pat
     path = tmp_path / "parity.toml"
     path.write_text(
         """
-version = 1
+version = 2
 jobs = 4
 native_threads = 1
 
@@ -93,11 +98,11 @@ def test_load_config_reports_missing_file(tmp_path: Path) -> None:
         load_config(tmp_path / "missing.toml")
 
 
-def test_load_config_rejects_partial_input_bundle_fixtures(tmp_path: Path) -> None:
+def test_load_config_accepts_mixed_fixed_and_generated_frames(tmp_path: Path) -> None:
     path = tmp_path / "parity.toml"
     path.write_text(
         """
-version = 1
+version = 2
 
 [[cases]]
 name = "join"
@@ -108,31 +113,37 @@ target = "transforms:legacy"
 [cases.candidate]
 target = "transforms:rewritten"
 
-[cases.input_bundle.inputs.left]
+[cases.invocation.kwargs.left]
+kind = "frame"
 fixture = "left.csv"
 
-[cases.input_bundle.inputs.right.schema]
+[cases.invocation.kwargs.right]
+kind = "frame"
+
+[cases.invocation.kwargs.right.schema]
 min_rows = 0
 max_rows = 2
 
-[[cases.input_bundle.inputs.right.schema.columns]]
+[[cases.invocation.kwargs.right.schema.columns]]
 name = "id"
 dtype = "integer"
 """,
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="provided for every input or none"):
-        load_config(path)
+    invocation = load_config(path).cases[0].invocation
+    assert invocation is not None
+    assert invocation.kwargs["left"].fixture == (tmp_path / "left.csv").resolve()
+    assert invocation.kwargs["right"].fixture is None
 
 
-def test_load_config_preserves_positional_bundle_order_and_resolves_fixtures(
+def test_load_config_preserves_positional_argument_order_and_resolves_fixtures(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "parity.toml"
     path.write_text(
         """
-version = 1
+version = 2
 
 [[cases]]
 name = "join"
@@ -143,24 +154,25 @@ target = "transforms:legacy"
 [cases.candidate]
 target = "transforms:rewritten"
 
-[cases.input_bundle]
-binding = "positional"
-
-[cases.input_bundle.inputs.zebra]
+[[cases.invocation.args]]
+kind = "frame"
+name = "zebra"
 fixture = "fixtures/zebra.csv"
 
-[cases.input_bundle.inputs.alpha]
+[[cases.invocation.args]]
+kind = "frame"
+name = "alpha"
 fixture = "fixtures/alpha.csv"
 """,
         encoding="utf-8",
     )
 
-    bundle = load_config(path).cases[0].input_bundle
+    invocation = load_config(path).cases[0].invocation
 
-    assert bundle is not None
-    assert list(bundle.inputs) == ["zebra", "alpha"]
-    assert bundle.inputs["zebra"].fixture == (tmp_path / "fixtures/zebra.csv").resolve()
-    assert bundle.inputs["alpha"].fixture == (tmp_path / "fixtures/alpha.csv").resolve()
+    assert invocation is not None
+    assert [argument.name for argument in invocation.args] == ["zebra", "alpha"]
+    assert invocation.args[0].fixture == (tmp_path / "fixtures/zebra.csv").resolve()
+    assert invocation.args[1].fixture == (tmp_path / "fixtures/alpha.csv").resolve()
 
 
 def test_load_config_preserves_distinct_virtualenv_python_symlink_paths(tmp_path: Path) -> None:
@@ -171,11 +183,10 @@ def test_load_config_preserves_distinct_virtualenv_python_symlink_paths(tmp_path
         executable.symlink_to(sys.executable)
     config_path.write_text(
         """
-version = 1
+version = 2
 
 [[cases]]
 name = "versions"
-fixture = "fixture.json"
 
 [cases.reference]
 target = "transform:run"
@@ -184,6 +195,10 @@ python = "old/bin/python"
 [cases.candidate]
 target = "transform:run"
 python = "new/bin/python"
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixture.json"
 """,
         encoding="utf-8",
     )
@@ -207,11 +222,10 @@ def test_load_config_expands_strict_cases_file_and_bounded_defaults(tmp_path: Pa
     shared.mkdir()
     (shared / "cases.toml").write_text(
         """
-version = 1
+version = 2
 
 [[cases]]
 name = "orders"
-fixture = "fixtures/orders.csv"
 
 [cases.reference]
 target = "transforms:legacy"
@@ -227,13 +241,17 @@ rtol = 0.0001
 
 [cases.generation]
 max_examples = 7
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/orders.csv"
 """,
         encoding="utf-8",
     )
     config_path = tmp_path / "parity.toml"
     config_path.write_text(
         """
-version = 1
+version = 2
 artifact_dir = "artifacts"
 cases_file = "shared/cases.toml"
 
@@ -272,7 +290,8 @@ bootstrap_samples = 500
     config = load_config(config_path)
     case = config.cases[0]
 
-    assert case.fixture == (tmp_path / "fixtures/orders.csv").resolve()
+    assert case.invocation is not None
+    assert case.invocation.args[0].fixture == (tmp_path / "fixtures/orders.csv").resolve()
     assert case.timeout_seconds == 60
     assert case.reference.adapter == "pandas"
     assert case.reference.pandas_input == "native"
@@ -300,7 +319,7 @@ def test_callable_defaults_inherit_and_override_required_distributions(
     config_path = tmp_path / "parity.toml"
     config_path.write_text(
         """
-version = 1
+version = 2
 
 [case_defaults.reference]
 required_distributions = { Scikit_Learn = ">=2,<4", polars = ">=1,<2" }
@@ -310,7 +329,6 @@ required_distributions = { pandas = ">=2,<4" }
 
 [[cases]]
 name = "requirements"
-fixture = "unused.json"
 
 [cases.reference]
 target = "transforms:legacy"
@@ -318,6 +336,10 @@ required_distributions = { scikit-learn = ">=3,<4" }
 
 [cases.candidate]
 target = "transforms:rewritten"
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "unused.json"
 """,
         encoding="utf-8",
     )
@@ -331,34 +353,33 @@ target = "transforms:rewritten"
     assert case.candidate.required_distributions == {"pandas": "<4,>=2"}
 
 
-def test_case_defaults_merge_endpoint_kwargs_without_hiding_case_values(tmp_path: Path) -> None:
+def test_case_defaults_cannot_hide_the_invocation_contract(tmp_path: Path) -> None:
     config_path = tmp_path / "parity.toml"
     config_path.write_text(
         """
-version = 1
+version = 2
 
 [case_defaults]
-reference_kwargs = { engine = "pandas", shared_option = true }
-candidate_kwargs = { engine = "polars", shared_option = true }
+invocation = { args = [] }
 
 [[cases]]
 name = "engines"
-fixture = "unused.arrow"
-reference_kwargs = { engine = "pandas-override" }
 
 [cases.reference]
 target = "transforms:run"
 
 [cases.candidate]
 target = "transforms:run"
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "unused.arrow"
 """,
         encoding="utf-8",
     )
 
-    case = load_config(config_path).cases[0]
-
-    assert case.reference_kwargs == {"engine": "pandas-override", "shared_option": True}
-    assert case.candidate_kwargs == {"engine": "polars", "shared_option": True}
+    with pytest.raises(ConfigError, match="invocation"):
+        load_config(config_path)
 
 
 def test_reused_and_inline_cases_have_identical_effective_model_and_hash(
@@ -367,7 +388,6 @@ def test_reused_and_inline_cases_have_identical_effective_model_and_hash(
     case_text = """
 [[cases]]
 name = "orders"
-fixture = "fixtures/orders.csv"
 
 [cases.reference]
 target = "transforms:legacy"
@@ -377,14 +397,16 @@ target = "transforms:rewritten"
 
 [cases.comparison]
 rtol = 0.0001
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/orders.csv"
 """
-    (tmp_path / "cases-a.toml").write_text("version = 1\n" + case_text, encoding="utf-8")
-    (tmp_path / "cases-b.toml").write_text("version = 1\n" + case_text, encoding="utf-8")
+    (tmp_path / "cases-a.toml").write_text("version = 2\n" + case_text, encoding="utf-8")
+    (tmp_path / "cases-b.toml").write_text("version = 2\n" + case_text, encoding="utf-8")
     defaults = """
 [case_defaults]
 timeout_seconds = 45
-reference_kwargs = { engine = "pandas" }
-candidate_kwargs = { engine = "polars" }
 
 [case_defaults.reference]
 adapter = "pandas"
@@ -405,24 +427,21 @@ enabled = false
     second_path = tmp_path / "second.toml"
     inline_path = tmp_path / "inline.toml"
     first_path.write_text(
-        'version = 1\nartifact_dir = "artifacts"\ncases_file = "cases-a.toml"\n' + defaults,
+        'version = 2\nartifact_dir = "artifacts"\ncases_file = "cases-a.toml"\n' + defaults,
         encoding="utf-8",
     )
     second_path.write_text(
-        'version = 1\nartifact_dir = "artifacts"\ncases_file = "cases-b.toml"\n' + defaults,
+        'version = 2\nartifact_dir = "artifacts"\ncases_file = "cases-b.toml"\n' + defaults,
         encoding="utf-8",
     )
     inline_path.write_text(
         """
-version = 1
+version = 2
 artifact_dir = "artifacts"
 
 [[cases]]
 name = "orders"
-fixture = "fixtures/orders.csv"
 timeout_seconds = 45
-reference_kwargs = { engine = "pandas" }
-candidate_kwargs = { engine = "polars" }
 
 [cases.reference]
 target = "transforms:legacy"
@@ -440,6 +459,10 @@ rtol = 0.0001
 
 [cases.performance]
 enabled = false
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/orders.csv"
 """,
         encoding="utf-8",
     )
@@ -463,12 +486,12 @@ enabled = false
 @pytest.mark.parametrize(
     "root",
     [
-        "version = 1\n",
-        'version = 1\ncases_file = "cases.toml"\n[[cases]]\nname = "inline"\n',
+        "version = 2\n",
+        'version = 2\ncases_file = "cases.toml"\n[[cases]]\nname = "inline"\n',
     ],
 )
 def test_load_config_requires_exactly_one_case_source(tmp_path: Path, root: str) -> None:
-    (tmp_path / "cases.toml").write_text("version = 1\ncases = []\n", encoding="utf-8")
+    (tmp_path / "cases.toml").write_text("version = 2\ncases = []\n", encoding="utf-8")
     path = tmp_path / "parity.toml"
     path.write_text(root, encoding="utf-8")
 
@@ -493,20 +516,23 @@ def test_load_config_rejects_forbidden_or_invalid_case_defaults(
     path = tmp_path / "parity.toml"
     path.write_text(
         f"""
-version = 1
+version = 2
 
 [case_defaults]
 {defaults}
 
 [[cases]]
 name = "orders"
-fixture = "orders.csv"
 
 [cases.reference]
 target = "transforms:legacy"
 
 [cases.candidate]
 target = "transforms:rewritten"
+
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "orders.csv"
 """,
         encoding="utf-8",
     )
@@ -518,10 +544,10 @@ target = "transforms:rewritten"
 @pytest.mark.parametrize(
     ("cases_text", "message"),
     [
-        ('version = 1\ncases_file = "nested.toml"\n', "cases_file"),
-        ("version = 1\nunknown = true\ncases = []\n", "unknown"),
+        ('version = 2\ncases_file = "nested.toml"\n', "cases_file"),
+        ("version = 2\nunknown = true\ncases = []\n", "unknown"),
         ("cases = []\n", "version"),
-        ("version = 1\ncases = []\n", "at least 1 item"),
+        ("version = 2\ncases = []\n", "at least 1 item"),
     ],
 )
 def test_load_config_rejects_non_case_content_in_cases_file(
@@ -531,7 +557,7 @@ def test_load_config_rejects_non_case_content_in_cases_file(
 ) -> None:
     (tmp_path / "cases.toml").write_text(cases_text, encoding="utf-8")
     path = tmp_path / "parity.toml"
-    path.write_text('version = 1\ncases_file = "cases.toml"\n', encoding="utf-8")
+    path.write_text('version = 2\ncases_file = "cases.toml"\n', encoding="utf-8")
 
     with pytest.raises(ConfigError, match=message):
         load_config(path)
@@ -539,12 +565,12 @@ def test_load_config_rejects_non_case_content_in_cases_file(
 
 def test_load_config_restricts_cases_file_to_root_directory(tmp_path: Path) -> None:
     outside = tmp_path / "outside.toml"
-    outside.write_text("version = 1\ncases = []\n", encoding="utf-8")
+    outside.write_text("version = 2\ncases = []\n", encoding="utf-8")
     root = tmp_path / "project"
     root.mkdir()
 
     for declared in (str(outside), "../outside.toml", "missing.toml"):
         path = root / "parity.toml"
-        path.write_text(f'version = 1\ncases_file = "{declared}"\n', encoding="utf-8")
+        path.write_text(f'version = 2\ncases_file = "{declared}"\n', encoding="utf-8")
         with pytest.raises(ConfigError, match=r"cases_file|cases file"):
             load_config(path)

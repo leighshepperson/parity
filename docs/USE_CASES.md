@@ -4,6 +4,11 @@ Parity fits when two implementations can be given the same reviewable input cont
 observable outcomes can be compared. The implementations do not need matching source, APIs,
 dependencies, runtimes or languages.
 
+The contract is a complete call: zero or more positional and keyword JSON/frame values followed by
+a canonical return or domain exception. Project-owned generators can produce bounded structures
+such as recursive syntax trees and stateful event streams. Dataframes are one specialisation of
+that model, not the model itself.
+
 ## Supported now
 
 | Migration | Typical endpoints | Contract boundary |
@@ -11,6 +16,7 @@ dependencies, runtimes or languages.
 | Dependency or Python upgrade | Released packages and/or local checkouts | Separately locked target environments |
 | Release or branch regression | Stable baseline and local/published candidate | Fixtures, generated inputs and replay |
 | Large refactor or API redesign | Side-specific Python wrappers | Canonical Arrow/JSON result |
+| Rules engine, parser or protocol rewrite | JSON requests, recursive programs or event streams | Nested values, domain exceptions and mutation |
 | pandas, Polars or backend change | Built-in or project-owned adapters | Explicit order, dtype, null and tolerance policy |
 | Python rewrite | Unrelated modules/packages | Portable worker in each environment |
 | Cross-language rewrite | Python and/or protocol-speaking commands | Versioned Arrow/JSON target protocol |
@@ -47,13 +53,18 @@ complex wrappers can hide the very migration defect being tested.
 ### Cross-language and legacy replacements
 
 Any executable that implements the [target protocol](TARGET_PROTOCOL.md) is a first-class endpoint.
-The adapter receives Arrow input, invokes the native program and returns a canonical value, domain
+The adapter receives the shared Arrow/JSON invocation, invokes the native program and returns a
+canonical value, domain
 exception or infrastructure error. The program may be Fortran, C/C++, Rust, Java, another Python
 runtime or a legacy CLI.
 
 The wrapped program does not link to Parity. A small Python boundary can use the
 [command-adapter SDK](TARGET_ADAPTER_SDK.md); a non-Python adapter can implement the protocol
 directly. Compilation, image construction and dependency installation remain outside Parity.
+
+The maintained [JavaScript-to-Python rules-engine proof](../case_studies/javascript_python_rules/README.md)
+exercises recursive JSON generation, keyword arguments, nested returns, domain exceptions,
+multi-finding shrinking and replay with no tabular input or output.
 
 ### Regression and performance gates
 

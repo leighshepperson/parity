@@ -15,17 +15,20 @@ That property reduces exposure; it does not make every output non-sensitive.
 | Evidence-verification JSON | No dataframe/value payloads; contains redacted case/artifact labels and mismatch digests | User-selected path | Developers and CI |
 | Compatibility budget | No dataframe/value payloads; contains case names, finding digests and reviewer-authored rationales | User-selected repository path | Developers and reviewers |
 | Workspace locks and generated environment config | Package versions/hashes and local source/interpreter paths | `.parity/workspace/` | Developers and CI |
-| `input.arrow` or bundled `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
+| `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
 | `manifest.json` | Metadata, paths and hashes | Counterexample directory | Restricted engineering team |
 | `result.json` in artifact | Structured mismatch evidence | Counterexample directory | Restricted engineering team |
 | `reference.json` and reference Arrow/JSON output | Yes for successful returns | Counterexample directory | Restricted engineering team |
-| `replay.json` | Command/config references | Counterexample directory | Restricted engineering team |
+| `replay.json` | Command/config references and sanitized JSON invocation values | Counterexample directory | Restricted engineering team |
 | Distilled/retired contract directory | Yes; minimized inputs and exact baseline outputs plus retirement rationale | User-selected project-private path | Restricted engineering team |
 | `parity doctor --json` | Executable, platform and working-directory paths | Console | Support after review |
 | `parity doctor --config ... --json` | Path-free allowlisted runtime versions | Console | Developers and CI |
 
 Even a minimized synthetic input can reveal a category, boundary or example copied from a schema.
 Treat the entire artifact directory at the same classification as its source fixture.
+JSON invocation arguments are sanitized before persistence. If sanitization changes a path- or
+secret-shaped value, Parity records `redacted_invocation` and disables automatic replay rather than
+claiming the altered call is exact.
 
 ## Safe operating pattern
 
@@ -158,7 +161,7 @@ trusted source and packaging metadata, or inside the hardened environment descri
 Configured runs and artifact replay execute the selected Python interpreter or command path. A
 configuration-local virtual-environment entry point may be a symlink to a host Python binary; Parity
 preserves that entry point because its surrounding environment determines installed packages.
-Configured replay paths are relative to the directory containing `parity.toml`; replay v2 derives
+Configured replay paths are relative to the directory containing `parity.toml`; replay v3 derives
 that base from the artifact's bounded ancestor declaration and never trusts the process current
 directory. Paths must stay lexically within that configuration base, but this is
 provenance hygiene, not a sandbox or trust boundary. External or missing paths leave bounded blocker

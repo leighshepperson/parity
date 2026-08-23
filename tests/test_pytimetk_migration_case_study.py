@@ -12,7 +12,7 @@ import pyarrow.ipc as ipc
 from parity.config import load_config
 from parity.migration import load_migration_manifest, migration_manifest_sha256
 from parity.migration_workspace import MigrationWorkspace
-from parity.models import ParityConfig
+from parity.models import FrameArgument, ParityConfig
 
 ROOT = Path(__file__).parents[1]
 STUDY = ROOT / "case_studies" / "pytimetk_migration"
@@ -143,15 +143,18 @@ def test_release_and_current_configs_have_the_same_strict_campaigns() -> None:
             assert case.comparison.atol == 1e-10
             assert case.generation.stability_repeats == 2
             assert not case.performance.enabled
+            assert case.invocation is not None
+            argument = case.invocation.args[0]
+            assert isinstance(argument, FrameArgument)
 
             if case.name.endswith("control") and case.name != "pad-control":
-                assert case.schema is not None
+                assert argument.input_schema is not None
                 assert case.generation.max_examples == 100
                 assert case.generation.search
                 assert case.generation.adversarial_examples
                 assert case.generation.shrink
             else:
-                assert case.fixture is not None
+                assert argument.fixture is not None
                 assert case.generation.max_examples == 1
                 assert not case.generation.search
                 assert not case.generation.adversarial_examples

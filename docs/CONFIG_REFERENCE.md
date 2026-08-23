@@ -7,7 +7,7 @@ fall back to a default. Paths are resolved relative to the configuration file.
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
-| `version` | integer | `1` | Configuration format; only version 1 is accepted. |
+| `version` | integer | `2` | Configuration format; only version 2 is accepted. Version 1 fields are rejected. |
 | `artifact_dir` | path | `.parity` | Root for counterexamples and reports. |
 | `fail_fast` | boolean | `false` | Stop the suite after the first failed/error case. |
 | `jobs` | integer | `1` | Independent cases to run concurrently, 1 through 256. Values above 1 are incompatible with `fail_fast`. |
@@ -25,7 +25,7 @@ A large migration can keep its root policy separate from reusable case declarati
 
 ```toml
 # parity.toml
-version = 1
+version = 2
 artifact_dir = ".parity"
 cases_file = "migrations/cases.toml"
 
@@ -46,10 +46,13 @@ The referenced file is deliberately small and non-recursive:
 
 ```toml
 # migrations/cases.toml
-version = 1
+version = 2
 
 [[cases]]
 name = "orders"
+
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "tests/fixtures/orders.parquet"
 
 [cases.reference]
@@ -62,7 +65,7 @@ adapter = "polars"
 ```
 
 The cases file must be a relative path that resolves inside the root configuration directory. It
-contains only `version = 1` and a non-empty `[[cases]]` array; it cannot include another
+contains only `version = 2` and a non-empty `[[cases]]` array; it cannot include another
 `cases_file`, top-level policy or defaults. All fixture, interpreter and workdir paths in expanded
 cases still resolve relative to the root `parity.toml`, not the cases file.
 
@@ -70,10 +73,10 @@ cases still resolve relative to the root `parity.toml`, not the cases file.
 
 - partial `reference` and `candidate` tables without `target` or `command`;
 - partial `comparison`, `generation` without `generator`, and `performance` tables;
-- `reference_kwargs`, `candidate_kwargs` and `timeout_seconds`.
+- `timeout_seconds`.
 
-Case identity, targets/commands, fixtures/schemas, input bundles, custom generators, tags,
-`static_args` and `static_kwargs` must remain visible on each case. Case fields override defaults.
+Case identity, targets/commands, the complete invocation or custom generator, and tags must remain
+visible on each case. Case fields override defaults.
 Nested tables merge recursively; scalars and lists replace the inherited value. Parity validates
 and fingerprints the fully expanded configuration, so an extracted/defaulted config has the same
 effective model and hash as equivalent inline declarations.
@@ -90,7 +93,7 @@ parity budget approve compatibility.toml orders ms3:... \
 ```
 
 ```toml
-version = 1
+version = 2
 compatibility_budget = "compatibility.toml"
 ```
 
@@ -113,7 +116,7 @@ approvals so discovery always has capacity for at least one new difference class
 ## Migration manifest
 
 `parity migration check` loads a separate strict TOML manifest. This inventory is not part of
-`parity.toml` and does not change its version 1 configuration contract. The default paths are
+`parity.toml` and does not change its version 2 configuration contract. The default paths are
 `migration.toml` and `parity.toml`; pass `--manifest` and `--config` explicitly when they differ.
 
 ```toml
@@ -302,7 +305,7 @@ run cannot leave an earlier green report looking current. Locks keep dependency 
 stable on later runs; `--refresh-locks` deliberately asks the resolver to upgrade them. The command
 returns `2` if any lane errors, otherwise `1` if any lane fails, otherwise `0`.
 
-Configured replay paths are based on the directory containing `parity.toml`. Replay v2 records that
+Configured replay paths are based on the directory containing `parity.toml`. Replay v3 records that
 base as a bounded ancestor of the artifact and resolves it from the artifact itself, never from the
 process current directory. The managed workspace
 directory and its private environments must be contained by that configuration directory; a config
@@ -374,15 +377,16 @@ contained, regular manifest-bound artifacts. Verification checks stored hashes a
 requires verified runtime provenance, and replays the exact saved input.
 
 Configured artifact contracts make interpreter, workdir and path-like executable paths relative to
-the directory containing the loaded `parity.toml`. Replay v2 locates that base from the artifact,
+the directory containing the loaded `parity.toml`. Replay v3 locates that base from the artifact,
 so the command may be launched from any directory. Those paths must remain configuration-local;
 configuration-local virtual-environment entry points may still resolve through
 their final symlink to a host Python. A non-importable live callable, external
-interpreter/workdir/executable or missing configuration-local executable leaves the artifact
-inspectable but non-replayable. An optional retained `replay_blockers` map identifies the side with
-the bounded `live_callable`, `external_python`,
-`external_workdir`, `external_command` or `missing_command`; replay reports an actionable remedy
-without persisting the external host path.
+interpreter/workdir/executable, missing configuration-local executable, external artifact root or
+redacted JSON invocation leaves the artifact inspectable but non-replayable. An optional retained
+`replay_blockers` map records only bounded reason codes: side-specific `live_callable`,
+`external_python`, `external_workdir`, `external_command` or `missing_command`, and artifact-level
+`external_artifact_root` or `redacted_invocation`. Replay reports an actionable remedy without
+persisting the external host path or secret value.
 
 Exit codes are:
 
@@ -410,67 +414,150 @@ Declare cases with `[[cases]]`.
 | `name` | string | required | Unique `[A-Za-z0-9_.-]+` case identifier. |
 | `reference` | table | required | Baseline implementation. |
 | `candidate` | table | required | Replacement implementation. |
-| `fixture` | path | none | Seed input; Parquet, Arrow IPC, CSV or JSON according to loader support. |
-| `schema` | table | none | Built-in generated input contract. |
-| `input_bundle` | table | none | Two or three named inputs with optional relational constraints. Mutually exclusive with case-level `fixture`/`schema`. |
-| `static_args` | JSON-like array | `[]` | Positional values appended after the input frame. |
-| `static_kwargs` | JSON-like table | `{}` | Keyword arguments supplied to both implementations. |
-| `reference_kwargs` | JSON-like table | `{}` | Additional keywords supplied only to the reference. |
-| `candidate_kwargs` | JSON-like table | `{}` | Additional keywords supplied only to the candidate. |
+| `invocation` | table | conditional | Complete shared `callable(*args, **kwargs)` contract. Mutually exclusive with `generation.generator`. |
 | `comparison` | table | defaults below | Equivalence policy. |
 | `generation` | table | defaults below | Search limits and determinism. |
 | `performance` | table | defaults below | Benchmark and regression policy. |
 | `timeout_seconds` | float | `30` | Per invocation timeout, greater than 0 and at most 3600. |
 | `tags` | string array | `[]` | Selection labels used by `parity check --tag`. |
 
-Every case requires exactly one input contract: `fixture`/`schema`, `input_bundle`, or
-`generation.generator`. A custom generator is therefore not mixed with the built-in schemas or
-fixtures. The exact failing Arrow input replaces generator code in replay artifacts.
+Every case requires exactly one of `invocation` or `generation.generator`. The reference and
+candidate receive the same normalized positional values, keyword names and keyword values. When
+their APIs differ, use small side-specific wrappers; endpoint-specific arguments are deliberately
+not part of configuration v2.
 
-TOML requires case-level scalar keys such as `fixture`, `tags` and `timeout_seconds` to appear
-before child tables like `[cases.reference]`.
+## Invocation
 
-The reference receives `static_kwargs` plus `reference_kwargs`; the candidate receives
-`static_kwargs` plus `candidate_kwargs`. A side-specific key may not overlap a shared key, because
-that would make precedence ambiguous. The two side-specific maps may use the same key with
-different values—for example `reference_kwargs = { engine = "pandas" }` and
-`candidate_kwargs = { engine = "polars" }`. Values use the same bounded JSON-like contract as
-`static_kwargs` and are included in configuration fingerprints and replay artifacts.
+`[cases.invocation]` describes the complete call. It may be empty for a zero-argument callable.
+Repeat `[[cases.invocation.args]]` for positional arguments in call order, use
+`[cases.invocation.kwargs.<name>]` for named arguments, and optionally use
+`[cases.invocation.varargs]` for a generated dataframe sequence expanded as `*args`.
 
-## Input bundles
+| Key | Type | Default | Meaning |
+|---|---:|---:|---|
+| `args` | argument array | `[]` | Fixed positional call slots in declaration order. |
+| `kwargs` | named argument tables | `{}` | Fixed keyword call slots. |
+| `varargs` | `frames` argument/null | none | Homogeneous frame sequence expanded after fixed positional slots. |
+| `relationships` | relationship array | `[]` | Joint constraints between named individual `frame` arguments. |
 
-Use `[cases.input_bundle]` for joins, lookups and other callables that consume two or three frames.
-Each `[cases.input_bundle.inputs.<name>]` contains a `fixture`, a nested `schema`, or both. Names must
-be Python identifiers. With the default `binding = "keyword"`, Parity invokes
-each side with its frames, shared keywords and side-specific keywords, and rejects positional
-static arguments or an input name that collides with any of those keyword maps.
-`binding = "positional"` invokes frames in declared TOML order before `static_args`.
+Each argument has one `kind`. A `frame` accepts:
+
+| Key | Type | Default | Meaning |
+|---|---:|---:|---|
+| `kind` | `frame` | required | Argument discriminator. |
+| `fixture` | path/null | none | Parquet, Arrow IPC, CSV or JSON seed frame. |
+| `schema` | table/null | inferred from fixture | Generated frame domain. A fixture, schema or both is required. |
+| `name` | string/null | derived | Stable relationship identity. |
+| `generate` | boolean | `true` | Generate and shrink beyond the fixture; `false` requires a fixture. |
+
+A `json` argument accepts:
+
+| Key | Type | Default | Meaning |
+|---|---:|---:|---|
+| `kind` | `json` | required | Argument discriminator. |
+| `values` | JSON-like array | required | Non-empty finite choices for this call slot. |
+
+A `frames` argument accepts:
+
+| Key | Type | Default | Meaning |
+|---|---:|---:|---|
+| `kind` | `frames` | required | Argument discriminator. |
+| `fixtures` | path array | `[]` | Ordered seed frames for one deterministic sequence. |
+| `schema` | table/null | inferred from first fixture | Shared schema for every item. |
+| `name` | string/null | derived | Stable diagnostic identity; sequences cannot join relationships. |
+| `min_items` | integer | `0` | Minimum sequence length, 0 through 256. |
+| `max_items` | integer | `8` | Maximum sequence length, `min_items` through 256. |
+| `container` | `list` / `tuple` | `list` | Container passed to one call slot; varargs require `tuple`. |
+| `generate` | boolean | `true` | Generate item frames and lengths; `false` uses exactly `fixtures`. |
+
+Configured fixture counts must satisfy `min_items`/`max_items`. A fixed empty sequence
+(`generate = false`, `min_items = 0`, `max_items = 0`) needs no item schema.
+
+There may be up to 256 positional and 256 keyword call slots. A frame sequence may contain up to
+256 frames; expanded varargs and other positional slots together may not exceed 256. Keyword names
+are non-keyword Python identifiers of at most 128 characters. One JSON argument is limited to
+256 KiB and all JSON arguments in one invocation to 512 KiB, keeping in-process, isolated and
+command execution on the same bounded contract.
+
+A single-frame case is one positional argument:
 
 ```toml
-[cases.input_bundle]
-binding = "keyword"
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "tests/fixtures/orders.arrow"
+```
 
-[cases.input_bundle.inputs.orders]
+A join can use any number of positional or keyword frames within those bounds. `name` gives a frame
+a stable identity for relationships; otherwise a keyword name or positional `arg0`, `arg1`, …
+identity is used.
+
+```toml
+[[cases.invocation.args]]
+kind = "frame"
+name = "orders"
 fixture = "tests/fixtures/orders.arrow"
 
-[cases.input_bundle.inputs.customers.schema]
+[cases.invocation.kwargs.customers]
+kind = "frame"
+name = "customers"
+
+[cases.invocation.kwargs.customers.schema]
 min_rows = 1
 max_rows = 20
 
-[[cases.input_bundle.inputs.customers.schema.columns]]
+[[cases.invocation.kwargs.customers.schema.columns]]
 name = "customer_id"
 dtype = "int64"
 nullable = false
 unique = true
 
-[[cases.input_bundle.relationships]]
+[[cases.invocation.relationships]]
 kind = "foreign_key"
 child = { input = "orders", columns = ["customer_id"] }
 parent = { input = "customers", columns = ["customer_id"] }
 allow_nulls = true
 ```
 
-Relationships are generated and shrunk jointly:
+For a reduce-style API that accepts one sequence, use a `frames` argument:
+
+```toml
+[cases.invocation.kwargs.batches]
+kind = "frames"
+min_items = 1
+max_items = 32
+container = "list"
+
+[cases.invocation.kwargs.batches.schema]
+min_rows = 0
+max_rows = 100
+
+[[cases.invocation.kwargs.batches.schema.columns]]
+name = "value"
+dtype = "float64"
+```
+
+For `def reduce(*frames): ...`, declare the same contract under
+`[cases.invocation.varargs]` with `container = "tuple"`; Parity expands the generated sequence
+instead of passing a container. JSON arguments can appear anywhere and make call modes explicit:
+
+```toml
+[[cases.invocation.args]]
+kind = "json"
+values = ["sum", "mean"]
+
+[cases.invocation.kwargs.skip_nulls]
+kind = "json"
+values = [true, false]
+```
+
+`frames` sequences are homogeneous and cannot participate in cross-frame relationships. Use
+individual named `frame` arguments or a custom full-invocation generator for heterogeneous or
+dependent variable-arity calls.
+
+### Relationships
+
+`[[cases.invocation.relationships]]` jointly generates and shrinks constraints between named
+individual frame arguments:
 
 | `kind` | Fields | Meaning |
 |---|---|---|
@@ -484,9 +571,10 @@ arity and compatible portable dtype families. Cardinality does not imply overlap
 the corresponding relationship explicitly. `one_to_many` makes the left key unique,
 `many_to_one` makes the right key unique, `one_to_one` makes both unique and `many_to_many` adds no
 uniqueness constraint. A foreign key with `allow_nulls = false` rejects null child keys; when true,
-only non-null child keys must occur in the parent. A fixture-only input has its schema inferred
-before relationship validation. Input fixtures are all-or-none: either provide a fixture for every
-input or use schemas for the generated bundle.
+only non-null child keys must occur in the parent. A fixture-only frame has its schema inferred
+before relationship validation. Every referenced frame must use `generate = true`. Relationship
+fixtures are atomic: either every referenced frame has one or none does. Unrelated invocation
+arguments keep their own independent generation.
 
 ## Callable specification
 
@@ -497,7 +585,7 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 | `target` | string/null | conditional | Python import target `package.module:callable.path`; each dotted component must be a Python identifier. Exactly one of `target` or `command` is required. |
 | `command` | string array/null | conditional | Protocol-speaking executable argument vector. Exactly one of `target` or `command` is required. |
 | `canonicalizer` | string/null | none | Python import target applied to a successful raw return before Arrow/JSON canonicalisation. |
-| `adapter` | enum | `auto` | `auto`, `pandas`, `polars` or `arrow`. |
+| `adapter` | enum | `auto` | `auto`, `pandas`, `polars` or `arrow`. Auto infers annotated dataframe types and otherwise uses the core Arrow fallback, including for JSON-only calls. |
 | `pandas_input` | `arrow` / `native` | `arrow` | Pandas input materialization; ignored when the resolved adapter is not pandas. |
 | `python` | path | current Python | Interpreter for isolated execution. |
 | `workdir` | path | config directory | Working directory and import root. |
@@ -508,8 +596,10 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 
 `target`, `canonicalizer`, `adapter`, `pandas_input` and `python` apply only to Python endpoints. A
 command endpoint owns input adaptation, application invocation and output canonicalisation through
-[target protocol v1](TARGET_PROTOCOL.md); it cannot set those Python-only fields. `workdir`,
+[target protocol v2](TARGET_PROTOCOL.md); it cannot set those Python-only fields. `workdir`,
 `environment`, distribution provenance and `native_threads` apply to both endpoint kinds.
+Unannotated dataframe callables should select `pandas`, `polars` or `arrow` explicitly; the
+dependency-light `auto` fallback does not assume pandas is installed.
 
 Paths may be relative. A configured `python` path is anchored to the configuration directory
 without dereferencing its final virtual-environment symlink; two venv entry points that share one
@@ -523,7 +613,7 @@ command arguments.
 The controller report records its own runtime provenance. Portable Python targets independently
 report Python/platform identity plus NumPy, pandas, Polars and PyArrow when installed; they report
 `parity_version = null` because Parity is not installed in the target. Command targets report the
-generic runtime identity required by target protocol v1. `record_distributions` adds up to 64
+generic runtime identity required by target protocol v2. `record_distributions` adds up to 64
 explicitly named distributions, using distribution names rather than import names (for example
 `scikit-learn`, not `sklearn`). Names are normalized and duplicates are errors. This field only
 reads target-reported or installed metadata; it never installs or imports the named distribution.
@@ -562,7 +652,7 @@ canonicalization.
 
 ## Frame schema
 
-`[cases.schema]` accepts:
+Every `frame` or `frames` argument's nested `[...schema]` table accepts:
 
 | Key | Type | Default | Constraint |
 |---|---:|---:|---|
@@ -572,7 +662,7 @@ canonicalization.
 | `constraints` | array of tables | `[]` | Frame-local valid-domain constraints described below. |
 | `columns` | array of tables | required | One or more unique columns. |
 
-Declare a column with `[[cases.schema.columns]]`:
+Declare columns by repeating the argument's `[[...schema.columns]]` table:
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
@@ -599,7 +689,7 @@ explicit offset is interpreted as local wall time when `timezone` is set; an off
 is converted to the configured zone.
 
 ```toml
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "trade_time"
 dtype = "datetime"
 nullable = false
@@ -607,7 +697,7 @@ minimum = "2024-01-01T00:00:00"
 maximum = "2024-12-31T23:59:59"
 timezone = "America/New_York"
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "symbol"
 dtype = "string"
 nullable = false
@@ -618,8 +708,9 @@ max_length = 8
 
 ### Frame constraints
 
-Declare each constraint with `[[cases.schema.constraints]]`, or under an input schema such as
-`[[cases.input_bundle.inputs.left.schema.constraints]]`.
+Declare each constraint under its argument schema, for example
+`[[cases.invocation.args.schema.constraints]]` or
+`[[cases.invocation.kwargs.left.schema.constraints]]`.
 
 | `kind` | Fields | Meaning |
 |---|---|---|
@@ -627,13 +718,13 @@ Declare each constraint with `[[cases.schema.constraints]]`, or under an input s
 | `row_comparison` | `left`, `operator`, `right` | Require the named columns to satisfy `lt`, `le`, `eq`, `ge` or `gt` on every row where both values are non-null. |
 
 ```toml
-[[cases.schema.constraints]]
+[[cases.invocation.args.schema.constraints]]
 kind = "sorted_by"
 columns = ["account_id", "event_time"]
 descending = false
 nulls = "last"
 
-[[cases.schema.constraints]]
+[[cases.invocation.args.schema.constraints]]
 kind = "row_comparison"
 left = "start_time"
 operator = "le"
@@ -642,7 +733,7 @@ right = "event_time"
 
 At most one `sorted_by` constraint is accepted per frame. Referenced columns must exist and row
 comparisons must use compatible, orderable types. Constraints are preserved by deterministic
-cases, generated search, shrinking and relationship rewrites in input bundles; impossible domains
+cases, generated search, shrinking and invocation-relationship rewrites; impossible domains
 are rejected during validation rather than weakened. The initial row-comparison vocabulary accepts
 independent column pairs; overlapping comparisons that reuse a column are rejected until Parity can
 construct and shrink the complete constraint graph without filter-only search. Explicit fixtures
@@ -669,6 +760,7 @@ must satisfy frame constraints even when `adversarial_examples = false`.
 | `atol` | float | `0` | Non-negative absolute numeric tolerance. |
 | `datetime_tolerance_ns` | integer | `0` | Non-negative temporal tolerance in nanoseconds. |
 | `ignored_columns` | string array | `[]` | Columns removed from both outputs before comparison. |
+| `overrides` | array of tables | `[]` | Policy patches for selected nested output paths. |
 
 For finite numbers, equivalence follows the configured absolute/relative tolerance. Order-insensitive
 comparison preserves multiplicity: two identical rows are not the same as one.
@@ -693,13 +785,41 @@ row matching. Any captured values remain in the private counterexample artifact;
 identify only the mismatch shape and cell path. When row counts differ, keyed mode reports the more
 useful missing or unexpected key evidence instead of a generic shape mismatch.
 
+### Per-output policies
+
+Use `[[cases.comparison.overrides]]` when one returned subtree needs a different dataframe or
+numeric policy. `path` is a non-root RFC 6901 JSON Pointer into a returned mapping or sequence.
+Escape `~` as `~0` and `/` as `~1`; a complete `*` segment is Parity's one-level wildcard
+extension. Overrides inherit the case policy for unspecified fields and apply to the selected
+subtree. Matching entries are applied in declaration order, so put a broad wildcard or parent
+before a more specific child.
+
+```toml
+[cases.comparison]
+row_order = "strict"
+rtol = 1e-7
+
+[[cases.comparison.overrides]]
+path = "/groups/*"
+row_order = "keyed"
+row_keys = ["id"]
+
+[[cases.comparison.overrides]]
+path = "/groups/priority"
+rtol = 1e-10
+```
+
+An override can set `column_order`, `row_order`, `row_keys`, `dtype`, `names`, the four
+null/NaN/signed-zero switches, `rtol`, `atol`, `datetime_tolerance_ns` and `ignored_columns`.
+Exception and input-mutation checks apply to the whole invocation and remain case-level policy.
+
 ## Generation policy
 
 `[cases.generation]`:
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
-| `generator` | import target/null | none | Trusted project factory returning a Hypothesis `SearchStrategy` or a plain iterable of inputs. |
+| `generator` | import target/null | none | Trusted project factory returning a Hypothesis `SearchStrategy[Invocation]` or a plain iterable of `Invocation` values. |
 | `max_examples` | integer | `100` | Property examples, 1 through 100,000. |
 | `max_findings` | integer | `10` | Maximum distinct mismatch signatures, 1 through 20. Each additional search receives its own `max_examples` budget. |
 | `stability_repeats` | integer | `2` | Total same-input observations per implementation for deterministic passing inputs, 1 through 10. `1` disables the stability check. |
@@ -713,19 +833,36 @@ useful missing or unexpected key evidence instead of a generic shape mismatch.
 
 A seed improves repeatability but a saved replay artifact is the strongest reproduction mechanism.
 The generator factory is called without arguments in the Parity driver environment, with the
-configuration directory on its import path. It may return either:
+configuration directory on its import path. It returns either a Hypothesis strategy yielding
+`parity.Invocation` values, preserving normal generation and shrinking, or an iterable of them,
+consumed in stable order and stopped after `max_examples`. Plain iterables do not have a general
+shrinking operation.
 
-- a Hypothesis `SearchStrategy` yielding a pandas, Polars or Arrow dataframe, preserving normal
-  generation and shrinking; or
-- an iterable of those dataframes, consumed in order and stopped after `max_examples`. Plain
-  iterables do not have a general shrinking operation and are responsible for their own stable
-  order.
+An `Invocation` holds the complete `args` tuple and `kwargs` mapping. Values may be supported
+dataframes, portable JSON-like values, or `parity.FrameSequence` for one list/tuple-valued dataframe
+argument. This is the escape hatch for dependent JSON modes, heterogeneous sequences and other
+call shapes not expressible by the built-in homogeneous argument strategies:
 
-A generated mapping of two or three valid Python names to dataframes is invoked as a keyword input
-bundle. Use small reference/candidate wrappers when old and new APIs need other bindings. Invalid,
-empty or non-dataframe generator output is an execution error, never a pass. Generator code is
-trusted project code and should not contain credentials or depend on either isolated target
-environment.
+```python
+import pyarrow as pa
+from hypothesis import strategies as st
+from parity import Invocation
+
+
+def calls():
+    return st.builds(
+        lambda window: Invocation(
+            args=(pa.table({"value": [1, 2, 3]}),),
+            kwargs={"window": window},
+        ),
+        window=st.integers(min_value=1, max_value=3),
+    )
+```
+
+A custom generator replaces `[cases.invocation]` and requires `search = true`. Invalid or empty
+generator output is an execution error, never a pass. Generator code is trusted project code and
+should not contain credentials or depend on either isolated target environment. A failing
+invocation is serialized into the recursive replay contract; replay never imports the generator.
 
 With `search = false`, Parity still checks deterministic fixtures or enabled adversarial examples,
 including stability repeats, but skips property-based search beyond them. A searchless case without
@@ -785,7 +922,8 @@ infrastructure `ERROR`; Parity never reports a pass after silently omitting requ
 ## Complete generated template
 
 Run `parity init`, or call `parity.templates.render_config_template()`, for a versioned and
-validated example containing every policy field. To generate one minimal fixture-backed case for
+validated JSON-only example with explicit comparison, generation and performance policies. The
+tables above document every available field. To generate one minimal fixture-backed case for
 existing code, supply `--reference`, `--candidate` and `--fixture` together or call
 `parity.templates.render_project_config()`. The project form omits default-valued tables and does
 not create an implementation module.

@@ -1,5 +1,5 @@
 # Expected-failure campaign: six deliberately incorrect migrations.
-version = 1
+version = 2
 artifact_dir = "../../.parity/fault-corpus"
 fail_fast = false
 
@@ -12,10 +12,12 @@ adapter = "pandas"
 [cases.candidate]
 target = "faults:join_bad"
 adapter = "polars"
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 12
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "customer_id"
 dtype = "int64"
 nullable = true
@@ -38,10 +40,12 @@ adapter = "pandas"
 [cases.candidate]
 target = "faults:integer_precision_bad"
 adapter = "polars"
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 4
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "quantity"
 dtype = "int64"
 nullable = false
@@ -68,15 +72,17 @@ adapter = "pandas"
 [cases.candidate]
 target = "faults:groupby_bad"
 adapter = "polars"
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 12
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "region"
 dtype = "string"
 nullable = true
 categories = ["north", "south"]
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "amount"
 dtype = "float64"
 nullable = true
@@ -101,10 +107,12 @@ adapter = "pandas"
 [cases.candidate]
 target = "faults:timezone_bad"
 adapter = "polars"
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 8
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "event_at"
 dtype = "string"
 nullable = false
@@ -127,10 +135,12 @@ adapter = "pandas"
 [cases.candidate]
 target = "faults:dtype_bad"
 adapter = "polars"
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 12
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "quantity"
 dtype = "int64"
 nullable = true
@@ -155,17 +165,19 @@ adapter = "pandas"
 [cases.candidate]
 target = "faults:ordering_bad"
 adapter = "polars"
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 2
 max_rows = 12
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "record_id"
 dtype = "int64"
 nullable = false
 unique = true
 minimum = 0
 maximum = 1000
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "priority"
 dtype = "int64"
 nullable = false

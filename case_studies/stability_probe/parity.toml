@@ -1,11 +1,13 @@
-version = 1
+version = 2
 artifact_dir = ".parity-stability"
 fail_fast = false
 
 [[cases]]
 name = "matching-but-stateful"
-fixture = "fixture.csv"
 tags = ["stability", "hidden-state"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixture.csv"
 
 [cases.reference]
 target = "stability_parity:reference"

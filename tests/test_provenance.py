@@ -40,7 +40,7 @@ def _runtime(
 
 
 def test_public_version_uses_single_source() -> None:
-    assert __version__ == source_version == "0.19.1"
+    assert __version__ == source_version == "0.20.0"
 
 
 def test_distribution_names_are_normalized_and_bounded() -> None:
@@ -183,13 +183,20 @@ def test_effective_config_hash_is_stable_data_safe_and_semantic(tmp_path: Path) 
 
     def config(root: Path, token: str) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "artifact_dir": root / ".parity",
             "fail_fast": False,
             "cases": [
                 {
                     "name": "aggregate",
-                    "fixture": root / "fixtures" / "input.arrow",
+                    "invocation": {
+                        "args": [
+                            {
+                                "kind": "frame",
+                                "fixture": root / "fixtures" / "input.arrow",
+                            }
+                        ]
+                    },
                     "reference": {
                         "target": "study:pandas_aggregate",
                         "record_distributions": ["skrub"],
@@ -251,11 +258,11 @@ def test_effective_config_hash_preserves_project_python_entrypoint_identity(
             if not interpreter.exists():
                 interpreter.symlink_to(sys.executable)
         return {
-            "version": 1,
+            "version": 2,
             "cases": [
                 {
                     "name": "versions",
-                    "fixture": root / "fixture.arrow",
+                    "invocation": {"args": [{"kind": "frame", "fixture": root / "fixture.arrow"}]},
                     "reference": {
                         "target": "project.transform:run",
                         "python": root / reference_name / "bin" / "python",
@@ -285,10 +292,11 @@ def test_effective_config_hash_preserves_project_python_entrypoint_identity(
 def test_effective_config_hash_omits_external_python_path_identity(tmp_path: Path) -> None:
     def contract(python: Path) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "cases": [
                 {
                     "name": "external",
+                    "invocation": {"args": []},
                     "reference": {
                         "target": "project:run",
                         "python": python,
@@ -308,10 +316,11 @@ def test_effective_config_hash_uses_side_workdir_for_python_identity(tmp_path: P
     def contract(root: Path, python_name: str) -> dict[str, object]:
         workdir = root / "worker"
         return {
-            "version": 1,
+            "version": 2,
             "cases": [
                 {
                     "name": "worker",
+                    "invocation": {"args": []},
                     "reference": {
                         "target": "project:run",
                         "python": workdir / python_name / "bin" / "python",
@@ -336,16 +345,19 @@ def test_effective_config_hash_uses_side_workdir_for_python_identity(tmp_path: P
 def test_effective_config_hash_preserves_positional_bundle_order() -> None:
     def contract(names: tuple[str, str]) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "cases": [
                 {
                     "name": "join",
-                    "input_bundle": {
-                        "binding": "positional",
-                        "inputs": {
-                            name: {"schema": {"columns": [{"name": "x", "dtype": "int64"}]}}
+                    "invocation": {
+                        "args": [
+                            {
+                                "kind": "frame",
+                                "name": name,
+                                "schema": {"columns": [{"name": "x", "dtype": "int64"}]},
+                            }
                             for name in names
-                        },
+                        ]
                     },
                 }
             ],
@@ -359,11 +371,11 @@ def test_effective_config_hash_preserves_positional_bundle_order() -> None:
 def test_effective_config_hash_includes_keyed_row_alignment_contract() -> None:
     def contract(row_keys: tuple[str, ...]) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "cases": [
                 {
                     "name": "orders",
-                    "fixture": "input.arrow",
+                    "invocation": {"args": [{"kind": "frame", "fixture": "input.arrow"}]},
                     "comparison": {
                         "row_order": "keyed",
                         "row_keys": list(row_keys),
@@ -382,11 +394,11 @@ def test_effective_config_hash_includes_keyed_row_alignment_contract() -> None:
 def test_effective_config_hash_includes_generated_search_policy() -> None:
     def contract(search: bool) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "cases": [
                 {
                     "name": "fixture-only",
-                    "fixture": "input.arrow",
+                    "invocation": {"args": [{"kind": "frame", "fixture": "input.arrow"}]},
                     "generation": {"search": search},
                 }
             ],
@@ -395,15 +407,17 @@ def test_effective_config_hash_includes_generated_search_policy() -> None:
     assert effective_config_sha256(contract(True)) != effective_config_sha256(contract(False))
 
 
-def test_effective_config_hash_does_not_treat_static_inputs_mapping_as_bundle_order() -> None:
+def test_effective_config_hash_canonicalizes_json_mapping_order() -> None:
     def contract(items: tuple[tuple[str, int], ...]) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "cases": [
                 {
                     "name": "single",
-                    "fixture": "input.arrow",
-                    "static_kwargs": {"inputs": dict(items)},
+                    "invocation": {
+                        "args": [{"kind": "frame", "fixture": "input.arrow"}],
+                        "kwargs": {"inputs": {"kind": "json", "values": [dict(items)]}},
+                    },
                 }
             ],
         }
@@ -413,20 +427,21 @@ def test_effective_config_hash_does_not_treat_static_inputs_mapping_as_bundle_or
     )
 
 
-def test_effective_config_hash_includes_endpoint_specific_kwargs() -> None:
-    def contract(reference_engine: str, candidate_engine: str) -> dict[str, object]:
+def test_effective_config_hash_includes_shared_json_kwargs() -> None:
+    def contract(engine: str) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "cases": [
                 {
                     "name": "engines",
-                    "fixture": "input.arrow",
-                    "reference_kwargs": {"engine": reference_engine},
-                    "candidate_kwargs": {"engine": candidate_engine},
+                    "invocation": {
+                        "args": [{"kind": "frame", "fixture": "input.arrow"}],
+                        "kwargs": {"engine": {"kind": "json", "values": [engine]}},
+                    },
                 }
             ],
         }
 
-    pandas_polars = effective_config_sha256(contract("pandas", "polars"))
-    assert pandas_polars == effective_config_sha256(contract("pandas", "polars"))
-    assert pandas_polars != effective_config_sha256(contract("polars", "pandas"))
+    pandas = effective_config_sha256(contract("pandas"))
+    assert pandas == effective_config_sha256(contract("pandas"))
+    assert pandas != effective_config_sha256(contract("polars"))

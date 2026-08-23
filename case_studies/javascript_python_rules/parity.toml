@@ -1,0 +1,109 @@
+version = 2
+artifact_dir = ".parity-rules"
+jobs = 1
+
+[case_defaults.reference]
+workdir = "."
+
+[case_defaults.candidate]
+workdir = "."
+
+[case_defaults.comparison]
+check_exceptions = true
+check_input_mutation = true
+rtol = 0.0
+atol = 0.0
+
+[case_defaults.generation]
+stability_repeats = 2
+seed = 20260823
+derandomize = true
+adversarial_examples = false
+shrink = true
+deadline_ms = 3000
+
+[case_defaults.performance]
+enabled = false
+
+[[cases]]
+name = "correct-port"
+tags = ["control", "javascript", "json", "python", "rules"]
+timeout_seconds = 15
+
+[cases.reference]
+command = ["parity", "adapter", "serve", "reference_adapter.py"]
+
+[cases.candidate]
+target = "candidate:correct_port"
+
+[cases.generation]
+generator = "generator:rule_programs"
+max_examples = 250
+max_findings = 1
+
+[[cases]]
+name = "naive-port"
+tags = ["expected-findings", "javascript", "json", "python", "rules"]
+timeout_seconds = 15
+
+[cases.reference]
+command = ["parity", "adapter", "serve", "reference_adapter.py"]
+
+[cases.candidate]
+target = "candidate:naive_port"
+
+[cases.generation]
+generator = "generator:rule_programs"
+max_examples = 250
+max_findings = 4
+
+[[cases]]
+name = "regression-eager-score"
+tags = ["javascript", "json", "python", "regression", "rules"]
+timeout_seconds = 15
+
+[cases.reference]
+command = ["parity", "adapter", "serve", "reference_adapter.py"]
+
+[cases.candidate]
+target = "candidate:correct_port"
+
+[cases.generation]
+generator = "generator:regression_eager"
+max_examples = 1
+max_findings = 1
+stability_repeats = 3
+
+[[cases]]
+name = "regression-first-match"
+tags = ["javascript", "json", "python", "regression", "rules"]
+timeout_seconds = 15
+
+[cases.reference]
+command = ["parity", "adapter", "serve", "reference_adapter.py"]
+
+[cases.candidate]
+target = "candidate:correct_port"
+
+[cases.generation]
+generator = "generator:regression_first_match"
+max_examples = 1
+max_findings = 1
+stability_repeats = 3
+
+[[cases]]
+name = "regression-inclusive-threshold"
+tags = ["javascript", "json", "python", "regression", "rules"]
+timeout_seconds = 15
+
+[cases.reference]
+command = ["parity", "adapter", "serve", "reference_adapter.py"]
+
+[cases.candidate]
+target = "candidate:correct_port"
+
+[cases.generation]
+generator = "generator:regression_threshold"
+max_examples = 1
+max_findings = 1
+stability_repeats = 3

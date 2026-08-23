@@ -1,4 +1,4 @@
-version = 1
+version = 2
 artifact_dir = ".parity-fortran"
 jobs = 1
 
@@ -35,11 +35,13 @@ command = ["parity", "adapter", "serve", "fortran_adapter.py"]
 [cases.candidate]
 target = "candidate:correct_port"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 6
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "value"
 dtype = "float64"
 nullable = false
@@ -59,11 +61,13 @@ command = ["parity", "adapter", "serve", "fortran_adapter.py"]
 [cases.candidate]
 target = "candidate:naive_port"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 6
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "value"
 dtype = "float64"
 nullable = false

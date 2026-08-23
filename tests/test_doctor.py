@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 
 from parity.doctor import REQUIRED_DEPENDENCIES, diagnose, diagnose_config
-from parity.models import CallableSpec, CaseConfig, ParityConfig
+from parity.models import CallableSpec, CaseConfig, FrameArgument, InvocationConfig, ParityConfig
 
 
 def test_diagnose_contains_required_dependencies_without_environment() -> None:
@@ -43,7 +43,7 @@ def _configured_case(
         name=name,
         reference=spec,
         candidate=spec.model_copy(deep=True),
-        fixture=fixture,
+        invocation=InvocationConfig(args=[FrameArgument(fixture=fixture)]),
     )
 
 
@@ -262,7 +262,7 @@ def test_config_doctor_uses_distinct_virtualenv_symlinks_and_site_packages(
                 name="versions",
                 reference=reference,
                 candidate=candidate,
-                fixture=tmp_path / "unused.json",
+                invocation=InvocationConfig(args=[FrameArgument(fixture=tmp_path / "unused.json")]),
             )
         ]
     )
@@ -358,7 +358,7 @@ import json
 import sys
 from pathlib import Path
 from parity.doctor import diagnose_config
-from parity.models import CallableSpec, CaseConfig, ParityConfig
+from parity.models import CallableSpec, CaseConfig, FrameArgument, InvocationConfig, ParityConfig
 
 root = Path(sys.argv[1])
 (root / "worker_target.py").write_text(
@@ -377,7 +377,7 @@ report = diagnose_config(ParityConfig(cases=[CaseConfig(
     name="versions",
     reference=specification("reference"),
     candidate=specification("candidate"),
-    fixture=root / "unused.arrow",
+    invocation=InvocationConfig(args=[FrameArgument(fixture=root / "unused.arrow")]),
 )]))
 case = report.cases[0]
 print(json.dumps([

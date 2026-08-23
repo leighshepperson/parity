@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 [[cases]]
 name = "lags-control"
@@ -14,17 +14,19 @@ pandas_input = "native"
 target = "pytimetk_pilot:lags_control_polars"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 4
 max_rows = 12
 unique_together = [["row_id"], ["date"]]
 
-[[cases.schema.constraints]]
+[[cases.invocation.args.schema.constraints]]
 kind = "sorted_by"
 columns = ["date"]
 nulls = "last"
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "row_id"
 dtype = "int64"
 nullable = false
@@ -32,14 +34,14 @@ unique = true
 minimum = 0
 maximum = 100000
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "date"
 dtype = "datetime"
 nullable = false
 unique = true
 examples = ["2024-01-01T00:00:00", "2024-01-02T00:00:00"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "value"
 dtype = "float64"
 nullable = false
@@ -47,7 +49,7 @@ minimum = -1000.0
 maximum = 1000.0
 examples = [-1.0, 0.0, 1.0]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "volume"
 dtype = "float64"
 nullable = false
@@ -74,9 +76,11 @@ shrink = true
 enabled = false
 [[cases]]
 name = "lags-grouped-unsorted"
-fixture = "fixtures/augment_unsorted.arrow"
 tags = ["augment-lags", "grouped", "ordering"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_unsorted.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:lags_grouped_pandas"
@@ -107,9 +111,11 @@ enabled = false
 
 [[cases]]
 name = "lags-null-semantics"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["augment-lags", "grouped", "nulls", "ordering"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:lags_null_pandas"
@@ -152,17 +158,19 @@ pandas_input = "native"
 target = "pytimetk_pilot:rolling_control_polars"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 4
 max_rows = 12
 unique_together = [["row_id"], ["date"]]
 
-[[cases.schema.constraints]]
+[[cases.invocation.args.schema.constraints]]
 kind = "sorted_by"
 columns = ["date"]
 nulls = "last"
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "row_id"
 dtype = "int64"
 nullable = false
@@ -170,14 +178,14 @@ unique = true
 minimum = 0
 maximum = 100000
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "date"
 dtype = "datetime"
 nullable = false
 unique = true
 examples = ["2024-01-01T00:00:00", "2024-01-02T00:00:00"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "value"
 dtype = "float64"
 nullable = false
@@ -185,7 +193,7 @@ minimum = -1000.0
 maximum = 1000.0
 examples = [-1.0, 0.0, 1.0]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "volume"
 dtype = "float64"
 nullable = false
@@ -213,9 +221,11 @@ enabled = false
 
 [[cases]]
 name = "rolling-grouped-centered"
-fixture = "fixtures/augment_unsorted.arrow"
 tags = ["augment-rolling", "grouped", "ordering", "centered"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_unsorted.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:rolling_grouped_pandas"
@@ -246,9 +256,11 @@ enabled = false
 
 [[cases]]
 name = "rolling-null-semantics"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["augment-rolling", "grouped", "nulls", "ordering"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:rolling_null_pandas"
@@ -291,17 +303,19 @@ pandas_input = "native"
 target = "pytimetk_pilot:ewm_control_polars"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 4
 max_rows = 12
 unique_together = [["row_id"], ["date"]]
 
-[[cases.schema.constraints]]
+[[cases.invocation.args.schema.constraints]]
 kind = "sorted_by"
 columns = ["date"]
 nulls = "last"
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "row_id"
 dtype = "int64"
 nullable = false
@@ -309,14 +323,14 @@ unique = true
 minimum = 0
 maximum = 100000
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "date"
 dtype = "datetime"
 nullable = false
 unique = true
 examples = ["2024-01-01T00:00:00", "2024-01-02T00:00:00"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "value"
 dtype = "float64"
 nullable = false
@@ -344,9 +358,11 @@ enabled = false
 
 [[cases]]
 name = "ewm-grouped-unsorted"
-fixture = "fixtures/augment_unsorted.arrow"
 tags = ["augment-ewm", "grouped", "ordering"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_unsorted.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:ewm_grouped_pandas"
@@ -377,9 +393,11 @@ enabled = false
 
 [[cases]]
 name = "ewm-null-semantics"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["augment-ewm", "grouped", "nulls", "ordering"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:ewm_null_pandas"
@@ -422,17 +440,19 @@ pandas_input = "native"
 target = "pytimetk_pilot:macd_control_polars"
 adapter = "polars"
 
-[cases.schema]
+[[cases.invocation.args]]
+kind = "frame"
+[cases.invocation.args.schema]
 min_rows = 4
 max_rows = 12
 unique_together = [["row_id"], ["date"]]
 
-[[cases.schema.constraints]]
+[[cases.invocation.args.schema.constraints]]
 kind = "sorted_by"
 columns = ["date"]
 nulls = "last"
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "row_id"
 dtype = "int64"
 nullable = false
@@ -440,14 +460,14 @@ unique = true
 minimum = 0
 maximum = 100000
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "date"
 dtype = "datetime"
 nullable = false
 unique = true
 examples = ["2024-01-01T00:00:00", "2024-01-02T00:00:00"]
 
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "value"
 dtype = "float64"
 nullable = false
@@ -475,9 +495,11 @@ enabled = false
 
 [[cases]]
 name = "macd-grouped-unsorted"
-fixture = "fixtures/augment_unsorted.arrow"
 tags = ["augment-macd", "grouped", "ordering"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_unsorted.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:macd_grouped_pandas"
@@ -508,9 +530,11 @@ enabled = false
 
 [[cases]]
 name = "macd-null-semantics"
-fixture = "fixtures/augment_hostile.arrow"
 tags = ["augment-macd", "grouped", "nulls", "ordering"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/augment_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:macd_null_pandas"
@@ -541,9 +565,11 @@ enabled = false
 
 [[cases]]
 name = "pad-control"
-fixture = "fixtures/pad.arrow"
 tags = ["pad-by-time", "control", "column-order"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/pad.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:pad_control_pandas"
@@ -574,9 +600,11 @@ enabled = false
 
 [[cases]]
 name = "pad-grouped-bounds"
-fixture = "fixtures/pad_grouped.arrow"
 tags = ["pad-by-time", "grouped", "bounds"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/pad_grouped.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:pad_grouped_pandas"
@@ -607,9 +635,11 @@ enabled = false
 
 [[cases]]
 name = "pad-null-semantics"
-fixture = "fixtures/pad_numeric_hostile.arrow"
 tags = ["pad-by-time", "grouped", "nulls", "fill"]
 timeout_seconds = 60
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/pad_numeric_hostile.arrow"
 
 [cases.reference]
 target = "pytimetk_pilot:pad_null_pandas"

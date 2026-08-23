@@ -5,14 +5,12 @@ from __future__ import annotations
 import math
 import random
 import statistics
-from collections.abc import Callable, Mapping, Sequence
-
-import pyarrow as pa
+from collections.abc import Callable
 
 from parity.execution import Observation, execute
+from parity.invocation import Invocation
 from parity.models import (
     CallableSpec,
-    JsonValue,
     PerformanceConfig,
     PerformanceResult,
     RunMetrics,
@@ -271,11 +269,9 @@ def benchmark_observations(
 def benchmark_pair(
     reference: CallableSpec,
     candidate: CallableSpec,
-    input_table: pa.Table,
+    invocation: Invocation,
     config: PerformanceConfig,
     *,
-    static_args: Sequence[JsonValue] = (),
-    static_kwargs: Mapping[str, JsonValue] | None = None,
     timeout_seconds: float = 30.0,
     isolated: bool | None = None,
 ) -> PerformanceResult:
@@ -287,9 +283,7 @@ def benchmark_pair(
     def run(spec: CallableSpec) -> Observation:
         return execute(
             spec,
-            input_table,
-            static_args=static_args,
-            static_kwargs=static_kwargs,
+            invocation,
             isolated=isolated,
             timeout_seconds=timeout_seconds,
         )

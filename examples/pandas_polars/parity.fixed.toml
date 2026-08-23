@@ -1,10 +1,12 @@
 # Passing counterparts to the public fault corpus.
-version = 1
+version = 2
 artifact_dir = "../../.parity/fixed-corpus"
 fail_fast = false
 
 [[cases]]
 name = "null-join-fixed"
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixtures/null_join.parquet"
 [cases.reference]
 target = "faults:join_reference"
@@ -12,10 +14,10 @@ adapter = "pandas"
 [cases.candidate]
 target = "corrected:join_fixed"
 adapter = "polars"
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 6
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "customer_id"
 dtype = "int64"
 nullable = true
@@ -33,6 +35,8 @@ enabled = false
 
 [[cases]]
 name = "integer-precision-fixed"
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixtures/integer_precision.parquet"
 [cases.reference]
 target = "faults:integer_precision_reference"
@@ -40,10 +44,10 @@ adapter = "pandas"
 [cases.candidate]
 target = "corrected:integer_precision_fixed"
 adapter = "polars"
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 4
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "quantity"
 dtype = "int64"
 nullable = false
@@ -63,6 +67,8 @@ enabled = false
 
 [[cases]]
 name = "groupby-null-fixed"
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixtures/groupby_null.parquet"
 [cases.reference]
 target = "faults:groupby_reference"
@@ -70,15 +76,15 @@ adapter = "pandas"
 [cases.candidate]
 target = "corrected:groupby_fixed"
 adapter = "polars"
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 6
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "region"
 dtype = "string"
 nullable = true
 categories = ["north", "south"]
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "amount"
 dtype = "float64"
 nullable = true
@@ -96,6 +102,8 @@ enabled = false
 
 [[cases]]
 name = "timezone-day-fixed"
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixtures/timezone_day.parquet"
 [cases.reference]
 target = "faults:timezone_reference"
@@ -103,10 +111,10 @@ adapter = "pandas"
 [cases.candidate]
 target = "corrected:timezone_fixed"
 adapter = "polars"
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 6
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "event_at"
 dtype = "string"
 nullable = false
@@ -121,6 +129,8 @@ enabled = false
 
 [[cases]]
 name = "dtype-width-fixed"
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixtures/dtype_width.parquet"
 [cases.reference]
 target = "faults:dtype_reference"
@@ -128,10 +138,10 @@ adapter = "pandas"
 [cases.candidate]
 target = "corrected:dtype_fixed"
 adapter = "polars"
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 1
 max_rows = 6
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "quantity"
 dtype = "int64"
 nullable = true
@@ -148,6 +158,8 @@ enabled = false
 
 [[cases]]
 name = "stable-order-fixed"
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixtures/stable_order.parquet"
 [cases.reference]
 target = "faults:ordering_reference"
@@ -155,17 +167,17 @@ adapter = "pandas"
 [cases.candidate]
 target = "corrected:ordering_fixed"
 adapter = "polars"
-[cases.schema]
+[cases.invocation.args.schema]
 min_rows = 2
 max_rows = 12
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "record_id"
 dtype = "int64"
 nullable = false
 unique = true
 minimum = 0
 maximum = 1000
-[[cases.schema.columns]]
+[[cases.invocation.args.schema.columns]]
 name = "priority"
 dtype = "int64"
 nullable = false

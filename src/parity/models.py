@@ -34,6 +34,10 @@ AdapterName = Literal["auto", "pandas", "polars", "arrow"]
 PandasInput = Literal["arrow", "native"]
 
 
+def _json_value_bytes(value: JsonValue) -> int:
+    return len(json.dumps(value, allow_nan=True, separators=(",", ":")).encode("utf-8"))
+
+
 class StrictModel(BaseModel):
     """Base model that rejects misspelled configuration keys."""
 
@@ -329,7 +333,7 @@ class EqualRowCount(StrictModel):
     """Require selected inputs to contain the same number of rows."""
 
     kind: Literal["equal_row_count"] = "equal_row_count"
-    inputs: list[str] = Field(min_length=2, max_length=3)
+    inputs: list[str] = Field(min_length=2)
 
     @field_validator("inputs")
     @classmethod
@@ -358,9 +362,9 @@ Relationship = Annotated[
 
 
 class InputBundle(StrictModel):
-    """Two or three named frames and their relational generation constraints."""
+    """Named frames and their relational generation constraints."""
 
-    inputs: dict[str, InputSpec] = Field(min_length=2, max_length=3)
+    inputs: dict[str, InputSpec] = Field(min_length=1)
     relationships: list[Relationship] = Field(default_factory=list)
     binding: Literal["keyword", "positional"] = "keyword"
 
@@ -411,6 +415,233 @@ class InputBundle(StrictModel):
         return self
 
 
+class FrameArgument(InputSpec):
+    """One positional or keyword dataframe argument."""
+
+    kind: Literal["frame"] = "frame"
+    name: str | None = None
+    generate: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str | None) -> str | None:
+        if name is not None and (not name.isidentifier() or keyword.iskeyword(name)):
+            raise ValueError("frame argument name must be a non-keyword Python identifier")
+        return name
+
+    @model_validator(mode="after")
+    def validate_generation_source(self) -> FrameArgument:
+        if not self.generate and self.fixture is None:
+            raise ValueError("a non-generated frame argument requires a fixture")
+        return self
+
+
+class JsonArgument(StrictModel):
+    """One fixed or generated JSON-like argument."""
+
+    kind: Literal["json"] = "json"
+    values: list[JsonValue] = Field(min_length=1, max_length=10_000)
+
+    @field_validator("values")
+    @classmethod
+    def bound_values(cls, values: list[JsonValue]) -> list[JsonValue]:
+        if any(_json_value_bytes(value) > 256 * 1024 for value in values):
+            raise ValueError("one invocation JSON value exceeds 256 KiB")
+        return values
+
+
+class FrameSequenceArgument(StrictModel):
+    """A homogeneous variable-length sequence of dataframe arguments."""
+
+    kind: Literal["frames"] = "frames"
+    name: str | None = None
+    fixtures: list[Path] = Field(default_factory=list, max_length=256)
+    input_schema: FrameSchema | None = Field(
+        default=None, validation_alias="schema", serialization_alias="schema"
+    )
+    min_items: int = Field(default=0, ge=0, le=256)
+    max_items: int = Field(default=8, ge=0, le=256)
+    container: Literal["list", "tuple"] = "list"
+    generate: bool = True
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, populate_by_name=True)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str | None) -> str | None:
+        if name is not None and (not name.isidentifier() or keyword.iskeyword(name)):
+            raise ValueError("frame sequence name must be a non-keyword Python identifier")
+        return name
+
+    @model_validator(mode="after")
+    def validate_sequence(self) -> FrameSequenceArgument:
+        if self.min_items > self.max_items:
+            raise ValueError("frame sequence min_items cannot exceed max_items")
+        if self.fixtures and not self.min_items <= len(self.fixtures) <= self.max_items:
+            raise ValueError("frame sequence fixture count must satisfy min_items/max_items")
+        if not self.generate:
+            if not self.fixtures and self.min_items > 0:
+                raise ValueError("a non-generated frame sequence requires fixtures")
+            if not self.min_items <= len(self.fixtures) <= self.max_items:
+                raise ValueError("fixed frame sequence length must satisfy min_items/max_items")
+        elif self.input_schema is None and not self.fixtures:
+            raise ValueError("a generated frame sequence requires schema or fixtures")
+        return self
+
+
+InvocationArgument = Annotated[
+    FrameArgument | JsonArgument | FrameSequenceArgument,
+    Field(discriminator="kind"),
+]
+
+
+class InvocationConfig(StrictModel):
+    """The complete shared positional and keyword call contract."""
+
+    args: list[InvocationArgument] = Field(default_factory=list, max_length=256)
+    kwargs: dict[str, InvocationArgument] = Field(default_factory=dict, max_length=256)
+    varargs: FrameSequenceArgument | None = None
+    relationships: list[Relationship] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_invocation(self) -> InvocationConfig:
+        for name in self.kwargs:
+            if not name.isidentifier() or keyword.iskeyword(name) or len(name) > 128:
+                raise ValueError(
+                    f"invocation keyword {name!r} must be a non-keyword Python identifier "
+                    "of at most 128 characters"
+                )
+        if self.varargs is not None and self.varargs.container != "tuple":
+            # Varargs are expanded into positional arguments; a container choice
+            # would be misleading because no container reaches the callable.
+            raise ValueError("invocation varargs must use container='tuple'")
+        if self.varargs is not None and len(self.args) + self.varargs.max_items > 256:
+            raise ValueError(
+                "configured positional arguments plus expanded varargs cannot exceed 256"
+            )
+        json_arguments = [
+            argument
+            for argument in (*self.args, *self.kwargs.values())
+            if isinstance(argument, JsonArgument)
+        ]
+        maximum_json_bytes = sum(
+            max(_json_value_bytes(value) for value in argument.values)
+            for argument in json_arguments
+        )
+        if maximum_json_bytes > 512 * 1024:
+            raise ValueError("invocation JSON arguments can exceed 512 KiB in total")
+
+        frame_names: list[str] = []
+        generated_frames: set[str] = set()
+        fixture_frames: set[str] = set()
+        sequence_names: set[str] = set()
+        for index, argument in enumerate(self.args):
+            if isinstance(argument, FrameArgument):
+                name = argument.name or f"arg{index}"
+                frame_names.append(name)
+                if argument.generate:
+                    generated_frames.add(name)
+                if argument.fixture is not None:
+                    fixture_frames.add(name)
+            elif isinstance(argument, FrameSequenceArgument) and argument.name is not None:
+                sequence_names.add(argument.name)
+        for keyword_name, argument in self.kwargs.items():
+            if isinstance(argument, FrameArgument):
+                name = argument.name or keyword_name
+                frame_names.append(name)
+                if argument.generate:
+                    generated_frames.add(name)
+                if argument.fixture is not None:
+                    fixture_frames.add(name)
+            elif isinstance(argument, FrameSequenceArgument):
+                sequence_names.add(argument.name or keyword_name)
+        if self.varargs is not None and self.varargs.name is not None:
+            sequence_names.add(self.varargs.name)
+        if len(frame_names) != len(set(frame_names)):
+            raise ValueError("named frame arguments must have unique names")
+        if set(frame_names) & sequence_names:
+            raise ValueError("frame and frame-sequence names must be unique")
+
+        known = set(frame_names)
+        relationship_frames: set[str] = set()
+        for relationship in self.relationships:
+            references: set[str]
+            if isinstance(relationship, EqualRowCount):
+                references = set(relationship.inputs)
+            elif isinstance(relationship, KeyOverlap | Cardinality):
+                references = {relationship.left.input, relationship.right.input}
+            else:
+                references = {relationship.child.input, relationship.parent.input}
+            if unknown := references - known:
+                raise ValueError(
+                    "invocation relationship references unknown frame argument(s): "
+                    f"{sorted(unknown)}"
+                )
+            if fixed := references - generated_frames:
+                raise ValueError(
+                    "relationship frame arguments must use generate=true; use a custom "
+                    f"generator for fixed relational frames: {sorted(fixed)}"
+                )
+            relationship_frames.update(references)
+        configured_relationship_fixtures = relationship_frames & fixture_frames
+        if configured_relationship_fixtures and (
+            configured_relationship_fixtures != relationship_frames
+        ):
+            raise ValueError(
+                "relationship frame fixtures must be provided for every referenced frame or none"
+            )
+        return self
+
+
+class InvocationArrowDocument(StrictModel):
+    """One Arrow leaf in a replayable invocation document."""
+
+    kind: Literal["arrow"]
+    file: str = Field(min_length=1)
+
+
+class InvocationJsonDocument(StrictModel):
+    """One JSON leaf in a replayable invocation document."""
+
+    kind: Literal["json"]
+    value: JsonValue
+
+
+class InvocationFramesDocument(StrictModel):
+    """One list/tuple-valued frame argument in an invocation document."""
+
+    kind: Literal["frames"]
+    container: Literal["list", "tuple"]
+    items: list[InvocationArrowDocument] = Field(max_length=256)
+
+
+InvocationDocumentValue = Annotated[
+    InvocationArrowDocument | InvocationJsonDocument | InvocationFramesDocument,
+    Field(discriminator="kind"),
+]
+
+
+class InvocationDocument(StrictModel):
+    """Stored recursive positional and keyword call contract."""
+
+    args: list[InvocationDocumentValue] = Field(max_length=256)
+    kwargs: dict[str, InvocationDocumentValue] = Field(max_length=256)
+
+    @field_validator("kwargs")
+    @classmethod
+    def validate_keywords(
+        cls, values: dict[str, InvocationDocumentValue]
+    ) -> dict[str, InvocationDocumentValue]:
+        if any(
+            not name.isidentifier() or keyword.iskeyword(name) or len(name) > 128 for name in values
+        ):
+            raise ValueError(
+                "invocation keyword names must be non-keyword Python identifiers "
+                "of at most 128 characters"
+            )
+        return values
+
+
 class CallableSpec(StrictModel):
     """One Python or protocol-command implementation and its environment."""
 
@@ -433,8 +664,8 @@ class CallableSpec(StrictModel):
     @field_validator("target", "canonicalizer")
     @classmethod
     def validate_target(cls, target: str | None) -> str | None:
-        if target is not None and not is_import_target(target):
-            raise ValueError("Python targets must use module.path:callable.path syntax")
+        if target is not None and (len(target) > 4_096 or not is_import_target(target)):
+            raise ValueError("Python targets must be bounded module.path:callable.path identifiers")
         return target
 
     @field_validator("command")
@@ -501,6 +732,45 @@ class CallableSpec(StrictModel):
         return tuple(sorted(set(self.record_distributions).union(self.required_distributions)))
 
 
+class ComparisonOverride(StrictModel):
+    """A comparison-policy patch selected by an output JSON Pointer."""
+
+    path: str = Field(min_length=1, max_length=1_024)
+    column_order: Literal["strict", "ignore"] | None = None
+    row_order: Literal["strict", "ignore", "keyed"] | None = None
+    row_keys: list[str] | None = None
+    dtype: Literal["strict", "compatible", "ignore"] | None = None
+    names: Literal["strict", "case_insensitive"] | None = None
+    null_equal: bool | None = None
+    nan_equal: bool | None = None
+    null_nan_equal: bool | None = None
+    signed_zero_equal: bool | None = None
+    rtol: float | None = Field(default=None, ge=0)
+    atol: float | None = Field(default=None, ge=0)
+    datetime_tolerance_ns: int | None = Field(default=None, ge=0)
+    ignored_columns: list[str] | None = None
+
+    @model_validator(mode="after")
+    def validate_override(self) -> ComparisonOverride:
+        if not self.path.startswith("/") or self.path.endswith("/"):
+            raise ValueError("comparison override path must be a non-root JSON Pointer")
+        for segment in self.path[1:].split("/"):
+            index = 0
+            while index < len(segment):
+                if segment[index] != "~":
+                    index += 1
+                    continue
+                if index + 1 >= len(segment) or segment[index + 1] not in {"0", "1"}:
+                    raise ValueError(
+                        "comparison override path contains invalid JSON Pointer escape"
+                    )
+                index += 2
+        configured = self.model_dump(exclude={"path"}, exclude_none=True)
+        if not configured:
+            raise ValueError("comparison override must change at least one policy field")
+        return self
+
+
 class ComparisonPolicy(StrictModel):
     """Explicit definition of semantic equivalence."""
 
@@ -519,6 +789,7 @@ class ComparisonPolicy(StrictModel):
     atol: float = Field(default=0.0, ge=0)
     datetime_tolerance_ns: int = Field(default=0, ge=0)
     ignored_columns: list[str] = Field(default_factory=list)
+    overrides: list[ComparisonOverride] = Field(default_factory=list, max_length=1_000)
 
     @model_validator(mode="after")
     def validate_row_alignment(self) -> ComparisonPolicy:
@@ -548,6 +819,18 @@ class ComparisonPolicy(StrictModel):
             raise ValueError(
                 "keyed null_nan_equal requires null_equal and nan_equal so keys are reflexive"
             )
+        paths = [override.path for override in self.overrides]
+        if len(paths) != len(set(paths)):
+            raise ValueError("comparison override paths must be unique")
+        base = self.model_dump(mode="python", exclude={"overrides"})
+        for override in self.overrides:
+            patch = override.model_dump(mode="python", exclude={"path"}, exclude_none=True)
+            try:
+                ComparisonPolicy.model_validate({**base, **patch, "overrides": []})
+            except ValueError as error:
+                raise ValueError(
+                    f"comparison override {override.path!r} does not form a valid policy"
+                ) from error
         return self
 
 
@@ -658,68 +941,30 @@ class CaseConfig(StrictModel):
     name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_.-]+$")
     reference: CallableSpec
     candidate: CallableSpec
-    fixture: Path | None = None
-    input_schema: FrameSchema | None = Field(
-        default=None, validation_alias="schema", serialization_alias="schema"
-    )
-    input_bundle: InputBundle | None = None
-    static_args: list[JsonValue] = Field(default_factory=list)
-    static_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
-    reference_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
-    candidate_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
+    invocation: InvocationConfig | None = None
     comparison: ComparisonPolicy = Field(default_factory=ComparisonPolicy)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     timeout_seconds: float = Field(default=30.0, gt=0, le=3_600)
     tags: set[str] = Field(default_factory=set)
 
-    model_config = ConfigDict(extra="forbid", validate_assignment=True, populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
     _base_directory: Path | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def require_input_contract(self) -> CaseConfig:
-        has_single_input = self.fixture is not None or self.input_schema is not None
         has_custom_generator = self.generation.generator is not None
-        if not has_single_input and self.input_bundle is None and not has_custom_generator:
-            raise ValueError(
-                "a case requires either fixture or schema, input_bundle, or generation.generator"
-            )
-        if has_single_input and self.input_bundle is not None:
-            raise ValueError("a case cannot combine fixture or schema with input_bundle")
-        if has_custom_generator and (has_single_input or self.input_bundle is not None):
-            raise ValueError(
-                "generation.generator is a complete input contract and cannot be combined "
-                "with fixture, schema, or input_bundle"
-            )
+        if (self.invocation is None) == (not has_custom_generator):
+            raise ValueError("a case requires exactly one of invocation or generation.generator")
         if has_custom_generator and not self.generation.search:
             raise ValueError("generation.generator requires generation.search=true")
-        for side, endpoint_kwargs in (
-            ("reference", self.reference_kwargs),
-            ("candidate", self.candidate_kwargs),
-        ):
-            overlap = self.static_kwargs.keys() & endpoint_kwargs.keys()
-            if overlap:
-                raise ValueError(f"{side}_kwargs overlap static_kwargs: {sorted(overlap)}")
-        if self.input_bundle is not None and self.input_bundle.binding == "keyword":
-            if self.static_args:
-                raise ValueError("keyword input_bundle binding cannot be combined with static_args")
-            invocation_kwargs = (
-                self.static_kwargs.keys()
-                | self.reference_kwargs.keys()
-                | self.candidate_kwargs.keys()
-            )
-            collisions = self.input_bundle.inputs.keys() & invocation_kwargs
-            if collisions:
-                raise ValueError(
-                    f"input names collide with invocation kwargs: {sorted(collisions)}"
-                )
         return self
 
 
 class ParityConfig(StrictModel):
     """Top-level parity.toml document."""
 
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     artifact_dir: Path = Path(".parity")
     cases: list[CaseConfig] = Field(min_length=1)
     fail_fast: bool = False

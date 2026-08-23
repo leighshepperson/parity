@@ -1,7 +1,7 @@
 # Distilled contracts
 
 A distilled contract turns confirmed Parity findings into a durable regression gate that executes
-only the candidate. Its initial baseline stores each minimized Arrow input, the exact reference
+only the candidate. Its initial baseline stores each minimized invocation, the exact reference
 Return/Raise observation, the comparison policy and the candidate launch configuration. It never
 stores a reference endpoint and cannot invoke the retired implementation. A reviewed retirement
 can promote stable candidate observations into the final baseline.
@@ -58,10 +58,11 @@ records approval rationales and the prior contract digest. See
 
 For every distinct case/finding signature, Parity verifies the source artifact's hashes and copies:
 
-- one to three minimized Arrow inputs in their original single, keyword or positional binding;
+- the complete minimized positional/keyword invocation, including zero or many Arrow leaves,
+  JSON values and dataframe sequences;
 - the reference's Arrow or JSON return value, or its normalized exception semantics;
 - reference input-mutation behaviour and runtime provenance;
-- the exact comparison policy, static arguments, candidate-only arguments and timeout;
+- the exact comparison policy and timeout;
 - the sanitized, project-relative candidate target, command, workdir, interpreter and required
   environment-variable names.
 
@@ -115,7 +116,7 @@ assert result.passed
 
 `distill_contract` returns a typed `DistillationResult`; `retire_contract` returns a
 `RetirementResult`; `verify_contract` returns the ordinary `SuiteResult`.
-`DistilledContractManifest` is public, and its frozen Draft 2020-12 version 2 schema is available
+`DistilledContractManifest` is public, and its frozen Draft 2020-12 version 3 schema is available
 with:
 
 ```bash

@@ -28,8 +28,10 @@ from parity.models import (
     CaseResult,
     ColumnSchema,
     ExampleResult,
+    FrameArgument,
     FrameSchema,
     GenerationConfig,
+    InvocationConfig,
     Mismatch,
     MismatchKind,
     ParityConfig,
@@ -50,7 +52,7 @@ def _config(*names: str, fail_fast: bool = False) -> ParityConfig:
                 name=name,
                 reference=CallableSpec(target="example:reference"),
                 candidate=CallableSpec(target="example:candidate"),
-                input_schema=schema,
+                invocation=InvocationConfig(args=[FrameArgument(input_schema=schema)]),
             )
             for name in names
         ],
@@ -275,8 +277,16 @@ def test_migration_gate_propagates_runtime_contract_error_before_import(tmp_path
                 name="runtime-contract",
                 reference=spec,
                 candidate=spec.model_copy(deep=True),
-                input_schema=FrameSchema(
-                    columns=[ColumnSchema(name="value", dtype="integer", nullable=False)]
+                invocation=InvocationConfig(
+                    args=[
+                        FrameArgument(
+                            input_schema=FrameSchema(
+                                columns=[
+                                    ColumnSchema(name="value", dtype="integer", nullable=False)
+                                ]
+                            )
+                        )
+                    ]
                 ),
                 generation=GenerationConfig(adversarial_examples=False, max_examples=1),
                 performance=PerformanceConfig(enabled=False),
@@ -477,17 +487,22 @@ def test_check_migration_loads_both_documents(
     config_path = project / "parity.toml"
     config_path.write_text(
         """
-version = 1
+version = 2
 [[cases]]
 name = "control"
+
+[[cases.invocation.args]]
+kind = "frame"
+
+[cases.invocation.args.schema]
+[[cases.invocation.args.schema.columns]]
+name = "value"
+dtype = "integer"
+
 [cases.reference]
 target = "example:reference"
 [cases.candidate]
 target = "example:candidate"
-[cases.schema]
-[[cases.schema.columns]]
-name = "value"
-dtype = "integer"
 """,
         encoding="utf-8",
     )
@@ -516,10 +531,16 @@ def test_run_migration_exercises_real_isolated_workers(tmp_path: Path) -> None:
                 name="identity",
                 reference=callable_spec,
                 candidate=callable_spec.model_copy(deep=True),
-                input_schema=FrameSchema(
-                    min_rows=1,
-                    max_rows=1,
-                    columns=[ColumnSchema(name="value", dtype="integer")],
+                invocation=InvocationConfig(
+                    args=[
+                        FrameArgument(
+                            input_schema=FrameSchema(
+                                min_rows=1,
+                                max_rows=1,
+                                columns=[ColumnSchema(name="value", dtype="integer")],
+                            )
+                        )
+                    ]
                 ),
                 generation=GenerationConfig(
                     max_examples=1,

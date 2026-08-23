@@ -15,8 +15,10 @@ from parity.models import (
     CaseConfig,
     CaseResult,
     ColumnSchema,
+    FrameArgument,
     FrameSchema,
     GenerationConfig,
+    InvocationConfig,
     ParityConfig,
     PerformanceConfig,
     Status,
@@ -28,7 +30,13 @@ def _case(name: str, seed: int) -> CaseConfig:
         name=name,
         reference=CallableSpec(target="project:reference"),
         candidate=CallableSpec(target="project:candidate"),
-        input_schema=FrameSchema(columns=[ColumnSchema(name="x", dtype="integer")]),
+        invocation=InvocationConfig(
+            args=[
+                FrameArgument(
+                    input_schema=FrameSchema(columns=[ColumnSchema(name="x", dtype="integer")])
+                )
+            ]
+        ),
         generation=GenerationConfig(seed=seed, max_examples=1),
         performance=PerformanceConfig(enabled=False),
     )
@@ -182,7 +190,7 @@ def test_parallel_cases_run_with_real_isolated_worker_pairs(tmp_path: Path) -> N
             candidate=CallableSpec(
                 target="parallel_project:corrupt", adapter="pandas", workdir=tmp_path
             ),
-            input_schema=schema,
+            invocation=InvocationConfig(args=[FrameArgument(input_schema=schema)]),
             generation=GenerationConfig(
                 max_examples=3,
                 seed=seed,

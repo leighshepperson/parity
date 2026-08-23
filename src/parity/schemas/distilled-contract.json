@@ -130,6 +130,206 @@
       "title": "CallableSpec",
       "type": "object"
     },
+    "ComparisonOverride": {
+      "additionalProperties": false,
+      "description": "A comparison-policy patch selected by an output JSON Pointer.",
+      "properties": {
+        "atol": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Atol"
+        },
+        "column_order": {
+          "anyOf": [
+            {
+              "enum": [
+                "strict",
+                "ignore"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column Order"
+        },
+        "datetime_tolerance_ns": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Datetime Tolerance Ns"
+        },
+        "dtype": {
+          "anyOf": [
+            {
+              "enum": [
+                "strict",
+                "compatible",
+                "ignore"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dtype"
+        },
+        "ignored_columns": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ignored Columns"
+        },
+        "names": {
+          "anyOf": [
+            {
+              "enum": [
+                "strict",
+                "case_insensitive"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Names"
+        },
+        "nan_equal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nan Equal"
+        },
+        "null_equal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Null Equal"
+        },
+        "null_nan_equal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Null Nan Equal"
+        },
+        "path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "row_keys": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Keys"
+        },
+        "row_order": {
+          "anyOf": [
+            {
+              "enum": [
+                "strict",
+                "ignore",
+                "keyed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row Order"
+        },
+        "rtol": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rtol"
+        },
+        "signed_zero_equal": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signed Zero Equal"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "ComparisonOverride",
+      "type": "object"
+    },
     "ComparisonPolicy": {
       "additionalProperties": false,
       "description": "Explicit definition of semantic equivalence.",
@@ -206,6 +406,14 @@
           "title": "Null Nan Equal",
           "type": "boolean"
         },
+        "overrides": {
+          "items": {
+            "$ref": "#/$defs/ComparisonOverride"
+          },
+          "maxItems": 1000,
+          "title": "Overrides",
+          "type": "array"
+        },
         "row_keys": {
           "items": {
             "type": "string"
@@ -254,15 +462,17 @@
           "items": {
             "$ref": "#/$defs/ContractInput"
           },
-          "maxItems": 3,
-          "minItems": 1,
+          "maxItems": 512,
           "title": "Inputs",
           "type": "array"
+        },
+        "invocation": {
+          "$ref": "#/$defs/InvocationDocument"
         }
       },
       "required": [
         "finding_signature",
-        "inputs",
+        "invocation",
         "expected"
       ],
       "title": "ContractExample",
@@ -527,13 +737,6 @@
         "candidate": {
           "$ref": "#/$defs/CallableSpec"
         },
-        "candidate_kwargs": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "title": "Candidate Kwargs",
-          "type": "object"
-        },
         "comparison": {
           "$ref": "#/$defs/ComparisonPolicy"
         },
@@ -545,34 +748,11 @@
           "title": "Examples",
           "type": "array"
         },
-        "input_binding": {
-          "enum": [
-            "single",
-            "keyword",
-            "positional"
-          ],
-          "title": "Input Binding",
-          "type": "string"
-        },
         "name": {
           "minLength": 1,
           "pattern": "^[A-Za-z0-9_.-]+$",
           "title": "Name",
           "type": "string"
-        },
-        "static_args": {
-          "items": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "title": "Static Args",
-          "type": "array"
-        },
-        "static_kwargs": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "title": "Static Kwargs",
-          "type": "object"
         },
         "timeout_seconds": {
           "default": 30.0,
@@ -585,7 +765,6 @@
       "required": [
         "name",
         "candidate",
-        "input_binding",
         "examples"
       ],
       "title": "DistilledCase",
@@ -630,6 +809,146 @@
         "status"
       ],
       "title": "DistributionProvenance",
+      "type": "object"
+    },
+    "InvocationArrowDocument": {
+      "additionalProperties": false,
+      "description": "One Arrow leaf in a replayable invocation document.",
+      "properties": {
+        "file": {
+          "minLength": 1,
+          "title": "File",
+          "type": "string"
+        },
+        "kind": {
+          "const": "arrow",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "file"
+      ],
+      "title": "InvocationArrowDocument",
+      "type": "object"
+    },
+    "InvocationDocument": {
+      "additionalProperties": false,
+      "description": "Stored recursive positional and keyword call contract.",
+      "properties": {
+        "args": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "arrow": "#/$defs/InvocationArrowDocument",
+                "frames": "#/$defs/InvocationFramesDocument",
+                "json": "#/$defs/InvocationJsonDocument"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/InvocationArrowDocument"
+              },
+              {
+                "$ref": "#/$defs/InvocationJsonDocument"
+              },
+              {
+                "$ref": "#/$defs/InvocationFramesDocument"
+              }
+            ]
+          },
+          "maxItems": 256,
+          "title": "Args",
+          "type": "array"
+        },
+        "kwargs": {
+          "additionalProperties": {
+            "discriminator": {
+              "mapping": {
+                "arrow": "#/$defs/InvocationArrowDocument",
+                "frames": "#/$defs/InvocationFramesDocument",
+                "json": "#/$defs/InvocationJsonDocument"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/InvocationArrowDocument"
+              },
+              {
+                "$ref": "#/$defs/InvocationJsonDocument"
+              },
+              {
+                "$ref": "#/$defs/InvocationFramesDocument"
+              }
+            ]
+          },
+          "maxProperties": 256,
+          "title": "Kwargs",
+          "type": "object"
+        }
+      },
+      "required": [
+        "args",
+        "kwargs"
+      ],
+      "title": "InvocationDocument",
+      "type": "object"
+    },
+    "InvocationFramesDocument": {
+      "additionalProperties": false,
+      "description": "One list/tuple-valued frame argument in an invocation document.",
+      "properties": {
+        "container": {
+          "enum": [
+            "list",
+            "tuple"
+          ],
+          "title": "Container",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/InvocationArrowDocument"
+          },
+          "maxItems": 256,
+          "title": "Items",
+          "type": "array"
+        },
+        "kind": {
+          "const": "frames",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "container",
+        "items"
+      ],
+      "title": "InvocationFramesDocument",
+      "type": "object"
+    },
+    "InvocationJsonDocument": {
+      "additionalProperties": false,
+      "description": "One JSON leaf in a replayable invocation document.",
+      "properties": {
+        "kind": {
+          "const": "json",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "InvocationJsonDocument",
       "type": "object"
     },
     "JsonValue": {},
@@ -858,7 +1177,7 @@
       "type": "object"
     }
   },
-  "$id": "https://parity-check.dev/schemas/distilled-contract/v2.json",
+  "$id": "https://parity-check.dev/schemas/distilled-contract/v3.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Versioned, candidate-only distilled contract stored as ``contract.json``.",
@@ -899,7 +1218,6 @@
         "$ref": "#/$defs/ContractFile"
       },
       "maxProperties": 1024,
-      "minProperties": 1,
       "title": "Files",
       "type": "object"
     },
@@ -927,7 +1245,7 @@
       "type": "string"
     },
     "version": {
-      "const": 2,
+      "const": 3,
       "title": "Version",
       "type": "integer"
     }
@@ -941,11 +1259,10 @@
     "contains_input_data",
     "contains_output_data",
     "baseline",
-    "cases",
-    "files"
+    "cases"
   ],
   "title": "DistilledContractManifest",
   "type": "object",
   "x-parity-contract": "distilled-contract",
-  "x-parity-contract-version": 2
+  "x-parity-contract-version": 3
 }

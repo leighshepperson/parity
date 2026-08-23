@@ -6,6 +6,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from parity import Invocation
 from parity.artifacts import ArtifactStore
 from parity.config import ConfigError, load_config
 from parity.custom_generation import (
@@ -21,6 +22,7 @@ def _write_project(path: Path) -> None:
     path.write_text(
         "import pandas as pd\n"
         "from hypothesis import strategies as st\n"
+        "from parity import Invocation\n"
         "\n"
         "def identity(frame):\n"
         "    return frame.copy()\n"
@@ -33,12 +35,12 @@ def _write_project(path: Path) -> None:
         "\n"
         "def strategy_inputs():\n"
         "    return st.integers(min_value=0, max_value=20).map(\n"
-        "        lambda value: pd.DataFrame({'x': [value]})\n"
+        "        lambda value: Invocation(args=(pd.DataFrame({'x': [value]}),))\n"
         "    )\n"
         "\n"
         "def iterable_inputs():\n"
         "    for value in range(1000):\n"
-        "        yield pd.DataFrame({'x': [value]})\n",
+        "        yield Invocation(args=(pd.DataFrame({'x': [value]}),))\n",
         encoding="utf-8",
     )
 
@@ -46,7 +48,7 @@ def _write_project(path: Path) -> None:
 def _write_config(path: Path, *, module: str, generator: str, max_examples: int = 50) -> None:
     path.write_text(
         f"""
-version = 1
+version = 2
 artifact_dir = ".parity"
 
 [[cases]]
@@ -99,8 +101,9 @@ def test_custom_strategy_preserves_shrinking_artifacts_seed_and_replay(
     replay = json.loads((failure.artifact / "replay.json").read_text(encoding="utf-8"))
     assert manifest["seed"] == 113
     assert replay["case"]["generation"]["generator"] is None
-    assert replay["case"]["fixture"] == "input.arrow"
-    with pa.ipc.open_file(failure.artifact / "input.arrow") as reader:
+    assert replay["case"]["invocation"] == {}
+    assert replay["invocation"]["args"] == [{"kind": "arrow", "file": "input-000.arrow"}]
+    with pa.ipc.open_file(failure.artifact / "input-000.arrow") as reader:
         assert reader.read_all().column("x").to_pylist() == [2]
     replayed = replay_artifact(failure.artifact)
     assert replayed.status is Status.FAILED
@@ -126,20 +129,22 @@ def test_plain_iterable_is_bounded_and_reported_as_generated(tmp_path: Path) -> 
     assert case.examples_run == 2
 
 
-def test_custom_generator_supports_named_dataframe_bundles() -> None:
+def test_custom_generator_supports_complete_keyword_invocations() -> None:
     generated = normalize_generated_input(
-        {
-            "left": pa.table({"key": [1]}),
-            "right": pa.table({"key": [1], "value": [2]}),
-        }
+        Invocation(
+            kwargs={
+                "left": pa.table({"key": [1]}),
+                "right": pa.table({"key": [1], "value": [2]}),
+            }
+        )
     )
 
-    assert isinstance(generated, dict)
-    assert list(generated) == ["left", "right"]
-    assert all(isinstance(value, pa.Table) for value in generated.values())
+    assert isinstance(generated, Invocation)
+    assert list(generated.kwargs) == ["left", "right"]
+    assert all(isinstance(value, pa.Table) for value in generated.kwargs.values())
 
 
-def test_custom_bundle_artifact_replays_the_exact_keyword_contract(tmp_path: Path) -> None:
+def test_custom_artifact_replays_the_exact_keyword_contract(tmp_path: Path) -> None:
     case = CaseConfig(
         name="join",
         reference=CallableSpec(target="project:legacy"),
@@ -148,26 +153,31 @@ def test_custom_bundle_artifact_replays_the_exact_keyword_contract(tmp_path: Pat
     )
     artifact = ArtifactStore(tmp_path / ".parity").write_failure(
         case,
-        {
-            "left": pa.table({"key": [1]}),
-            "right": pa.table({"key": [1], "value": [2]}),
-        },
+        Invocation(
+            kwargs={
+                "left": pa.table({"key": [1]}),
+                "right": pa.table({"key": [1], "value": [2]}),
+            }
+        ),
         ExampleResult(source="generated:custom:1", status=Status.FAILED),
     )
 
     replay = json.loads((artifact / "replay.json").read_text(encoding="utf-8"))
     replay_case = replay["case"]
     assert replay_case["generation"]["generator"] is None
-    assert replay_case["input_bundle"]["binding"] == "keyword"
-    assert list(replay_case["input_bundle"]["inputs"]) == ["left", "right"]
+    assert replay_case["invocation"] == {}
+    assert replay["invocation"]["kwargs"] == {
+        "left": {"kind": "arrow", "file": "input-000.arrow"},
+        "right": {"kind": "arrow", "file": "input-001.arrow"},
+    }
     CaseConfig.model_validate(replay_case)
 
 
-def test_custom_generator_rejects_non_dataframe_values(tmp_path: Path) -> None:
+def test_custom_generator_rejects_non_invocation_values(tmp_path: Path) -> None:
     module = tmp_path / "invalid_generator.py"
     module.write_text("def values():\n    return [1, 2, 3]\n", encoding="utf-8")
 
-    with pytest.raises(CustomGenerationError, match="supported dataframe"):
+    with pytest.raises(CustomGenerationError, match=r"parity\.Invocation"):
         load_custom_generator(
             "invalid_generator:values",
             base_directory=tmp_path,
@@ -179,10 +189,12 @@ def test_generator_is_a_complete_exclusive_input_contract(tmp_path: Path) -> Non
     path = tmp_path / "parity.toml"
     path.write_text(
         """
-version = 1
+version = 2
 
 [[cases]]
 name = "ambiguous"
+[[cases.invocation.args]]
+kind = "frame"
 fixture = "fixture.csv"
 
 [cases.reference]
@@ -197,7 +209,7 @@ generator = "project:inputs"
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="complete input contract"):
+    with pytest.raises(ConfigError, match=r"exactly one of invocation or generation\.generator"):
         load_config(path)
 
 
@@ -206,8 +218,11 @@ def test_custom_hypothesis_strategy_loader_keeps_strategy_semantics(tmp_path: Pa
     module.write_text(
         "import pyarrow as pa\n"
         "from hypothesis import strategies as st\n"
+        "from parity import Invocation\n"
         "def values():\n"
-        "    return st.integers(0, 5).map(lambda x: pa.table({'x': [x]}))\n",
+        "    return st.integers(0, 5).map(\n"
+        "        lambda x: Invocation(args=(pa.table({'x': [x]}),))\n"
+        "    )\n",
         encoding="utf-8",
     )
 

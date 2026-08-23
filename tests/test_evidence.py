@@ -27,7 +27,9 @@ from parity.models import (
     CaseProvenance,
     CaseResult,
     ExampleResult,
+    FrameArgument,
     GenerationConfig,
+    InvocationConfig,
     ParityConfig,
     PerformanceConfig,
     Status,
@@ -48,7 +50,7 @@ def _write_artifact(root: Path, *, signature: str = SIGNATURE) -> Path:
         finding_signature=signature,
     ).model_dump_json(indent=2)
     files = {
-        "input.arrow": b"arrow",
+        "input-000.arrow": b"arrow",
         "replay.json": b"{}",
         "result.json": result.encode(),
     }
@@ -60,7 +62,7 @@ def _write_artifact(root: Path, *, signature: str = SIGNATURE) -> Path:
             "sha256": hashlib.sha256(content).hexdigest(),
         }
     (root / "manifest.json").write_text(
-        json.dumps({"version": 2, "files": manifest_files}), encoding="utf-8"
+        json.dumps({"version": 3, "files": manifest_files}), encoding="utf-8"
     )
     return root
 
@@ -665,7 +667,7 @@ def candidate(frame):
         name="orders",
         reference=CallableSpec(target="transforms:reference", adapter="arrow", workdir=tmp_path),
         candidate=CallableSpec(target="transforms:candidate", adapter="arrow", workdir=tmp_path),
-        fixture=fixture,
+        invocation=InvocationConfig(args=[FrameArgument(fixture=fixture)]),
         generation=GenerationConfig(
             max_examples=1,
             adversarial_examples=False,

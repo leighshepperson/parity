@@ -1,11 +1,13 @@
-version = 1
+version = 2
 artifact_dir = ".parity-pandas-versions"
 fail_fast = false
 
 [[cases]]
 name = "categorical-groupby-observed-default"
-fixture = "fixtures/observed.json"
 tags = ["cross-version", "finding", "pandas", "version-drift"]
+[[cases.invocation.args]]
+kind = "frame"
+fixture = "fixtures/observed.json"
 
 [cases.reference]
 target = "pandas_version_parity:categorical_total"

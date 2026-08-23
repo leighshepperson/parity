@@ -8,7 +8,6 @@ plain iterable which Parity consumes up to the configured example budget.
 from __future__ import annotations
 
 import importlib
-import keyword
 import sys
 import threading
 from collections.abc import Iterable, Iterator, Mapping
@@ -18,13 +17,12 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, TypeAlias
 
-import pyarrow as pa
 from hypothesis.strategies import SearchStrategy
 
-from parity.adapters import to_arrow
 from parity.execution import redact_text
+from parity.invocation import Invocation, normalize_invocation
 
-GeneratedInput: TypeAlias = pa.Table | dict[str, pa.Table]
+GeneratedInput: TypeAlias = Invocation
 
 _IMPORT_LOCK = threading.RLock()
 
@@ -83,33 +81,14 @@ def _import_factory(target: str, base_directory: Path | None) -> Any:
 
 
 def normalize_generated_input(value: Any) -> GeneratedInput:
-    """Convert one custom value into Parity's canonical Arrow input transport."""
+    """Convert one project value into a canonical complete invocation."""
 
-    if isinstance(value, Mapping):
-        items = list(value.items())
-        if not 2 <= len(items) <= 3:
-            raise CustomGenerationError(
-                "a custom named input bundle must contain two or three dataframes"
-            )
-        converted: dict[str, pa.Table] = {}
-        for name, frame in items:
-            if not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name):
-                raise CustomGenerationError(
-                    "custom input bundle names must be valid Python identifiers"
-                )
-            try:
-                converted[name] = to_arrow(frame).combine_chunks()
-            except Exception as error:
-                raise CustomGenerationError(
-                    f"custom input {name!r} is not a supported dataframe"
-                ) from error
-        return converted
     try:
-        return to_arrow(value).combine_chunks()
+        return normalize_invocation(value)
     except Exception as error:
         raise CustomGenerationError(
-            "custom generator values must be a supported dataframe or a mapping "
-            "of two or three named dataframes"
+            "custom generator values must be parity.Invocation instances containing "
+            "dataframes, frame sequences, and/or JSON-like values"
         ) from error
 
 
@@ -135,7 +114,7 @@ def load_custom_generator(
         strategy: SearchStrategy[GeneratedInput] = produced.map(normalize_generated_input)
         return CustomGenerator(strategy=strategy)
 
-    if isinstance(produced, (str, bytes, bytearray, Mapping, pa.Table)):
+    if isinstance(produced, (str, bytes, bytearray, Mapping, Invocation)):
         raise CustomGenerationError(
             "a plain custom generator must return an iterable of input examples"
         )

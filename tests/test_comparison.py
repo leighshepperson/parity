@@ -19,7 +19,13 @@ import parity.comparison as comparison_module
 from parity.canonical import CanonicalColumn, CanonicalFrame, CanonicalSeries, canonicalize
 from parity.comparison import compare, compare_observations, compare_result, mismatch_signature
 from parity.execution import ExecutionOutcome, Observation
-from parity.models import ComparisonPolicy, Mismatch, MismatchKind, RunMetrics
+from parity.models import (
+    ComparisonOverride,
+    ComparisonPolicy,
+    Mismatch,
+    MismatchKind,
+    RunMetrics,
+)
 
 
 def test_cross_library_frames_are_compatible_by_default() -> None:
@@ -200,6 +206,62 @@ def test_nested_sequence_frames_apply_unordered_row_alignment() -> None:
         )
         == []
     )
+
+
+def test_output_pointer_override_applies_a_distinct_policy_to_one_frame() -> None:
+    ordered = pa.table({"id": [1, 2], "amount": [10.0, 20.0]})
+    reordered = pa.table({"id": [2, 1], "amount": [20.0, 10.0]})
+    reference = {"strict": ordered, "by_id": ordered}
+    candidate = {"strict": reordered, "by_id": reordered}
+    policy = ComparisonPolicy(
+        overrides=[ComparisonOverride(path="/by_id", row_order="keyed", row_keys=["id"])]
+    )
+
+    mismatches = compare(reference, candidate, policy)
+
+    assert mismatches
+    assert {mismatch.path.split("[")[1] for mismatch in mismatches} == {"'strict']"}
+
+
+def test_output_pointer_wildcard_and_escaped_segments_select_nested_frames() -> None:
+    ordered = pa.table({"id": [1, 2], "amount": [10.0, 20.0]})
+    reordered = pa.table({"id": [2, 1], "amount": [20.0, 10.0]})
+    reference = {
+        "groups": [ordered, ordered],
+        "a/b": {"~result": ordered},
+    }
+    candidate = {
+        "groups": [reordered, reordered],
+        "a/b": {"~result": reordered},
+    }
+    policy = ComparisonPolicy(
+        overrides=[
+            ComparisonOverride(path="/groups/*", row_order="keyed", row_keys=["id"]),
+            ComparisonOverride(path="/a~1b/~0result", row_order="keyed", row_keys=["id"]),
+        ]
+    )
+
+    assert compare(reference, candidate, policy) == []
+
+
+def test_more_specific_output_override_replaces_parent_subtree_policy() -> None:
+    ordered = pa.table({"id": [1, 2]})
+    reordered = pa.table({"id": [2, 1]})
+    policy = ComparisonPolicy(
+        overrides=[
+            ComparisonOverride(path="/groups", row_order="ignore"),
+            ComparisonOverride(path="/groups/0", row_order="strict"),
+        ]
+    )
+
+    mismatches = compare(
+        {"groups": [ordered, ordered]},
+        {"groups": [reordered, reordered]},
+        policy,
+    )
+
+    assert mismatches
+    assert all(mismatch.path.startswith("$['groups'][0]") for mismatch in mismatches)
 
 
 def test_canonical_frame_and_series_are_canonicalization_fixed_points() -> None:

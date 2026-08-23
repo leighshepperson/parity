@@ -18,7 +18,8 @@ def test_utilsforecast_study_has_a_pinned_keyed_control() -> None:
 
     case = config.cases[0]
     assert case.name == "evaluate-mae-rmse"
-    assert case.fixture == Path("fixtures/forecast.json")
+    assert case.invocation is not None
+    assert case.invocation.args[0].fixture == Path("fixtures/forecast.json")
     assert case.reference.adapter == "pandas"
     assert case.reference.pandas_input == "native"
     assert case.candidate.adapter == "polars"

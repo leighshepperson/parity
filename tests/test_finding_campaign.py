@@ -7,8 +7,10 @@ from parity.models import (
     CallableSpec,
     CaseConfig,
     ColumnSchema,
+    FrameArgument,
     FrameSchema,
     GenerationConfig,
+    InvocationConfig,
     MismatchKind,
     ParityConfig,
     PerformanceConfig,
@@ -45,32 +47,38 @@ def test_same_class_field_regressions_are_discovered_shrunk_and_replayed_indepen
             adapter="pandas",
             workdir=tmp_path,
         ),
-        input_schema=FrameSchema(
-            columns=[
-                ColumnSchema(
-                    name="selector",
-                    dtype="integer",
-                    nullable=False,
-                    minimum=0,
-                    maximum=1,
-                ),
-                ColumnSchema(
-                    name="left",
-                    dtype="integer",
-                    nullable=False,
-                    minimum=0,
-                    maximum=5,
-                ),
-                ColumnSchema(
-                    name="right",
-                    dtype="integer",
-                    nullable=False,
-                    minimum=0,
-                    maximum=5,
-                ),
-            ],
-            min_rows=1,
-            max_rows=3,
+        invocation=InvocationConfig(
+            args=[
+                FrameArgument(
+                    input_schema=FrameSchema(
+                        columns=[
+                            ColumnSchema(
+                                name="selector",
+                                dtype="integer",
+                                nullable=False,
+                                minimum=0,
+                                maximum=1,
+                            ),
+                            ColumnSchema(
+                                name="left",
+                                dtype="integer",
+                                nullable=False,
+                                minimum=0,
+                                maximum=5,
+                            ),
+                            ColumnSchema(
+                                name="right",
+                                dtype="integer",
+                                nullable=False,
+                                minimum=0,
+                                maximum=5,
+                            ),
+                        ],
+                        min_rows=1,
+                        max_rows=3,
+                    )
+                )
+            ]
         ),
         generation=GenerationConfig(
             max_examples=200,
@@ -91,7 +99,10 @@ def test_same_class_field_regressions_are_discovered_shrunk_and_replayed_indepen
     signatures = {failure.finding_signature for failure in observed.failures}
     assert None not in signatures
     assert len(signatures) == 2
-    assert all(failure.source == "generated:shrunk" for failure in observed.failures)
+    assert {failure.source for failure in observed.failures} == {
+        "invocation:baseline",
+        "generated:shrunk",
+    }
     assert {
         mismatch.path.rsplit(".", 1)[-1]
         for failure in observed.failures

@@ -2,7 +2,7 @@
 
 An adapter written with this module only owns the domain boundary: converting
 canonical Arrow inputs into a legacy invocation and converting the result back.
-The SDK owns target protocol v1, provenance, bounded transport, publication and
+The SDK owns target protocol v2, provenance, bounded transport, publication and
 the distinction between semantic rejections and adapter failures.
 """
 
@@ -34,7 +34,7 @@ from parity.provenance import (
     normalize_distribution_names,
 )
 
-_PROTOCOL_VERSION = 1
+_PROTOCOL_VERSION = 2
 _MAX_REQUEST_BYTES = 1024 * 1024
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_JSON_OUTPUT_BYTES = 16 * 1024 * 1024
@@ -373,7 +373,7 @@ def _exception_payload(
 
 
 class CommandAdapter:
-    """Serve one domain adapter through Parity target protocol v1."""
+    """Serve one domain adapter through Parity target protocol v2."""
 
     def __init__(
         self,
@@ -473,49 +473,76 @@ class CommandAdapter:
         return values
 
     @staticmethod
-    def _inputs(
+    def _invocation(
         request: Mapping[str, Any], call_root: Path
-    ) -> tuple[str, tuple[tuple[str, pa.Table], ...]]:
-        envelope = request.get("inputs")
-        if not isinstance(envelope, Mapping) or set(envelope) != {"kind", "items"}:
-            raise _ProtocolFailure("invalid input bundle")
-        kind = envelope.get("kind")
-        items = envelope.get("items")
-        if kind not in {"single", "positional", "keyword"} or not isinstance(items, list):
-            raise _ProtocolFailure("invalid input bundle")
-        if not items or (kind == "single" and len(items) != 1):
-            raise _ProtocolFailure("invalid input bundle cardinality")
-        parsed: list[tuple[str, pa.Table]] = []
-        for index, item in enumerate(items):
-            if not isinstance(item, Mapping) or set(item) != {"name", "path"}:
-                raise _ProtocolFailure("invalid input item")
-            name = item.get("name")
-            if not isinstance(name, str):
-                raise _ProtocolFailure("invalid input label")
-            expected_name = f"input-{index:08d}.arrow"
-            path = _exact_child(call_root, item.get("path"), expected_name, must_exist=True)
-            payload = _read_regular_file(
-                path,
-                expected_parent=call_root,
-                max_bytes=_MAX_ARROW_OUTPUT_BYTES,
-            )
-            try:
-                table = ipc.open_file(pa.BufferReader(payload)).read_all()
-            except Exception:
-                raise _ProtocolFailure("canonical Arrow input could not be decoded") from None
-            parsed.append((name, table))
-        labels = tuple(name for name, _table in parsed)
-        if len(labels) != len(set(labels)):
-            raise _ProtocolFailure("input labels must be unique")
-        if kind == "single" and labels != ("input",):
-            raise _ProtocolFailure("invalid single input labels")
-        if kind == "positional" and labels != tuple(str(index) for index in range(len(items))):
-            raise _ProtocolFailure("invalid positional input labels")
-        if kind == "keyword" and any(
-            not name.isidentifier() or keyword.iskeyword(name) for name in labels
+    ) -> tuple[tuple[Any, ...], dict[str, Any], tuple[str, ...]]:
+        envelope = request.get("invocation")
+        if not isinstance(envelope, Mapping) or set(envelope) != {"args", "kwargs"}:
+            raise _ProtocolFailure("invalid invocation")
+        raw_args = envelope.get("args")
+        raw_kwargs = envelope.get("kwargs")
+        if not isinstance(raw_args, list) or not isinstance(raw_kwargs, dict):
+            raise _ProtocolFailure("invalid invocation")
+        if len(raw_args) > 256 or len(raw_kwargs) > 256:
+            raise _ProtocolFailure("invocation contains too many arguments")
+        if any(
+            not isinstance(name, str)
+            or not name.isidentifier()
+            or keyword.iskeyword(name)
+            or len(name) > 128
+            for name in raw_kwargs
         ):
-            raise _ProtocolFailure("invalid keyword input labels")
-        return str(kind), tuple(parsed)
+            raise _ProtocolFailure("invalid invocation keyword")
+        file_index = 0
+
+        def parse(node: Any) -> Any:
+            nonlocal file_index
+            if not isinstance(node, Mapping):
+                raise _ProtocolFailure("invalid invocation value")
+            kind = node.get("kind")
+            if kind == "arrow" and set(node) == {"kind", "path"}:
+                expected_name = f"input-{file_index:08d}.arrow"
+                file_index += 1
+                path = _exact_child(call_root, node.get("path"), expected_name, must_exist=True)
+                payload = _read_regular_file(
+                    path,
+                    expected_parent=call_root,
+                    max_bytes=_MAX_ARROW_OUTPUT_BYTES,
+                )
+                try:
+                    return ipc.open_file(pa.BufferReader(payload)).read_all()
+                except Exception:
+                    raise _ProtocolFailure(
+                        "canonical Arrow invocation value could not be decoded"
+                    ) from None
+            if kind == "json" and set(node) == {"kind", "value"}:
+                try:
+                    return json.loads(json.dumps(node.get("value"), allow_nan=True))
+                except (TypeError, ValueError):
+                    raise _ProtocolFailure("invalid JSON invocation value") from None
+            if kind == "frames" and set(node) == {"kind", "container", "items"}:
+                container = node.get("container")
+                items = node.get("items")
+                if container not in {"list", "tuple"} or not isinstance(items, list):
+                    raise _ProtocolFailure("invalid frame sequence invocation value")
+                if len(items) > 256:
+                    raise _ProtocolFailure("frame sequence contains too many items")
+                if any(
+                    not isinstance(item, Mapping) or item.get("kind") != "arrow" for item in items
+                ):
+                    raise _ProtocolFailure("frame sequence items must be Arrow inputs")
+                values = [parse(item) for item in items]
+                return values if container == "list" else tuple(values)
+            raise _ProtocolFailure("invalid invocation value")
+
+        args = tuple(parse(node) for node in raw_args)
+        kwargs = {name: parse(node) for name, node in raw_kwargs.items()}
+        labels = tuple(
+            [*(f"args/{index}" for index in range(len(args)))],
+            *(),
+        )
+        labels = (*labels, *(f"kwargs/{name}" for name in kwargs))
+        return args, kwargs, labels
 
     def _execute_response(
         self,
@@ -523,12 +550,6 @@ class CommandAdapter:
         call_root: Path,
         runtime: Mapping[str, Any],
     ) -> dict[str, Any]:
-        static_args = request.get("static_args")
-        static_kwargs = request.get("static_kwargs")
-        if not isinstance(static_args, list) or not isinstance(static_kwargs, dict):
-            raise _ProtocolFailure("invalid static arguments")
-        if not all(isinstance(name, str) for name in static_kwargs):
-            raise _ProtocolFailure("static keyword names must be strings")
         output = request.get("output")
         if not isinstance(output, Mapping) or set(output) != {"arrow", "json"}:
             raise _ProtocolFailure("invalid output paths")
@@ -536,28 +557,10 @@ class CommandAdapter:
             call_root, output.get("arrow"), "output.arrow", must_exist=False
         )
         output_json = _exact_child(call_root, output.get("json"), "output.json", must_exist=False)
-        kind, parsed = self._inputs(request, call_root)
-        labels = tuple(name for name, _table in parsed)
-        values = [table for _name, table in parsed]
+        args, kwargs, labels = self._invocation(request, call_root)
         started = time.perf_counter()
         try:
-            if kind == "single":
-                returned = self.execute(values[0], *static_args, **static_kwargs)
-            elif kind == "positional":
-                returned = self.execute(*values, *static_args, **static_kwargs)
-            else:
-                if static_args:
-                    raise AdapterError(
-                        "invalid_binding",
-                        "keyword inputs cannot be combined with static positional args",
-                    )
-                keywords = dict(parsed)
-                if set(keywords).intersection(static_kwargs):
-                    raise AdapterError(
-                        "invalid_binding", "input names collide with static keyword arguments"
-                    )
-                keywords.update(static_kwargs)
-                returned = self.execute(**keywords)
+            returned = self.execute(*args, **kwargs)
         except TargetRaised as error:
             try:
                 mutations = self._validate_mutations(error.mutated_inputs, labels)

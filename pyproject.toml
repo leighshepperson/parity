@@ -117,7 +117,7 @@ source = ["parity"]
 # Ratchet this upward as the first-party suite grows.  The initial release is
 # deliberately honest about its measured branch coverage instead of publishing
 # an aspirational gate that no checkout can pass.
-fail_under = 68
+fail_under = 75
 precision = 2
 show_missing = true
 skip_covered = true

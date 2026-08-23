@@ -119,7 +119,10 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src/parity
-      - run: pytest --cov=src/parity --cov-report=term-missing
+      - name: Test with branch coverage
+        run: |
+          python -m coverage run -m pytest
+          python -m coverage report
       - name: Seed excluded build evidence
         run: |
           mkdir -p case_studies/package-safety/.parity-package-sentinel

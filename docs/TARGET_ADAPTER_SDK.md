@@ -1,8 +1,8 @@
 # Python command-adapter SDK
 
 Use the command-adapter SDK when a Python boundary needs to call a Fortran, C/C++, Rust, Java or
-legacy executable. The project owns only the translation between canonical Arrow input and the
-target's interface. The SDK owns target protocol v1: the persistent process, private paths, request
+legacy executable. The project owns only the translation between the canonical invocation and the
+target's interface. The SDK owns target protocol v2: the persistent process, private paths, request
 validation, Arrow/JSON transport, result classification and atomic responses.
 
 The wrapped target does not need Python or Parity. The small Python adapter process does need the
@@ -125,14 +125,12 @@ invoking the behavioural operation. `require_executable(path)` performs the norm
 executable check and returns the resolved path. Keep compilation, installation and container setup
 outside the adapter.
 
-The SDK applies the configured input binding to `execute`:
-
-- a single input is the first Arrow table argument;
-- a positional bundle supplies its Arrow tables in declared order, before static arguments; and
-- a keyword bundle supplies each Arrow table by its logical input name.
-
-Configured static arguments and keyword arguments follow the same rules as Python endpoints. This
-leaves `execute` looking like an ordinary project function instead of a protocol handler.
+The SDK reconstructs the configured invocation and calls `execute(*args, **kwargs)` exactly as it
+calls a Python endpoint. A `frame` becomes an Arrow table, a JSON argument keeps its call position,
+and a `frames` argument becomes the declared list or tuple of Arrow tables. Configured varargs have
+already been expanded into positional arguments. Zero-argument adapters and large reduce/join call
+shapes need no protocol-specific signature. Both sides always receive the same invocation; adapt
+different legacy and candidate APIs inside their respective `execute` functions.
 
 ## Classify outcomes deliberately
 
@@ -141,8 +139,8 @@ optional `return_type` on `CommandAdapter` supplies its default descriptive labe
 raise an explicit SDK outcome when the observation needs more information:
 
 - `Return(value, return_type=None, mutated_inputs=())` publishes the value while overriding the
-  default return type or declaring mutation for that call. List logical input names in
-  `mutated_inputs` only when mutation is part of the observable contract.
+  default return type or declaring mutation for that call. Use top-level labels such as `args/0`
+  and `kwargs/orders` in `mutated_inputs` only when mutation is part of the observable contract.
 - `TargetRaised(message, module="builtins", exception_type="Exception", details=None,
   mutated_inputs=())` represents a deliberate application/domain rejection. A difference between
   the two sides is semantic evidence and therefore `FAILED`.
@@ -158,7 +156,7 @@ genuine target rejection to `TargetRaised`; a crash, timeout or parse failure is
 
 One adapter process serves many generated examples, confirmations and performance repeats. Avoid
 hidden mutable state, clean up per-call resources and make `execute` deterministic. The SDK
-deserializes a fresh Arrow input for each request and handles private-path validation and atomic
+deserializes fresh Arrow leaves for each request and handles private-path validation and atomic
 publication, but it is not a hostile-code sandbox. Run untrusted targets in a container or hardened
 runner.
 

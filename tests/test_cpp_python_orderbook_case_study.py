@@ -86,7 +86,8 @@ def test_cpp_python_orderbook_retained_streams_expose_all_injected_defects() -> 
     outcomes = []
     row_counts = []
     for factory in factories:
-        bundle = next(iter(factory()))
+        invocation = next(iter(factory()))
+        bundle = invocation.kwargs
         correct = _capture(candidate.correct_port, bundle)
         naive = _capture(candidate.naive_port, bundle)
         assert correct != naive

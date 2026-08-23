@@ -45,7 +45,26 @@ def _report(path: Path) -> dict[str, Any]:
 
 
 def _assert_minimal_witness(artifact: Path) -> None:
-    with (artifact / "input.arrow").open("rb") as stream:
+    replay = _report(artifact / "replay.json")
+    invocation = replay.get("invocation")
+    if not isinstance(invocation, dict):
+        raise ProofError("artifact has no invocation document")
+    args = invocation.get("args")
+    kwargs = invocation.get("kwargs")
+    if not isinstance(args, list) or len(args) != 1 or kwargs != {}:
+        raise ProofError("artifact invocation has an invalid call shape")
+    input_node = args[0]
+    if (
+        not isinstance(input_node, dict)
+        or set(input_node) != {"kind", "file"}
+        or input_node.get("kind") != "arrow"
+        or not isinstance(input_node.get("file"), str)
+    ):
+        raise ProofError("artifact invocation does not contain one Arrow input")
+    filename = input_node["file"]
+    if Path(filename).name != filename or not filename.endswith(".arrow"):
+        raise ProofError("artifact invocation contains an unsafe Arrow filename")
+    with (artifact / filename).open("rb") as stream:
         witness = ipc.open_file(stream).read_all()
     if witness.num_rows != 3:
         raise ProofError(f"expected a three-row witness, received {witness.num_rows} rows")

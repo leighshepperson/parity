@@ -22,7 +22,7 @@
       "type": "object"
     }
   },
-  "$id": "https://parity-check.dev/schemas/artifact-manifest/v2.json",
+  "$id": "https://parity-check.dev/schemas/artifact-manifest/v3.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -78,7 +78,7 @@
       "title": "Source"
     },
     "version": {
-      "const": 2,
+      "const": 3,
       "title": "Version",
       "type": "integer"
     }
@@ -94,5 +94,5 @@
   "title": "ArtifactManifestContract",
   "type": "object",
   "x-parity-contract": "artifact-manifest",
-  "x-parity-contract-version": 2
+  "x-parity-contract-version": 3
 }

@@ -1,27 +1,146 @@
 {
   "$defs": {
-    "JsonValue": {},
-    "ReplayInputContract": {
+    "InvocationArrowDocument": {
       "additionalProperties": false,
+      "description": "One Arrow leaf in a replayable invocation document.",
       "properties": {
         "file": {
           "minLength": 1,
           "title": "File",
           "type": "string"
         },
-        "name": {
-          "minLength": 1,
-          "title": "Name",
+        "kind": {
+          "const": "arrow",
+          "title": "Kind",
           "type": "string"
         }
       },
       "required": [
-        "name",
+        "kind",
         "file"
       ],
-      "title": "ReplayInputContract",
+      "title": "InvocationArrowDocument",
       "type": "object"
     },
+    "InvocationDocument": {
+      "additionalProperties": false,
+      "description": "Stored recursive positional and keyword call contract.",
+      "properties": {
+        "args": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "arrow": "#/$defs/InvocationArrowDocument",
+                "frames": "#/$defs/InvocationFramesDocument",
+                "json": "#/$defs/InvocationJsonDocument"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/InvocationArrowDocument"
+              },
+              {
+                "$ref": "#/$defs/InvocationJsonDocument"
+              },
+              {
+                "$ref": "#/$defs/InvocationFramesDocument"
+              }
+            ]
+          },
+          "maxItems": 256,
+          "title": "Args",
+          "type": "array"
+        },
+        "kwargs": {
+          "additionalProperties": {
+            "discriminator": {
+              "mapping": {
+                "arrow": "#/$defs/InvocationArrowDocument",
+                "frames": "#/$defs/InvocationFramesDocument",
+                "json": "#/$defs/InvocationJsonDocument"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/InvocationArrowDocument"
+              },
+              {
+                "$ref": "#/$defs/InvocationJsonDocument"
+              },
+              {
+                "$ref": "#/$defs/InvocationFramesDocument"
+              }
+            ]
+          },
+          "maxProperties": 256,
+          "title": "Kwargs",
+          "type": "object"
+        }
+      },
+      "required": [
+        "args",
+        "kwargs"
+      ],
+      "title": "InvocationDocument",
+      "type": "object"
+    },
+    "InvocationFramesDocument": {
+      "additionalProperties": false,
+      "description": "One list/tuple-valued frame argument in an invocation document.",
+      "properties": {
+        "container": {
+          "enum": [
+            "list",
+            "tuple"
+          ],
+          "title": "Container",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/InvocationArrowDocument"
+          },
+          "maxItems": 256,
+          "title": "Items",
+          "type": "array"
+        },
+        "kind": {
+          "const": "frames",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "container",
+        "items"
+      ],
+      "title": "InvocationFramesDocument",
+      "type": "object"
+    },
+    "InvocationJsonDocument": {
+      "additionalProperties": false,
+      "description": "One JSON leaf in a replayable invocation document.",
+      "properties": {
+        "kind": {
+          "const": "json",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "InvocationJsonDocument",
+      "type": "object"
+    },
+    "JsonValue": {},
     "ReplayPathBaseContract": {
       "additionalProperties": false,
       "properties": {
@@ -45,7 +164,7 @@
       "type": "object"
     }
   },
-  "$id": "https://parity-check.dev/schemas/replay/v2.json",
+  "$id": "https://parity-check.dev/schemas/replay/v3.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Path-free replay document stored inside a finding artifact.",
@@ -93,13 +212,8 @@
       "$ref": "#/$defs/JsonValue",
       "default": null
     },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/ReplayInputContract"
-      },
-      "minItems": 1,
-      "title": "Inputs",
-      "type": "array"
+    "invocation": {
+      "$ref": "#/$defs/InvocationDocument"
     },
     "path_base": {
       "anyOf": [
@@ -128,7 +242,7 @@
       "title": "Replay Blockers"
     },
     "version": {
-      "const": 2,
+      "const": 3,
       "title": "Version",
       "type": "integer"
     }
@@ -137,10 +251,10 @@
     "version",
     "case",
     "environment",
-    "inputs"
+    "invocation"
   ],
   "title": "ReplayContract",
   "type": "object",
   "x-parity-contract": "replay",
-  "x-parity-contract-version": 2
+  "x-parity-contract-version": 3
 }

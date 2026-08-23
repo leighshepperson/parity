@@ -1,17 +1,20 @@
 # Parity
 
-**Behavioural compatibility testing for software migrations.**
+**Migration verification by observable behaviour—across versions, implementations, runtimes and
+languages.**
 
-Parity runs a reference and a candidate on the same inputs, compares what they return or raise,
-searches for differences, shrinks failing inputs and saves replayable evidence.
+Parity runs a reference and a candidate on the same complete calls, compares what they return or
+raise, searches for differences, shrinks failing invocations and saves replayable evidence.
 
 ```text
 canonical input ──┬──> reference ──┐
                   └──> candidate ──┴──> compare ──> shrink ──> replay
 ```
 
-The two sides can use different dependency versions, APIs, implementations, Python environments or
-languages. They only need a small shared behavioural contract.
+Parity's unit of work is an explicit `callable(*args, **kwargs)` contract, not a dataframe. Its
+arguments can be ordinary JSON, frames, variable-length sequences or project-generated structures
+such as recursive programs and event streams. The two sides can use different dependency versions,
+APIs, architectures, Python environments or languages; they only need the same observable contract.
 
 Use Parity for dependency upgrades, refactors, backend changes, branch/worktree comparisons and
 cross-language rewrites. It verifies a migration; it does not write or repair one.
@@ -29,37 +32,46 @@ parity init
 parity check
 ```
 
-`parity init` creates a runnable `parity.toml` and `parity_example.py`. Edit the two example
-functions to call the old and new behaviour, then rerun `parity check`.
+`parity init` creates a runnable, JSON-only `parity.toml` and `parity_example.py`. Edit the two
+example functions to call the old and new behaviour, then rerun `parity check`.
 
-The base package uses Arrow and does not install pandas or Polars. Add `parity-check[pandas]` or
-`parity-check[polars]` when targets in the controller environment use those adapters. Managed
-package-upgrade environments use `parity-check[workspace]`.
+Dataframes are one optional contract shape. Add `parity-check[pandas]` or `parity-check[polars]`
+when targets in the controller environment use those adapters; neither library is installed by the
+base package. Managed package-upgrade environments use `parity-check[workspace]`.
 
 ## Put it around real code
 
-A useful first case needs a representative input and an explicit comparison policy:
+A useful first case needs representative calls and an explicit comparison policy. This example
+compares two pricing-rules implementations using only JSON values:
 
 ```toml
-version = 1
+version = 2
 
 [[cases]]
-name = "orders"
-fixture = "tests/fixtures/orders.parquet"
+name = "pricing-rules"
+
+[[cases.invocation.args]]
+kind = "json"
+values = [
+  { plan = "basic", seats = 1, coupons = [] },
+  { plan = "pro", seats = 25, coupons = ["LOYALTY"] },
+]
+
+[cases.invocation.kwargs.region]
+kind = "json"
+values = ["GB", "US"]
 
 [cases.reference]
-target = "migration_adapters:reference_orders"
-adapter = "pandas"
+target = "migration_adapters:reference_quote"
 
 [cases.candidate]
-target = "migration_adapters:candidate_orders"
-adapter = "polars"
+target = "migration_adapters:candidate_quote"
 
 [cases.comparison]
-row_order = "keyed"
-row_keys = ["order_id"]
-dtype = "compatible"
-rtol = 1e-7
+check_exceptions = true
+check_input_mutation = true
+rtol = 0.0
+atol = 0.0
 
 [cases.generation]
 max_examples = 250
@@ -72,10 +84,17 @@ enabled = false
 Paths are relative to `parity.toml`. Targets use `module:callable` syntax and should be small,
 project-owned wrappers around the public behaviour being migrated.
 
+Repeat `[[cases]]` for independent behaviours. Inside one case, repeat
+`[[cases.invocation.args]]` or add `[cases.invocation.kwargs.<name>]` for many inputs. Use
+`kind = "frame"` when table structure is part of the contract, `kind = "frames"` for one
+variable-length dataframe sequence, or a project-owned generator for dependent structures such as
+ASTs and stateful event streams. Zero-argument calls, expanded `*frames` and relationally generated
+joins are supported too. See [invocation configuration](docs/CONFIG_REFERENCE.md#invocation).
+
 ```bash
 parity doctor --config parity.toml
 parity check --config parity.toml
-parity check --case orders --max-examples 1000
+parity check --case pricing-rules --max-examples 1000
 parity check --json .parity/report.json --junit .parity/junit.xml
 ```
 
@@ -87,30 +106,31 @@ The CLI has a stable outcome contract:
 
 ## What Parity checks
 
-- Arrow, pandas and Polars inputs, including two- and three-frame joins or lookups.
-- Returned frames and JSON-like values, raised exceptions and input mutation.
-- Column and row order, keyed rows, dtypes, null/NaN rules, numeric tolerances and datetimes.
-- Fixtures, deterministic edge cases, Hypothesis generation and shrinking.
+- Complete calls with zero or many positional and keyword JSON values, frames and frame sequences.
+- Nested JSON or frame returns, raised exceptions and input mutation.
+- Fixtures, deterministic edge cases, built-in generation and project-owned Hypothesis strategies
+  for arbitrary bounded domains such as recursive ASTs or operation streams.
+- When frames are present: column and row order, keyed rows, dtypes, null/NaN rules, numeric
+  tolerances, datetimes and relational constraints.
 - Several independent mismatch classes in one run, each with a stable `ms3:` identifier.
 - Runtime and selected dependency provenance for each isolated target.
 - Optional paired runtime and peak-memory regression evidence after semantic success.
 
-Reference and candidate signatures do not need to match. Adapt each side into the shared input and
-output contract:
+Both sides receive the exact same call shape and values. Their internal APIs do not need to match;
+adapt each side into the shared input and output contract:
 
 ```python
-def reference_quote(frame):
-    from legacy import calculate
+def reference_quote(request, *, region):
+    from legacy import quote
 
-    row = frame.iloc[0]
-    return calculate(row.x, row.y, row.currency)
+    return quote(request, market=region)
 
 
-def candidate_quote(frame):
-    from rewritten import Data, Engine
+def candidate_quote(request, *, region):
+    from rewritten import Engine, QuoteRequest
 
-    row = frame.iloc[0]
-    return Engine(row.currency).calculate(Data(row.x, row.y))
+    result = Engine(region=region).quote(QuoteRequest.from_dict(request))
+    return {"decision": result.status, "price": result.amount, "reasons": result.reasons}
 ```
 
 Keep side-specific imports inside their wrappers when the two environments intentionally contain
@@ -178,13 +198,18 @@ installation stay outside the behavioural contract. Start with the
 [adapter SDK guide](docs/TARGET_ADAPTER_SDK.md); implement the
 [language-neutral protocol](docs/TARGET_PROTOCOL.md) directly only when Python is unsuitable.
 
+The maintained [JavaScript-to-Python rules-engine proof](case_studies/javascript_python_rules/README.md)
+uses recursive JSON programs, nested returns and domain exceptions—without pandas, Polars, Arrow
+inputs or tabular outputs. It verifies a correct port, discovers and minimizes three independent
+defects in a naive port, retains them as regressions and replays the saved evidence.
+
 ## Findings and replay
 
-A confirmed difference creates a private artifact containing the minimized Arrow input, hashes,
-comparison contract, runtime identities and exact replay information:
+A confirmed difference creates a private artifact containing the minimized invocation, any Arrow
+leaves, hashes, comparison contract, runtime identities and exact replay information:
 
 ```bash
-parity replay .parity/orders/<finding-directory>
+parity replay .parity/pricing-rules/<finding-directory>
 parity evidence verify .parity/report.json --json .parity/evidence-status.json
 ```
 
@@ -223,6 +248,7 @@ contain sensitive inputs. See the [GitHub Action guide](docs/GITHUB_ACTION.md).
 
 | Need | Document |
 |---|---|
+| See a JSON-only cross-language proof | [JavaScript to Python rules engine](case_studies/javascript_python_rules/README.md) |
 | Build a practical campaign | [User guide](docs/USER_GUIDE.md) |
 | Look up every TOML field | [Configuration reference](docs/CONFIG_REFERENCE.md) |
 | Decide whether Parity fits | [Use cases and boundaries](docs/USE_CASES.md) |
@@ -230,7 +256,8 @@ contain sensitive inputs. See the [GitHub Action guide](docs/GITHUB_ACTION.md).
 | Use pytest | [Pytest integration](docs/PYTEST.md) |
 | Understand internals and contracts | [Architecture](docs/ARCHITECTURE.md) |
 | Handle artifacts and untrusted code | [Security and privacy](docs/SECURITY.md) |
-| Explore executable examples | [Fault corpus](examples/pandas_polars/README.md) and [case studies](case_studies/ADOPTION_LOG.md) |
+| Explore dataframe migrations | [pandas-to-Polars fault corpus](examples/pandas_polars/README.md) |
+| Explore other executable proofs | [C++ order book](case_studies/cpp_python_orderbook/README.md), [Fortran summation](case_studies/fortran_python/README.md) and [external validation](case_studies/ADOPTION_LOG.md) |
 
 ## Boundaries and status
 
