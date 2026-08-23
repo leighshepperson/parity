@@ -458,7 +458,7 @@ def _resolve_adapter(requested, function):
         if "pyarrow" in qualified or "arrow" in qualified:
             return "arrow"
         break
-    return "pandas"
+    return "arrow"
 
 
 def _inspect_endpoint(endpoint):

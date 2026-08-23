@@ -585,7 +585,7 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 | `target` | string/null | conditional | Python import target `package.module:callable.path`; each dotted component must be a Python identifier. Exactly one of `target` or `command` is required. |
 | `command` | string array/null | conditional | Protocol-speaking executable argument vector. Exactly one of `target` or `command` is required. |
 | `canonicalizer` | string/null | none | Python import target applied to a successful raw return before Arrow/JSON canonicalisation. |
-| `adapter` | enum | `auto` | `auto`, `pandas`, `polars` or `arrow`. |
+| `adapter` | enum | `auto` | `auto`, `pandas`, `polars` or `arrow`. Auto infers annotated dataframe types and otherwise uses the core Arrow fallback, including for JSON-only calls. |
 | `pandas_input` | `arrow` / `native` | `arrow` | Pandas input materialization; ignored when the resolved adapter is not pandas. |
 | `python` | path | current Python | Interpreter for isolated execution. |
 | `workdir` | path | config directory | Working directory and import root. |
@@ -598,6 +598,8 @@ Both `[cases.reference]` and `[cases.candidate]` accept:
 command endpoint owns input adaptation, application invocation and output canonicalisation through
 [target protocol v2](TARGET_PROTOCOL.md); it cannot set those Python-only fields. `workdir`,
 `environment`, distribution provenance and `native_threads` apply to both endpoint kinds.
+Unannotated dataframe callables should select `pandas`, `polars` or `arrow` explicitly; the
+dependency-light `auto` fallback does not assume pandas is installed.
 
 Paths may be relative. A configured `python` path is anchored to the configuration directory
 without dereferencing its final virtual-environment symlink; two venv entry points that share one

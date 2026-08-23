@@ -100,6 +100,42 @@ def test_portable_worker_executes_without_importing_parity(tmp_path: Path) -> No
     assert _read_arrow(call_root / "output.arrow").column("x").to_pylist() == [5, 6]
 
 
+def test_portable_worker_auto_adapter_supports_json_without_pandas(tmp_path: Path) -> None:
+    (tmp_path / "portable_target.py").write_text(
+        "import sys\n"
+        "def summarize(values: list[int]):\n"
+        "    assert 'pandas' not in sys.modules\n"
+        "    return {'total': sum(values)}\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "session"
+    call_root = root / "call-00000001-0123456789abcdef0123456789abcdef"
+    call_root.mkdir(parents=True)
+    request = {
+        "protocol_version": 2,
+        "operation": "execute",
+        "endpoint": {
+            "target": "portable_target:summarize",
+            "adapter": "auto",
+            "pandas_input": "arrow",
+            "record_distributions": [],
+        },
+        "invocation": {
+            "args": [{"kind": "json", "value": [1, 2, 3]}],
+            "kwargs": {},
+        },
+        "output": {
+            "arrow": str(call_root / "output.arrow"),
+            "json": str(call_root / "output.json"),
+        },
+    }
+
+    response = _run_call(tmp_path, request)
+
+    assert response["outcome"] == "returned"
+    assert json.loads((call_root / "output.json").read_text(encoding="utf-8")) == {"total": 6}
+
+
 def test_portable_worker_distinguishes_target_raise_from_worker_failure(tmp_path: Path) -> None:
     (tmp_path / "portable_target.py").write_text(
         "def raises(_frame):\n    raise ValueError('bad account 42')\n",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import keyword
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
@@ -70,7 +70,7 @@ class Invocation:
     """One complete, canonical ``callable(*args, **kwargs)`` input."""
 
     args: tuple[InvocationValue, ...] = ()
-    kwargs: Mapping[str, InvocationValue] = MappingProxyType({})
+    kwargs: Mapping[str, InvocationValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if len(self.args) > _MAX_CALL_ARGUMENTS or len(self.kwargs) > _MAX_CALL_ARGUMENTS:

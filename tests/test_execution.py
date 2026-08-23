@@ -164,6 +164,10 @@ def _call(*args: object, **kwargs: object) -> Invocation:
     return Invocation(args=args, kwargs=kwargs)
 
 
+def _json_total(values: list[int]) -> dict[str, int]:
+    return {"total": sum(values)}
+
+
 def _join_tables() -> tuple[pa.Table, pa.Table]:
     return (
         pa.table({"key": [1, 2], "left": [10, 20]}),
@@ -257,13 +261,16 @@ def test_auto_adapter_uses_annotation_with_positional_and_keyword_values(
     )
     assert observation.table is not None
     assert observation.table.column("x").to_pylist() == [5, 6]
-
     pandas = execute_current(
         CallableSpec(target="parity_test_transforms:pandas_add"),
         _call(_table(), amount=5, column="x"),
     )
     assert pandas.table is not None
     assert pandas.table.column("x").to_pylist() == [6, 7]
+
+
+def test_auto_adapter_uses_dependency_light_fallback_for_json_calls() -> None:
+    assert execution_module._resolve_adapter("auto", _json_total) == "arrow"
 
 
 def test_execute_current_invokes_complete_positional_and_keyword_calls(

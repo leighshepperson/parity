@@ -466,9 +466,10 @@ def _annotation_adapter(function: Callable[..., Any]) -> str | None:
 def _resolve_adapter(requested: str, function: Callable[..., Any]) -> str:
     if requested != "auto":
         return requested
-    # Pandas is the conservative default for unannotated Python dataframe code;
-    # annotations make auto mode deterministic for Polars and Arrow callables.
-    return _annotation_adapter(function) or "pandas"
+    # Annotations make auto mode deterministic for dataframe callables. Arrow is
+    # the dependency-light fallback for JSON-only and otherwise ambiguous calls;
+    # unannotated dataframe functions should select their adapter explicitly.
+    return _annotation_adapter(function) or "arrow"
 
 
 def _fresh_argument(table: pa.Table, adapter: str, *, pandas_input: PandasInput = "arrow") -> Any:

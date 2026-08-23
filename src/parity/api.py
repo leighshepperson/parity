@@ -62,10 +62,13 @@ def verify(
 ) -> SuiteResult:
     """Verify two live callables without requiring a configuration file.
 
-    Explicit adapters are recommended when the functions are unannotated or
-    accept different dataframe implementations. Pandas inputs use Arrow-backed
-    extension dtypes by default; select ``native`` materialization only when a
-    callable depends on pandas' conventional NumPy/object dtype behavior.
+    Auto mode infers annotated dataframe implementations and otherwise uses the
+    dependency-light Arrow adapter, so ordinary JSON calls need no dataframe
+    dependency. Explicit adapters are recommended for unannotated dataframe
+    functions or functions accepting different dataframe implementations.
+    Pandas inputs use Arrow-backed extension dtypes by default; select ``native``
+    materialization only when a callable depends on pandas' conventional
+    NumPy/object dtype behavior.
     ``reference_distributions`` and ``candidate_distributions`` add explicitly
     named target-library versions to each side's runtime provenance.
     ``invocation`` represents the complete positional and keyword call. An
