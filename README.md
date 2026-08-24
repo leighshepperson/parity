@@ -22,12 +22,13 @@ combine ordinary JSON, frames, variable-length sequences or project-generated st
 recursive programs and event streams. The two sides can use different dependency versions, APIs,
 architectures, Python environments or languages; they only need the same observable contract.
 
-Use Parity to verify dependency upgrades, refactors, backend changes, branch/worktree comparisons
-and cross-language rewrites. Migration authoring and repair remain in the surrounding development
-workflow.
+Use Parity to verify single-package or coordinated dependency upgrades, refactors, backend changes,
+branch/worktree comparisons and cross-language rewrites. Migration authoring and repair remain in
+the surrounding development workflow.
 
-The common case is Python on both sides: an old and new dependency release, two implementations of
-an API, or separate local checkouts. Parity can run each side in its own environment, so incompatible
+The common case is Python on both sides: an old and new dependency release, a project before and
+after several dependencies move together, two implementations of an API, or separate local
+checkouts. Parity resolves and locks each released target or checkout independently, so incompatible
 dependency graphs stay isolated. Cross-language targets use the same comparison engine through a
 small executable adapter.
 
@@ -86,6 +87,15 @@ parity migration init \
   --reference-package 'your-library==1.2.3' \
   --candidate-package 'your-library==2.0.0' \
   --scaffold
+```
+
+For a coordinated upgrade, compare the project before and after the dependency changes. Each
+checkout's own package metadata supplies its complete dependency graph:
+
+```bash
+parity migration init \
+  --reference-path ../before-upgrade \
+  --candidate-path ../after-upgrade
 ```
 
 The standard installation can also create isolated reference and candidate environments for

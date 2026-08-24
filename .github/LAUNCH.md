@@ -1,8 +1,9 @@
 # Parity launch copy
 
 Use the repository link as the primary destination. Lead with common Python dependency upgrades,
-refactors, worktrees and backend migrations. Use the cross-language proofs to establish breadth
-without presenting them as the primary workflow or claiming universal equivalence.
+including coordinated project dependency changes, plus refactors, worktrees and backend migrations.
+Use the cross-language proofs to establish breadth without presenting them as the primary workflow
+or claiming universal equivalence.
 
 ## Launch thread
 
@@ -13,7 +14,7 @@ Migrations fail in the cases nobody thought to write down.
 Parity runs old and new implementations on the same generated inputs, finds behavioural
 differences, shrinks them to minimal examples, and saves them for replay.
 
-Dependency upgrades, refactors, backends, worktrees—or languages.
+Single dependencies, whole project graphs, refactors, backends, worktrees—or languages.
 
 https://github.com/leighshepperson/parity
 
@@ -48,8 +49,9 @@ them.
 
     pip install parity-check
 
-The standard install manages isolated Python environments for dependency upgrades and local
-checkouts. It also covers direct refactors, alternate backends and adapted external processes.
+The standard install independently resolves and locks Python environments for package upgrades and
+before/after project checkouts, including coordinated dependency changes. It also covers direct
+refactors, alternate backends and adapted external processes.
 
 ### Post 6
 

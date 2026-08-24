@@ -292,6 +292,12 @@ Released/released, released/local, local/released and local/local use the same m
 workflow. The reference always needs one package/path source. Omitting both candidate flags means
 `--candidate-path .`.
 
+For a coordinated dependency upgrade, put the before and after dependency sets in the project
+metadata of their respective checkouts. Parity resolves and hash-locks each checkout independently,
+so any number of direct and transitive packages may change together. A lane requirements file is a
+shared constraint applied to both sides; use lanes for compatibility floors or current dependency
+sets, not as side-specific before/after manifests.
+
 Parity never creates, switches or edits worktrees. It installs a local source only into its own
 worker, verifies the import origin and binds a path-free Git/content identity into findings and
 replay. Local sources must be Git worktrees with committed `HEAD`; a dirty tree is allowed but its
