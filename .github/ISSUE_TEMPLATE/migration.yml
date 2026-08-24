@@ -1,7 +1,7 @@
 name: Propose a migration case
 description: Bring a public old/new implementation pair for a reproducible Parity study
 title: "migration: "
-labels: [migration-case]
+labels: [enhancement]
 body:
   - type: markdown
     attributes:
