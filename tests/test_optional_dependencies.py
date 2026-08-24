@@ -26,7 +26,7 @@ def test_managed_environment_tools_are_core_dependencies() -> None:
     core = set(project["dependencies"])
     extras = project["optional-dependencies"]
 
-    assert {"tox>=4.44", "tox-uv>=1.29", "uv>=0.9.1"} <= core
+    assert {"packaging>=26.0", "tox>=4.44", "tox-uv>=1.29", "uv>=0.9.1"} <= core
     assert "workspace" not in extras
 
 
