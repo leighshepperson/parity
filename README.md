@@ -1,10 +1,16 @@
 # Parity
 
-**Migration verification by observable behaviour—across versions, implementations, runtimes and
-languages.**
+[![PyPI](https://img.shields.io/pypi/v/parity-check?label=PyPI)](https://pypi.org/project/parity-check/)
+[![CI](https://github.com/leighshepperson/parity/actions/workflows/ci.yml/badge.svg)](https://github.com/leighshepperson/parity/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/pypi/pyversions/parity-check)](https://pypi.org/project/parity-check/)
+[![License](https://img.shields.io/github/license/leighshepperson/parity)](LICENSE)
 
-Parity runs a reference and a candidate on the same complete calls, compares what they return or
-raise, searches for differences, shrinks failing invocations and saves replayable evidence.
+**Find the smallest input that makes old and new software disagree.**
+
+Parity verifies migrations by observable behaviour—across versions, implementations, runtimes and
+languages. It runs a reference and a candidate on the same complete calls, compares what they
+return or raise, searches for differences, shrinks failing invocations and saves replayable
+evidence.
 
 ```text
 canonical call ──┬──> reference ──┐
@@ -20,8 +26,26 @@ Use Parity to verify dependency upgrades, refactors, backend changes, branch/wor
 and cross-language rewrites. Migration authoring and repair remain in the surrounding development
 workflow.
 
+[![Parity finds, minimizes and replays three behavioural differences between a JavaScript rules engine and its Python rewrite](docs/assets/parity-terminal-demo.gif)](case_studies/javascript_python_rules/README.md)
+
+The terminal demo is backed by the maintained JavaScript-to-Python rules-engine proof. Its
+generated recursive programs expose three independent rewrite defects, which Parity minimizes and
+replays. [Propose a public migration case](https://github.com/leighshepperson/parity/issues/new?template=migration.yml)
+if you have an old and new target with a shared observable contract.
+
 > `PASSED` means Parity found no difference in the configured domain and search budget. It is
 > executable evidence, not a proof of equivalence.
+
+## Executable proofs
+
+| Migration | Shared contract | Maintained result |
+|---|---|---|
+| [JavaScript → Python rules engine](case_studies/javascript_python_rules/README.md) | Recursive JSON programs, nested results and domain exceptions | Finds, minimizes and replays three independent defects |
+| [C++ → Python order book](case_studies/cpp_python_orderbook/README.md) | Stateful event streams, Arrow tables and exact exceptions | Finds and replays five independent defects |
+| [Fortran → Python numerical rewrite](case_studies/fortran_python/README.md) | Ordered IEEE binary64 summation | Reduces catastrophic cancellation to a three-row counterexample |
+
+Further studies cover released dependency versions, local worktrees and public Python projects in
+the [external validation log](case_studies/ADOPTION_LOG.md).
 
 ## Five-minute start
 
