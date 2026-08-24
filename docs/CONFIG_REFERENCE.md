@@ -209,14 +209,15 @@ public API omitted from `units` or prove that a mapped case exercises the behavi
 claims. Split partially excluded behaviour into separate units and review the inventory, wrappers
 and exclusions before relying on the gate.
 
-## Migration workspace
+## Managed migration environments
 
-Install the optional environment support, then declare each side as either one exact released
-requirement or an existing checkout. When `migrations/parity.toml` does not exist, the same command
-can scaffold its first fixture-backed case and the migration ledger:
+Parity can create and lock a separate environment for the reference and candidate. Declare each
+side as either one exact released requirement or an existing checkout. The declaration is called a
+workspace because it binds both sources, their Python runtimes, dependency lanes and case manifest
+into one repeatable run. When `migrations/parity.toml` does not exist, the same command can scaffold
+its first fixture-backed case and the migration ledger:
 
 ```bash
-python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference-package 'your-library==1.2.3' \
   --candidate-package 'your-library==2.0.0' \

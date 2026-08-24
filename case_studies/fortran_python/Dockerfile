@@ -38,8 +38,6 @@ COPY --from=fortran-build --chown=10001:10001 \
 
 RUN test ! -e /usr/bin/gfortran \
     && ! command -v docker \
-    && ! command -v tox \
-    && ! command -v uv \
     && python -c "import parity, pyarrow"
 
 USER 10001:10001

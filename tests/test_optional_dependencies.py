@@ -21,6 +21,15 @@ def test_pandas_and_polars_are_named_extras_not_core_dependencies() -> None:
         assert "polars>=1.0" in extras[group]
 
 
+def test_managed_environment_tools_are_core_dependencies() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    core = set(project["dependencies"])
+    extras = project["optional-dependencies"]
+
+    assert {"packaging>=26.0", "tox>=4.44", "tox-uv>=1.29", "uv>=0.9.1"} <= core
+    assert "workspace" not in extras
+
+
 def test_bare_core_import_and_doctor_do_not_import_optional_engines() -> None:
     script = f"""
 import importlib.abc

@@ -99,7 +99,7 @@ repositories, or for a private repository when GitHub Advanced Security is enabl
 dependencies. Consumers with stronger requirements should pin hashes or mirror packages through
 their approved registry.
 
-The optional migration workspace resolves hash-pinned requirements locks and creates isolated
+Managed migration execution resolves hash-pinned requirements locks and creates isolated
 target environments. Resolution and installation may access configured package indexes and their
 normal caches. When `UV_CACHE_DIR` is unset, Parity keeps uv's cache in
 `.parity/workspace/cache`; an explicit override is preserved for an approved shared or offline

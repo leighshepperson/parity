@@ -89,6 +89,12 @@ def test_general_positioning_uses_positive_complete_call_language() -> None:
     assert "behavioural compatibility verification for software migrations" in text
 
 
+def test_managed_environments_need_no_separate_install_extra() -> None:
+    for path in documentation_paths():
+        text = path.read_text(encoding="utf-8")
+        assert "parity-check[workspace]" not in text, path.relative_to(ROOT)
+
+
 def section(text: str, heading: str, next_heading: str) -> str:
     start = text.index(heading) + len(heading)
     return text[start : text.index(next_heading, start)]
@@ -117,7 +123,7 @@ def test_configuration_reference_tables_cover_every_schema_field() -> None:
     documented = {
         "top": first_table_keys(section(text, "## Top level", "## Reusable")),
         "workspace": first_table_keys(
-            section(text, "## Migration workspace", "## Retained"),
+            section(text, "## Managed migration environments", "## Retained"),
             after="source mapping is symmetric:",
         ),
         "case": first_table_keys(section(text, "## Case", "## Invocation"), after="cases"),

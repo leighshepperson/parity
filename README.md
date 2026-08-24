@@ -36,9 +36,10 @@ parity check
 `parity init` creates a runnable, JSON-only `parity.toml` and `parity_example.py`. Edit the two
 example functions to call the old and new behaviour, then rerun `parity check`.
 
-Install `parity-check[pandas]` or `parity-check[polars]` when targets in the controller environment
-use those adapters. The base package handles JSON and Arrow calls; managed package-upgrade
-environments use `parity-check[workspace]`.
+The standard installation can also create isolated reference and candidate environments for
+dependency upgrades and worktree comparisons. Install `parity-check[pandas]` or
+`parity-check[polars]` only when targets in the controller environment use those adapters; the
+base package already handles JSON and Arrow calls.
 
 ## Put it around real code
 
@@ -140,11 +141,11 @@ Arrow or JSON-like result. Target exceptions remain observable behaviour.
 
 ## Upgrade two released packages
 
-The managed workspace creates separate, locked target environments. The controller and targets do
-not share a dependency graph.
+Parity creates a separate, locked environment for each side, so the controller, reference and
+candidate do not share a dependency graph. Their source and environment declaration is stored in
+`migrations/parity.workspace.toml`; generated environments and locks remain private state.
 
 ```bash
-python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference-package 'your-library==1.2.3' \
   --candidate-package 'your-library==2.0.0' \
@@ -153,8 +154,8 @@ parity migration init \
 ```
 
 This creates a deliberately incomplete adapter, tiny JSON fixture, case configuration, migration
-inventory, workspace and four-item review checklist under `migrations/`. Implement the adapter,
-review the fixture/domain and comparison policy, resolve the checklist, then run:
+inventory, environment declaration and four-item review checklist under `migrations/`. Implement
+the adapter, review the fixture/domain and comparison policy, resolve the checklist, then run:
 
 ```bash
 parity migration validate --json

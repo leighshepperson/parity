@@ -84,11 +84,11 @@ def _copy_proof(source: Path, destination: Path) -> None:
 
 
 def main() -> None:
-    unavailable = ("docker", "gfortran", "tox", "uv")
+    unavailable = ("docker", "gfortran")
     present = [tool for tool in unavailable if shutil.which(tool) is not None]
     if present:
         raise ProofError(f"runtime image unexpectedly contains: {', '.join(present)}")
-    print("PASS runtime contains no compiler, container CLI, tox or uv")
+    print("PASS runtime contains no compiler or container CLI")
 
     parity = shutil.which("parity")
     if parity is None:

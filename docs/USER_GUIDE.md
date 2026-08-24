@@ -222,13 +222,12 @@ around the external program, `parity adapter init` generates a small SDK adapter
 only implements target inspection and translation. See the
 [command-adapter SDK guide](TARGET_ADAPTER_SDK.md).
 
-## 6. Use managed migration workspaces
+## 6. Let Parity manage both environments
 
-Use a workspace when Parity should prepare and lock both package environments. Install the optional
-support, then declare the two reviewed sources:
+For a dependency upgrade or worktree comparison, Parity can prepare and lock an isolated
+environment for each side. Declare the two reviewed sources:
 
 ```bash
-python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference-package 'orders-lib==1.4.2' \
   --candidate-package 'orders-lib==2.0.0' \
@@ -243,7 +242,7 @@ parity migration init \
 - `parity.toml`, with performance disabled until the semantic contract is reviewed;
 - `migration.toml`, whose starter `core-regression` unit maps the configured cases;
 - `migration.checklist.json`, with four explicit review decisions; and
-- `parity.workspace.toml`, the workspace v3 source/environment declaration.
+- `parity.workspace.toml`, the v3 source and environment declaration.
 
 The command never overwrites an authored scaffold file. Implement the adapter, replace or review
 the fixture, confirm the comparison/domain and inventory, then set every checklist item's `status`
@@ -289,8 +288,8 @@ parity migration init \
 parity migration run
 ```
 
-Released/released, released/local, local/released and local/local use the same workspace. The
-reference always needs one package/path source. Omitting both candidate flags means
+Released/released, released/local, local/released and local/local use the same managed-environment
+workflow. The reference always needs one package/path source. Omitting both candidate flags means
 `--candidate-path .`.
 
 Parity never creates, switches or edits worktrees. It installs a local source only into its own

@@ -21,9 +21,9 @@ docker run --rm --network none parity-fortran-python
 ```
 
 The image uses a build stage to compile Fortran. The runtime image deliberately has no Fortran
-compiler, Docker CLI, tox or uv. It runs a normal `parity doctor`, verifies the correct port over
-generated inputs, finds and shrinks the defective port's cancellation mismatch, then replays the
-same finding from an unrelated working directory.
+compiler or Docker CLI. It runs a normal `parity doctor`, verifies the correct port over generated
+inputs, finds and shrinks the defective port's cancellation mismatch, then replays the same finding
+from an unrelated working directory.
 
 `fortran_adapter.py` uses `parity.target_adapter` for the target protocol lifecycle, private-file
 validation, Arrow/JSON transport and atomic responses. Its project-owned code is limited to
@@ -39,7 +39,7 @@ See the [command-adapter SDK guide](../../docs/TARGET_ADAPTER_SDK.md) for the ge
 Expected final output is:
 
 ```text
-PASS runtime contains no compiler, container CLI, tox or uv
+PASS runtime contains no compiler or container CLI
 PASS correct port agrees with Fortran
 PASS naive port is rejected with a three-row counterexample
 PASS replay reproduces the same finding from another working directory

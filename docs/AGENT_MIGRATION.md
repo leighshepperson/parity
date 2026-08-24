@@ -78,7 +78,6 @@ package import root. For a published-package upgrade, the agent can scaffold the
 declare both exact releases together:
 
 ```bash
-python -m pip install "parity-check[workspace]"
 parity migration init \
   --reference-package "$REFERENCE_PACKAGE_SPEC" \
   --candidate-package "$CANDIDATE_PACKAGE_SPEC" \
