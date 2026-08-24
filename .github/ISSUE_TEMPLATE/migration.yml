@@ -1,0 +1,73 @@
+name: Propose a migration case
+description: Bring a public old/new implementation pair for a reproducible Parity study
+title: "migration: "
+labels: [migration-case]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Parity can help when two runnable systems accept equivalent inputs and expose comparable
+        results. Propose a bounded public case below. Do not share private source, data, credentials
+        or unredacted artifacts.
+
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration
+      description: What is changing, and why does behavioural compatibility matter?
+      placeholder: "Example: JavaScript rules engine rewritten in Python"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reference
+    attributes:
+      label: Reference target
+      description: Link the existing implementation and identify its release, commit or runnable command.
+    validations:
+      required: true
+
+  - type: textarea
+    id: candidate
+    attributes:
+      label: Candidate target
+      description: Link the replacement and identify its release, commit or runnable command.
+    validations:
+      required: true
+
+  - type: textarea
+    id: contract
+    attributes:
+      label: Shared observable contract
+      description: Describe equivalent inputs and the returns, exceptions, mutations or other projected results to compare.
+      placeholder: "quote(request, *, region) -> JSON decision, price and reasons; domain errors are observable"
+    validations:
+      required: true
+
+  - type: textarea
+    id: domain
+    attributes:
+      label: Representative and difficult inputs
+      description: List ordinary calls, known boundaries and structures that should be generated.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Public reproduction
+      description: Provide setup commands or a small public/synthetic repository. Note required runtimes and operating-system constraints.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Readiness
+      options:
+        - label: Both targets are runnable, or the missing setup is clearly identified.
+          required: true
+        - label: This proposal contains no private source, sensitive data, credentials or confidential documentation.
+          required: true
+        - label: The resulting configuration and synthetic evidence may be published as an open-source Parity case study.
+          required: true
