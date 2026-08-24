@@ -1,4 +1,4 @@
-"""Programmatic Hypothesis shrinking for minimal dataframe counterexamples."""
+"""Programmatic Hypothesis shrinking for minimal generated counterexamples."""
 
 from __future__ import annotations
 

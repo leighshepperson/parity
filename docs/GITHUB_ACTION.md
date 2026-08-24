@@ -107,12 +107,12 @@ protocol adapter executable.
 
 ## Artifact privacy
 
-JSON, JUnit, Markdown and step-summary reports omit dataframe values. Counterexample directories
-contain the actual minimized invocation's frame leaves as Arrow and, when representable, Parquet.
-When a generated
-schema was inferred from a real fixture, those files may reproduce fixture values. Use private repositories, constrained
-artifact permissions and an appropriate retention period. Upload is disabled by default; set
-`upload-artifact: "true"` only when policy permits remote evidence storage.
+JSON, JUnit, Markdown and step-summary reports omit compared input and output values.
+Counterexample directories contain the actual minimized invocation, including JSON arguments and
+frame leaves stored as Arrow and, when representable, Parquet. When a generated schema was inferred
+from a real fixture, those files may reproduce fixture values. Use private repositories,
+constrained artifact permissions and an appropriate retention period. Upload is disabled by
+default; set `upload-artifact: "true"` only when policy permits remote evidence storage.
 
 Do not place credentials in the configuration or action inputs. GitHub masks known secrets in logs,
-but Parity does not attempt to discover or redact arbitrary secrets embedded in dataframe values.
+but Parity cannot discover every secret embedded in invocation or output values.

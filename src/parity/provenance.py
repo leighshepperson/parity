@@ -321,9 +321,9 @@ def collect_runtime_provenance(
 ) -> RuntimeProvenance:
     """Collect data-safe provenance for this interpreter.
 
-    Core dataframe dependencies are always included.  Additional target
-    distributions must be named explicitly, avoiding a broad and potentially
-    sensitive inventory of everything installed in the environment.
+    The standard provenance distribution set is always included. Additional
+    target distributions must be named explicitly, avoiding a broad and
+    potentially sensitive inventory of everything installed in the environment.
     """
 
     explicit = normalize_distribution_names(record_distributions)

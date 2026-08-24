@@ -182,7 +182,7 @@ def main(profile: str) -> None:
         if families != expected_families:
             raise ProofError(f"unexpected discovered defect families: {sorted(families)}")
         print("PASS naive Python port produced three distinct minimized findings")
-        print("PASS every minimized invocation is recursive JSON with no tabular inputs")
+        print("PASS every minimized invocation is recursive JSON throughout")
 
         _run(
             [

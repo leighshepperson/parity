@@ -67,6 +67,28 @@ def test_documented_toml_is_valid_toml() -> None:
                 ) from exc
 
 
+def test_general_positioning_uses_positive_complete_call_language() -> None:
+    positioning_paths = [
+        ROOT / "README.md",
+        ROOT / "CHANGELOG.md",
+        ROOT / "docs" / "ARCHITECTURE.md",
+        ROOT / "docs" / "USER_GUIDE.md",
+        ROOT / "docs" / "USE_CASES.md",
+        ROOT / "case_studies" / "javascript_python_rules" / "README.md",
+        ROOT / "src" / "parity" / "__init__.py",
+    ]
+    text = re.sub(
+        r"\s+",
+        " ",
+        "\n".join(path.read_text(encoding="utf-8").lower() for path in positioning_paths),
+    )
+
+    assert "unit of work is an explicit `callable(*args, **kwargs)` contract" in text
+    assert "complete call can combine ordinary json, frames" in text
+    assert "recursive-json cross-language contract" in text
+    assert "behavioural compatibility verification for software migrations" in text
+
+
 def section(text: str, heading: str, next_heading: str) -> str:
     start = text.index(heading) + len(heading)
     return text[start : text.index(next_heading, start)]

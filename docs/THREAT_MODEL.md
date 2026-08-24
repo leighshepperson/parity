@@ -14,7 +14,7 @@ GitHub Action and package supply chain. Hosted coordinators are outside the curr
 ## Assets
 
 - Source code and dependency environments.
-- Fixture and generated dataframe values.
+- Fixture and generated invocation values.
 - Credentials inherited by the process or CI job.
 - Integrity of pass/fail evidence, policies and replay artifacts.
 - Integrity and review provenance of compatibility approvals and retired baselines.

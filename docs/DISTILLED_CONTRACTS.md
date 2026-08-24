@@ -59,7 +59,7 @@ records approval rationales and the prior contract digest. See
 For every distinct case/finding signature, Parity verifies the source artifact's hashes and copies:
 
 - the complete minimized positional/keyword invocation, including zero or many Arrow leaves,
-  JSON values and dataframe sequences;
+  JSON values and frame sequences;
 - the reference's Arrow or JSON return value, or its normalized exception semantics;
 - reference input-mutation behaviour and runtime provenance;
 - the exact comparison policy and timeout;

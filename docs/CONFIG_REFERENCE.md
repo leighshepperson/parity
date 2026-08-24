@@ -187,7 +187,7 @@ Invalid configuration and error/incomplete execution evidence return exit `2`.
 | `parity` | Data-safe Parity report schema version 4 for the mapped-case union. |
 
 The nested Parity report's provenance contains its effective `config_sha256`. Unit IDs, case names
-and exclusion reasons pass through report redaction. No report contains compared dataframe or scalar
+and exclusion reasons pass through report redaction. Reports omit compared invocation and output
 values, but counterexample artifacts referenced by the nested report may contain fixture-derived or
 generated inputs.
 
@@ -431,7 +431,7 @@ not part of configuration v2.
 `[cases.invocation]` describes the complete call. It may be empty for a zero-argument callable.
 Repeat `[[cases.invocation.args]]` for positional arguments in call order, use
 `[cases.invocation.kwargs.<name>]` for named arguments, and optionally use
-`[cases.invocation.varargs]` for a generated dataframe sequence expanded as `*args`.
+`[cases.invocation.varargs]` for a generated frame sequence expanded as `*args`.
 
 | Key | Type | Default | Meaning |
 |---|---:|---:|---|
@@ -838,8 +838,8 @@ configuration directory on its import path. It returns either a Hypothesis strat
 consumed in stable order and stopped after `max_examples`. Plain iterables do not have a general
 shrinking operation.
 
-An `Invocation` holds the complete `args` tuple and `kwargs` mapping. Values may be supported
-dataframes, portable JSON-like values, or `parity.FrameSequence` for one list/tuple-valued dataframe
+An `Invocation` holds the complete `args` tuple and `kwargs` mapping. Values may be supported native
+frames, portable JSON-like values, or `parity.FrameSequence` for one list/tuple-valued frame
 argument. This is the escape hatch for dependent JSON modes, heterogeneous sequences and other
 call shapes not expressible by the built-in homogeneous argument strategies:
 

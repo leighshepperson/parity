@@ -7,13 +7,13 @@ That property reduces exposure; it does not make every output non-sensitive.
 
 ## Data inventory
 
-| Material | May contain input values | Default location | Intended audience |
+| Material | May contain compared values | Default location | Intended audience |
 |---|---:|---|---|
-| Terminal/Markdown/JSON/JUnit report | No dataframe/value payloads | Console or requested path | Developers and CI |
-| Migration manifest | No dataframe/value payloads; contains unit IDs and exclusion reasons | User-selected repository path | Developers and reviewers |
-| Migration JSON/terminal report | No dataframe/value payloads; contains redacted inventory metadata | Console or requested path | Developers and CI |
-| Evidence-verification JSON | No dataframe/value payloads; contains redacted case/artifact labels and mismatch digests | User-selected path | Developers and CI |
-| Compatibility budget | No dataframe/value payloads; contains case names, finding digests and reviewer-authored rationales | User-selected repository path | Developers and reviewers |
+| Terminal/Markdown/JSON/JUnit report | No compared input/output values | Console or requested path | Developers and CI |
+| Migration manifest | No compared values; contains unit IDs and exclusion reasons | User-selected repository path | Developers and reviewers |
+| Migration JSON/terminal report | No compared values; contains redacted inventory metadata | Console or requested path | Developers and CI |
+| Evidence-verification JSON | No compared values; contains redacted case/artifact labels and mismatch digests | User-selected path | Developers and CI |
+| Compatibility budget | No compared values; contains case names, finding digests and reviewer-authored rationales | User-selected repository path | Developers and reviewers |
 | Workspace locks and generated environment config | Package versions/hashes and local source/interpreter paths | `.parity/workspace/` | Developers and CI |
 | `input-*.arrow` / optional Parquet copies | Yes | Counterexample directory | Restricted engineering team |
 | `manifest.json` | Metadata, paths and hashes | Counterexample directory | Restricted engineering team |

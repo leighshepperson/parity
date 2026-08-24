@@ -5,9 +5,9 @@ observable outcomes can be compared. The implementations do not need matching so
 dependencies, runtimes or languages.
 
 The contract is a complete call: zero or more positional and keyword JSON/frame values followed by
-a canonical return or domain exception. Project-owned generators can produce bounded structures
-such as recursive syntax trees and stateful event streams. Dataframes are one specialisation of
-that model, not the model itself.
+a canonical return or domain exception. Built-in frame schemas cover tabular structures, while
+project-owned generators can produce bounded domains such as recursive syntax trees and stateful
+event streams.
 
 ## Supported now
 
@@ -23,7 +23,7 @@ that model, not the model itself.
 | Numerical/scientific migration | Python or command targets | Special values, exceptions, tolerances and optional performance evidence |
 | Generated-code verification | Handwritten reference and generated candidate | The same reviewed release gate |
 
-These use one engine. Parity has no separate AI, language-specific or regression comparison mode.
+Every entry uses the same campaign, comparison, finding and replay engine.
 
 ### Dependency, runtime and source changes
 
@@ -64,7 +64,7 @@ directly. Compilation, image construction and dependency installation remain out
 
 The maintained [JavaScript-to-Python rules-engine proof](../case_studies/javascript_python_rules/README.md)
 exercises recursive JSON generation, keyword arguments, nested returns, domain exceptions,
-multi-finding shrinking and replay with no tabular input or output.
+multi-finding shrinking and replay through a complete JSON call contract.
 
 ### Regression and performance gates
 
