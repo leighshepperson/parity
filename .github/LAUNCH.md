@@ -1,51 +1,57 @@
 # Parity launch copy
 
-Use the repository link as the primary destination. The PyPI link supports the install command;
-the executable proof links establish breadth without claiming universal equivalence.
+Use the repository link as the primary destination. Lead with common Python dependency upgrades,
+refactors, worktrees and backend migrations. Use the cross-language proofs to establish breadth
+without presenting them as the primary workflow or claiming universal equivalence.
 
 ## Launch thread
 
 ### Post 1
 
-Rewrites fail in the cases nobody thought to write down.
+Migrations fail in the cases nobody thought to write down.
 
 Parity runs old and new implementations on the same generated inputs, finds behavioural
 differences, shrinks them to minimal examples, and saves them for replay.
 
-Versions, refactors, runtimes or languages.
+Dependency upgrades, refactors, backends, worktrees—or languages.
 
 https://github.com/leighshepperson/parity
 
 ### Post 2
 
-To test that claim, I used a JavaScript rules engine as the reference and a Python rewrite as the
-candidate.
+The common case is Python on both sides.
 
-Parity generated recursive JSON programs and minimized three independent defects: eager
-evaluation, first-match behaviour and a threshold boundary.
+In the Pydantic 1 → 2 proof, the same callable runs in isolated environments with conflicting
+dependencies. Parity generated inputs and minimized four historical behaviour changes, including
+coercion, optional defaults and equality.
 
-https://github.com/leighshepperson/parity/tree/main/case_studies/javascript_python_rules
+https://github.com/leighshepperson/parity/tree/main/case_studies/pydantic_version
 
 ### Post 3
 
-Then I tried a stateful C++ → Python order-book rewrite.
+For a larger Python backend migration, Parity audited five PyTimeTK APIs across pandas and Polars.
 
-Event streams exercised price-time priority, partial fills and failures. Parity found and shrank
-five distinct behavioural defects.
+The stock candidate failed every covered unit. After targeted repairs, all 15 campaigns passed in
+both the released and current dependency lanes.
 
-https://github.com/leighshepperson/parity/tree/main/case_studies/cpp_python_orderbook
+https://github.com/leighshepperson/parity/tree/main/case_studies/pytimetk_migration
 
 ### Post 4
 
-The boundary is simple: if two systems can receive equivalent inputs and expose observable
-results, Parity can compare them.
+The same engine also verified JavaScript → Python rules, a stateful C++ → Python order book and a
+Fortran → Python numerical rewrite. Those are proofs of the boundary, not special migration modes.
+
+If two systems can receive equivalent inputs and expose observable results, Parity can compare
+them.
+
+### Post 5
 
     pip install parity-check
 
-Dependency upgrades, refactors, worktrees, alternate backends, services and cross-language
-rewrites.
+The standard install manages isolated Python environments for dependency upgrades and local
+checkouts. It also covers direct refactors, alternate backends and adapted external processes.
 
-### Post 5
+### Post 6
 
 Have a migration you do not fully trust? Send the old target, new target and callable boundary.
 I’ll help turn the first three suitable open-source migrations into reproducible Parity cases.
@@ -56,13 +62,14 @@ https://github.com/leighshepperson/parity/issues/new?template=migration.yml
 
 Publish these separately rather than on launch day:
 
-1. Fortran → Python: a plausible numerical rewrite loses a term during catastrophic cancellation;
-   Parity reduces it to three rows and replays it.
-2. Dependency upgrade: isolated reference and candidate environments prevent their dependency
-   graphs from contaminating one another.
-3. Worktree comparison: install two local checkouts independently and bind their source identities
+1. Pydantic 1 → 2: four minimized historical differences across incompatible Python environments.
+2. pandas 2.3 → 3.0 and Polars 0.20 → 1.x: unchanged callables exposing intentional version drift.
+3. PyTimeTK pandas → Polars: a five-API migration across released and current dependency lanes.
+4. Worktree comparison: install two local checkouts independently and bind their source identities
    into the evidence.
-4. Public-project validation: link a bounded study from `case_studies/ADOPTION_LOG.md` and state its
+5. Cross-language boundary: use the JavaScript, C++ and Fortran proofs together to establish that
+   the engine is not coupled to Python internals.
+6. Public-project validation: link a bounded study from `case_studies/ADOPTION_LOG.md` and state its
    exact versions and domain.
 
 ## Show HN
@@ -80,9 +87,10 @@ Body:
 > searches generated domains, shrinks differences and retains replayable evidence. The targets can
 > use different dependency versions, APIs, environments or languages.
 >
-> The repository includes runnable JavaScript→Python, C++→Python and Fortran→Python proofs, plus
-> dependency-version, worktree and public-project studies. The standard install manages isolated
-> reference and candidate Python environments.
+> The repository includes runnable Pydantic 1→2, pandas cross-version and PyTimeTK pandas→Polars
+> studies, plus local-checkout workflows. JavaScript→Python, C++→Python and Fortran→Python proofs
+> demonstrate that the comparison boundary is not coupled to Python internals. The standard
+> install manages isolated reference and candidate Python environments.
 >
 > `pip install parity-check`
 >
