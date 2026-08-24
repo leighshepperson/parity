@@ -15,7 +15,7 @@ body:
     attributes:
       label: Migration
       description: What is changing, and why does behavioural compatibility matter?
-      placeholder: "Example: Pydantic 1 to 2 dependency upgrade"
+      placeholder: "Example: pandas, NumPy and PyArrow upgraded together in a Python project"
     validations:
       required: true
 

@@ -284,6 +284,10 @@ directory and serialized relative to the workspace file. Paths inside the saved 
 beside that file. Fixture rebasing follows the separate config rule above. `report_dir` must remain
 inside the workspace directory.
 
+The lane requirements file is a shared constraint applied to both workers. For a coordinated
+dependency upgrade, declare the before and after dependency sets in the project metadata of the
+reference and candidate checkouts instead; Parity resolves and hash-locks those graphs separately.
+
 Both package fields accept exactly one unconditional, non-wildcard PEP 508 `==` requirement, such
 as `package==1.2.3` or `package[extra]==1.2.3`. Reference and candidate must normalize to the same
 distribution name. The four valid source combinations are released/released, released/local,
