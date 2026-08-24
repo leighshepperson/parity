@@ -1051,11 +1051,11 @@ def test_setup_compiles_locks_runs_tox_and_queries_worker_interpreters(
     assert not (tmp_path / ".gitignore").exists()
 
 
-def test_setup_missing_optional_tool_is_actionable(tmp_path: Path, monkeypatch) -> None:
+def test_setup_missing_managed_environment_tool_is_actionable(tmp_path: Path, monkeypatch) -> None:
     workspace_path = _project(tmp_path)
     monkeypatch.setattr("parity.migration_workspace.importlib.util.find_spec", lambda _name: None)
 
-    with pytest.raises(WorkspaceError, match=r"parity-check\[workspace\]"):
+    with pytest.raises(WorkspaceError, match="reinstall 'parity-check'"):
         setup_workspace(workspace_path)
 
 

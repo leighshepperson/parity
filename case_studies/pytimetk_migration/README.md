@@ -17,7 +17,7 @@ calendar semantics visible without turning this bounded pilot into a rewrite of 
 Passing the gate means all five **declared CPU-core units** passed. It does not mean every PyTimeTK
 API or every option of these functions was migrated.
 
-## Recommended: one managed workspace
+## Recommended: managed reference and candidate environments
 
 The public wrappers in `pytimetk_pilot.py` are intentionally thin. Reference workers call the
 stock public API with `engine="pandas"`; candidate workers call the same public API with
@@ -29,14 +29,13 @@ is exercised in two dependency lanes:
 | release | 2.0.2 | 2.2.3 | 1.21.0 | 16.1.0 | PyTimeTK 2.5.1 lock |
 | current | 2.5.2 | 3.0.5 | 1.43.2 | 25.0.1 | pinned 2026-08-14 |
 
-The managed workspace hides the resulting four worker environments behind one controller
-installation, one repaired candidate checkout and one command. Install the workspace extra in the
-environment from which you run Parity:
+Parity hides the resulting four worker environments behind one controller installation, one
+repaired candidate checkout and one command. Install Parity in the controller environment:
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-python -m pip install "parity-check[workspace]"
+python -m pip install parity-check
 ```
 
 Parity deliberately does not fetch or change project source. Prepare the one declared candidate

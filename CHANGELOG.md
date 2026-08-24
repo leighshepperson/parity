@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.1
+
+### Managed environments by default
+
+- Include the environment-management toolchain in the standard `parity-check` installation, so
+  dependency upgrades and worktree comparisons require no separately discovered extra.
+- Describe the feature as managed reference and candidate environments in introductory guidance;
+  reserve *workspace* for the `parity.workspace.toml` declaration and `.parity/workspace` state.
+- Remove the obsolete `workspace` installation extra rather than retaining a redundant alias.
+
 ## 0.20.0
 
 ### Complete invocation contracts

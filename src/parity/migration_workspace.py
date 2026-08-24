@@ -48,7 +48,6 @@ _PYTHON_VERSION = re.compile(r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)$")
 _ENV_PYTHON = re.compile(r"^env_python\s*=\s*(?P<path>.+?)\s*$", re.MULTILINE)
 _PINNED_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]+\])?==[^\s\\]+")
 _STATE_DIRECTORY = Path(".parity") / "workspace"
-_WORKSPACE_EXTRA = "parity-check[workspace]"
 _SOURCE_REPORT = "source-provenance.json"
 _GIT_OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _SOURCE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -1483,8 +1482,7 @@ def _tool(name: str) -> tuple[str, ...]:
         installed = False
     if not installed:
         raise WorkspaceError(
-            f"migration environment support is not installed ({name} is missing); "
-            f"install {_WORKSPACE_EXTRA!r}"
+            f"the Parity installation is incomplete ({name} is missing); reinstall 'parity-check'"
         )
     # Isolated mode removes the workspace from module discovery, so a local
     # ``uv.py`` or ``tox.py`` cannot shadow the controller's installed tool.

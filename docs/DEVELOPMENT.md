@@ -157,8 +157,8 @@ job moves the Action channel only after publication succeeds. Leave `dry_run` en
 reviewing the validated commit, and disable it only for the intended recovery. The same monotonic
 and lease guards apply; do not create or force-move the alias by hand.
 
-Before a workspace feature is published, build its wheel, install that wheel and the workspace
-dependencies into a clean controller environment, and run the integration smoke from there:
+Before a managed-environment feature is published, build its wheel, install that wheel into a
+clean controller environment, and run the integration smoke from there:
 
 ```bash
 PARITY_SMOKE_DIR="$(mktemp -d)"
@@ -166,7 +166,6 @@ python -m build --wheel --outdir "$PARITY_SMOKE_DIR/dist"
 python -m venv "$PARITY_SMOKE_DIR/controller"
 "$PARITY_SMOKE_DIR/controller/bin/python" -m pip install \
   "$PARITY_SMOKE_DIR"/dist/parity_check-*.whl
-"$PARITY_SMOKE_DIR/controller/bin/python" -m pip install tox tox-uv uv
 "$PARITY_SMOKE_DIR/controller/bin/parity" --version
 "$PARITY_SMOKE_DIR/controller/bin/parity" migration run \
   --workspace path/to/parity.workspace.toml

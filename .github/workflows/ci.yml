@@ -126,14 +126,10 @@ jobs:
             --requirement .github/constraints/minimum-py311.txt
           python -m pip install --no-deps --editable .
           python -m pip check
-      - name: Smoke-test the managed-workspace tool floor
+      - name: Smoke-test the managed-environment tool floor
         env:
           PARITY_WORKSPACE_FLOOR_SMOKE: "1"
         run: |
-          python -m pip install \
-            tox==4.44.0 \
-            tox-uv==1.29.0 \
-            uv==0.9.1
           pytest tests/test_migration_workspace.py \
             -k generated_tox_config_runs_on_declared_tool_floor
       - name: Test without performance or extended campaigns
