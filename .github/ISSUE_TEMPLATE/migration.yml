@@ -15,7 +15,7 @@ body:
     attributes:
       label: Migration
       description: What is changing, and why does behavioural compatibility matter?
-      placeholder: "Example: JavaScript rules engine rewritten in Python"
+      placeholder: "Example: Pydantic 1 to 2 dependency upgrade"
     validations:
       required: true
 

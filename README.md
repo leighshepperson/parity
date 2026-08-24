@@ -26,17 +26,36 @@ Use Parity to verify dependency upgrades, refactors, backend changes, branch/wor
 and cross-language rewrites. Migration authoring and repair remain in the surrounding development
 workflow.
 
-[![Parity finds, minimizes and replays three behavioural differences between a JavaScript rules engine and its Python rewrite](docs/assets/parity-terminal-demo.gif)](case_studies/javascript_python_rules/README.md)
+The common case is Python on both sides: an old and new dependency release, two implementations of
+an API, or separate local checkouts. Parity can run each side in its own environment, so incompatible
+dependency graphs stay isolated. Cross-language targets use the same comparison engine through a
+small executable adapter.
 
-The terminal demo is backed by the maintained JavaScript-to-Python rules-engine proof. Its
-generated recursive programs expose three independent rewrite defects, which Parity minimizes and
-replays. [Propose a public migration case](https://github.com/leighshepperson/parity/issues/new?template=migration.yml)
+[![Parity finds, minimizes and replays four behavioural differences between Pydantic 1 and Pydantic 2](docs/assets/parity-terminal-demo.gif)](case_studies/pydantic_version/README.md)
+
+The terminal demo is backed by the maintained Pydantic 1-to-2 dependency-isolation proof. The same
+Python contract runs in two incompatible target environments and exposes four independently
+minimized historical behaviour changes. [Propose a public migration case](https://github.com/leighshepperson/parity/issues/new?template=migration.yml)
 if you have an old and new target with a shared observable contract.
 
 > `PASSED` means Parity found no difference in the configured domain and search budget. It is
 > executable evidence, not a proof of equivalence.
 
 ## Executable proofs
+
+### Python migrations
+
+| Migration | Shared contract | Maintained result |
+|---|---|---|
+| [Pydantic 1 → 2](case_studies/pydantic_version/README.md) | The same Python callable in isolated, conflicting dependency environments | Finds, minimizes and replays four historical behaviour changes |
+| [pandas 2.3 → 3.0](case_studies/pandas_version_groupby/README.md) | An unchanged categorical group-by callable | Captures the changed default as one reproducible shape difference |
+| [Polars 0.20 → 1.x](case_studies/polars_version_dynamic/README.md) | An unchanged dynamic-window callable | Captures intentional version drift as one reproducible shape difference |
+| [PyTimeTK pandas → Polars](case_studies/pytimetk_migration/README.md) | Five public APIs across released and current dependency lanes | Stock candidate fails all five covered units; repaired candidate passes all 15 campaigns in both lanes |
+
+These patterns also cover ordinary Python refactors and branch/worktree comparisons by installing
+the reference and candidate checkout separately.
+
+### Cross-language proofs of generality
 
 | Migration | Shared contract | Maintained result |
 |---|---|---|
@@ -59,6 +78,15 @@ parity check
 
 `parity init` creates a runnable, JSON-only `parity.toml` and `parity_example.py`. Edit the two
 example functions to call the old and new behaviour, then rerun `parity check`.
+
+For a released Python dependency upgrade, scaffold isolated targets directly:
+
+```bash
+parity migration init \
+  --reference-package 'your-library==1.2.3' \
+  --candidate-package 'your-library==2.0.0' \
+  --scaffold
+```
 
 The standard installation can also create isolated reference and candidate environments for
 dependency upgrades and worktree comparisons. Install `parity-check[pandas]` or
