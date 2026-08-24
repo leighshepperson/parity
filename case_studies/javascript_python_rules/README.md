@@ -1,10 +1,9 @@
 # Recursive JavaScript to Python rules-engine migration
 
-This synthetic case study proves that Parity is not a dataframe migration tool. A legacy
-JavaScript rules engine and its Python rewrite receive only ordinary JSON values: a recursive
-expression AST, a variable context and a keyword threshold. They return a nested JSON decision,
-score, labels and execution trace or raise the same domain exception. No pandas, Polars, dataframe
-adapter, Arrow input or tabular output participates in the behavioural contract.
+This synthetic case study exercises a recursive-JSON cross-language contract. A legacy JavaScript
+rules engine and its Python rewrite receive a recursive expression AST, a variable context and a
+keyword threshold. They return a nested JSON decision, score, labels and execution trace or raise
+the same domain exception.
 
 The correct Python port preserves the legacy language's rules:
 
@@ -37,7 +36,7 @@ Expected output ends with:
 ```text
 PASS correct Python port agrees with JavaScript (... generated programs)
 PASS naive Python port produced three distinct minimized findings
-PASS every minimized invocation is recursive JSON with no tabular inputs
+PASS every minimized invocation is recursive JSON throughout
 PASS correct port passes all three retained regressions
 PASS all three findings replay from an unrelated working directory
 ```
@@ -47,7 +46,7 @@ call, and the bridge invokes the project-owned `legacy_rules.js` executable boun
 knows nothing about Parity. Compilation, package installation and runtime provisioning remain the
 project or CI's responsibility.
 
-This is deliberately orthogonal to the pandas-to-Polars examples. It exercises recursive
-project-owned generation, positional and keyword JSON arguments, nested JSON returns, Return/Raise
-semantics, cross-language execution, multi-finding discovery, shrinking, artifact persistence and
-exact replay through the same engine.
+The proof exercises recursive project-owned generation, positional and keyword JSON arguments,
+nested JSON returns, Return/Raise semantics, cross-language execution, multi-finding discovery,
+shrinking, artifact persistence and exact replay through the same engine as the other maintained
+campaigns.

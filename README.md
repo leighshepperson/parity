@@ -7,17 +7,18 @@ Parity runs a reference and a candidate on the same complete calls, compares wha
 raise, searches for differences, shrinks failing invocations and saves replayable evidence.
 
 ```text
-canonical input ──┬──> reference ──┐
-                  └──> candidate ──┴──> compare ──> shrink ──> replay
+canonical call ──┬──> reference ──┐
+                 └──> candidate ──┴──> compare ──> shrink ──> replay
 ```
 
-Parity's unit of work is an explicit `callable(*args, **kwargs)` contract, not a dataframe. Its
-arguments can be ordinary JSON, frames, variable-length sequences or project-generated structures
-such as recursive programs and event streams. The two sides can use different dependency versions,
-APIs, architectures, Python environments or languages; they only need the same observable contract.
+Parity's unit of work is an explicit `callable(*args, **kwargs)` contract. A complete call can
+combine ordinary JSON, frames, variable-length sequences or project-generated structures such as
+recursive programs and event streams. The two sides can use different dependency versions, APIs,
+architectures, Python environments or languages; they only need the same observable contract.
 
-Use Parity for dependency upgrades, refactors, backend changes, branch/worktree comparisons and
-cross-language rewrites. It verifies a migration; it does not write or repair one.
+Use Parity to verify dependency upgrades, refactors, backend changes, branch/worktree comparisons
+and cross-language rewrites. Migration authoring and repair remain in the surrounding development
+workflow.
 
 > `PASSED` means Parity found no difference in the configured domain and search budget. It is
 > executable evidence, not a proof of equivalence.
@@ -35,9 +36,9 @@ parity check
 `parity init` creates a runnable, JSON-only `parity.toml` and `parity_example.py`. Edit the two
 example functions to call the old and new behaviour, then rerun `parity check`.
 
-Dataframes are one optional contract shape. Add `parity-check[pandas]` or `parity-check[polars]`
-when targets in the controller environment use those adapters; neither library is installed by the
-base package. Managed package-upgrade environments use `parity-check[workspace]`.
+Install `parity-check[pandas]` or `parity-check[polars]` when targets in the controller environment
+use those adapters. The base package handles JSON and Arrow calls; managed package-upgrade
+environments use `parity-check[workspace]`.
 
 ## Put it around real code
 
@@ -87,7 +88,7 @@ project-owned wrappers around the public behaviour being migrated.
 Repeat `[[cases]]` for independent behaviours. Inside one case, repeat
 `[[cases.invocation.args]]` or add `[cases.invocation.kwargs.<name>]` for many inputs. Use
 `kind = "frame"` when table structure is part of the contract, `kind = "frames"` for one
-variable-length dataframe sequence, or a project-owned generator for dependent structures such as
+variable-length frame sequence, or a project-owned generator for dependent structures such as
 ASTs and stateful event streams. Zero-argument calls, expanded `*frames` and relationally generated
 joins are supported too. See [invocation configuration](docs/CONFIG_REFERENCE.md#invocation).
 
@@ -199,9 +200,9 @@ installation stay outside the behavioural contract. Start with the
 [language-neutral protocol](docs/TARGET_PROTOCOL.md) directly only when Python is unsuitable.
 
 The maintained [JavaScript-to-Python rules-engine proof](case_studies/javascript_python_rules/README.md)
-uses recursive JSON programs, nested returns and domain exceptions—without pandas, Polars, Arrow
-inputs or tabular outputs. It verifies a correct port, discovers and minimizes three independent
-defects in a naive port, retains them as regressions and replays the saved evidence.
+uses recursive JSON programs, nested returns and domain exceptions. It verifies a correct port,
+discovers and minimizes three independent defects in a naive port, retains them as regressions and
+replays the saved evidence.
 
 ## Findings and replay
 

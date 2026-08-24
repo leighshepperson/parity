@@ -134,8 +134,8 @@ value is exactly one recursive node:
 
 - `{"kind":"arrow","path":"..."}` binds one Arrow IPC file;
 - `{"kind":"json","value":...}` carries one portable JSON-like value; or
-- `{"kind":"frames","container":"list"|"tuple","items":[...]}` carries one dataframe
-  sequence. Its items are Arrow nodes.
+- `{"kind":"frames","container":"list"|"tuple","items":[...]}` carries one frame sequence.
+  Its items are Arrow nodes.
 
 The adapter reconstructs those nodes and invokes its application boundary with exactly
 `execute(*args, **kwargs)`. Zero arguments, many arguments, list/tuple-valued frame arguments and

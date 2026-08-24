@@ -2,10 +2,10 @@
 
 ## System boundary
 
-Parity is a local behavioural compatibility engine around user-owned computations. It is not a
-dataframe execution engine, migration author, application runtime or UI layer. The controller owns
-generation, comparison, findings and artifacts. A versioned process protocol keeps target
-environments and languages independent of the controller implementation.
+Parity is a local behavioural compatibility engine around user-owned computations. The controller
+owns generation, comparison, findings and artifacts; the surrounding project owns migration
+authoring, target provisioning, application execution and presentation. A versioned process
+protocol keeps target environments and languages independent of the controller implementation.
 
 ```text
 parity.toml / Python API
@@ -56,7 +56,7 @@ ordinary `parity check` uses the case configuration and suite-result contracts d
 ### Canonical contracts and adapters
 
 Every input is represented by one canonical `Invocation`: an ordered positional tuple and keyword
-mapping containing Arrow tables, portable JSON-like values and homogeneous dataframe sequences.
+mapping containing Arrow tables, portable JSON-like values and homogeneous frame sequences.
 Built-in adapters materialize every Arrow leaf as pandas, Polars or Arrow at the callable boundary,
 then invoke both sides with exactly `callable(*args, **kwargs)`. Small project wrappers map that
 shared call into unrelated APIs or domain objects. A per-target output canonicalizer can map a
@@ -84,7 +84,7 @@ random search. Hypothesis then explores and shrinks the remaining domain. `uniqu
 `unique_together` constraints are enforced in strategies. Frame-local ordering and row-comparison
 constraints are constructed as part of the strategy and revalidated after relational invocation
 rewrites, so search and shrinking remain inside the declared valid domain. Unrelated frames, JSON
-choices, dataframe sequences and expanded varargs are composed into one jointly shrinking call.
+choices, frame sequences and expanded varargs are composed into one jointly shrinking call.
 Generated tables preserve types even when empty.
 
 Fixture-only cases infer a portable schema. Explicit schemas are preferable for high-value contracts
@@ -230,8 +230,7 @@ Reports are separate projections that omit frame and value data. Artifact writes
 directory and final rename so interrupted runs do not look complete.
 
 Manifest contract 3 hash-binds every artifact file. Replay contract 3 stores the complete recursive
-invocation, including zero-frame calls, JSON arguments, many fixed call slots and dataframe
-sequences.
+invocation, including zero-frame calls, JSON arguments, many fixed call slots and frame sequences.
 Every automatic replay binds target runtime fingerprints and the data-safe effective-configuration
 hash. Replay preflights both target sessions and blocks both implementations on drift or incomplete
 provenance. Evidence without those bindings remains inspectable but is not executable through

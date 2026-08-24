@@ -1,4 +1,4 @@
-"""Parity: semantic verification for dataframe migrations."""
+"""Parity: behavioural compatibility verification for software migrations."""
 
 from parity._version import __version__
 from parity.api import check, verify

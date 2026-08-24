@@ -6,7 +6,7 @@
 
 - Replace the single-frame/input-bundle/static-argument model with one explicit shared
   `callable(*args, **kwargs)` invocation. Cases can exercise zero or many positional and keyword
-  frames, JSON values, list/tuple dataframe sequences, expanded `*frames`, and jointly generated
+  frames, JSON values, list/tuple frame sequences, expanded `*frames`, and jointly generated
   relational joins.
 - Require custom generators and the live Python API to use `parity.Invocation`, preserving complete
   call shape through generation, shrinking, isolation, command adapters, artifacts, replay and
@@ -20,10 +20,10 @@
   sanitized JSON argument would make the saved call inexact.
 - Add a maintained JSON-only JavaScript-to-Python rules-engine proof. It verifies a correct port,
   discovers and shrinks eager-evaluation, first-match and threshold defects in a naive port, retains
-  those behaviours as regressions and replays every finding without any tabular input or output.
+  those behaviours as regressions and replays every finding from its recursive-JSON contract.
 - Reframe the README and zero-option starter around general complete-call compatibility. The
-  generated project now uses positional and keyword JSON values with a nested JSON result; pandas,
-  Polars and dataframe migrations remain supported specialisations rather than the default story.
+  generated project now uses positional and keyword JSON values with a nested JSON result, while
+  the adapter extras and focused case studies cover pandas, Polars and Arrow-backed frame calls.
 - Start coverage before pytest auto-loads Parity's own plugin and ratchet the accurately measured
   branch-coverage gate from 68% to 75%.
 

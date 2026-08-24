@@ -4,11 +4,11 @@ This guide takes a real migration from one representative example to a repeatabl
 For every TOML field and validation rule, use the
 [configuration reference](CONFIG_REFERENCE.md).
 
-The running example uses a dataframe backend change to make ordering, dtype and null policies
-concrete; those are optional specialisations. `parity init` starts with ordinary positional and
-keyword JSON instead, and the maintained
+The running example follows an orders backend change, making ordering, dtype and null policies
+concrete. The same workflow applies to complete JSON calls: `parity init` creates a positional and
+keyword JSON starter, and the maintained
 [JavaScript-to-Python rules-engine study](../case_studies/javascript_python_rules/README.md) is a
-fully executable non-tabular proof.
+fully executable recursive-JSON campaign.
 
 ## 1. Choose the behavioural contract
 
@@ -390,14 +390,13 @@ right = "end_date"
 Schemas support bounds, nullability, enums, examples, text constraints, time zones, uniqueness,
 frame ordering and per-row comparisons. Deterministic boundary inputs run before generated search.
 
-An invocation is not limited to one case or one frame. Repeat `[[cases.invocation.args]]` for as
-many fixed positional arguments as the callable needs, use `[cases.invocation.kwargs.<name>]` for
-keyword frames or JSON modes, and add foreign-key, overlap, row-count or cardinality relationships
-between named frames. Parity generates the complete call jointly and sends exactly the same call to
-both sides.
+An invocation can contain as many fixed positional arguments as the callable needs. Repeat
+`[[cases.invocation.args]]`, use `[cases.invocation.kwargs.<name>]` for keyword frames or JSON
+modes, and add foreign-key, overlap, row-count or cardinality relationships between named frames.
+Parity generates the complete call jointly and sends exactly the same call to both sides.
 
-For one list of dataframes, declare an argument with `kind = "frames"`. For a reduce that accepts
-`*frames`, use a variable-length sequence expanded as varargs:
+For one list-valued frame argument, use `kind = "frames"`. For a reduce that accepts `*frames`, use
+a variable-length sequence expanded as varargs:
 
 ```toml
 [cases.invocation.varargs]
