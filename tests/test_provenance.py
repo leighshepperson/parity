@@ -40,7 +40,7 @@ def _runtime(
 
 
 def test_public_version_uses_single_source() -> None:
-    assert __version__ == source_version == "0.20.1"
+    assert __version__ == source_version == importlib.metadata.version("parity-check")
 
 
 def test_distribution_names_are_normalized_and_bounded() -> None:
