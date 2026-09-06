@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from parity import api as parity_api
-from parity.models import SuiteResult
+from parity.models import CallableSpec, SuiteResult
 
 
 def _failure_message(result: SuiteResult) -> str:
@@ -64,6 +64,13 @@ class ParityAssertions:
 
         result = parity_api.verify(reference, candidate, **kwargs)
         return self.assert_passed(result)
+
+    def compare(
+        self, reference: str | CallableSpec, candidate: str | CallableSpec, **kwargs: Any
+    ) -> SuiteResult:
+        """Compare existing calls in isolated processes and assert success."""
+
+        return self.assert_passed(parity_api.compare(reference, candidate, **kwargs))
 
     @staticmethod
     def assert_passed(result: SuiteResult) -> SuiteResult:

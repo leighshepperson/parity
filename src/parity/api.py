@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from parity.config import load_config
 from parity.invocation import Invocation
 from parity.models import (
     AdapterName,
+    CallableSpec,
     CaseConfig,
     ComparisonPolicy,
     GenerationConfig,
@@ -95,4 +97,46 @@ def verify(
     )
 
 
-__all__ = ["CaseConfig", "check", "verify"]
+def compare(
+    reference: str | CallableSpec,
+    candidate: str | CallableSpec,
+    *,
+    calls: str | Path,
+    comparison: ComparisonPolicy | None = None,
+    artifact_dir: str | Path = ".parity",
+    max_findings: int = 10,
+    timeout_seconds: float = 30.0,
+) -> SuiteResult:
+    """Compare a JSONL file of existing calls in isolated target processes.
+
+    Targets are ``module:callable`` strings, or CallableSpec objects for separate
+    interpreters, checkouts and other endpoint settings. Calls are checked in file
+    order, with repeat observations and exact replayable findings. No inputs are
+    generated and no performance benchmark is run. Numbers compare exactly unless
+    an explicit policy supplies tolerances. A pass covers only the supplied calls.
+    """
+
+    from parity.corpus import load_calls
+    from parity.engine import run_corpus
+
+    def endpoint(value: str | CallableSpec) -> CallableSpec:
+        spec = CallableSpec(target=value) if isinstance(value, str) else value.model_copy(deep=True)
+        spec.workdir = (spec.workdir or Path.cwd()).resolve()
+        if spec.python is not None:
+            # Preserve a venv's symlink identity, just as configured campaigns do.
+            spec.python = Path(os.path.abspath(spec.python))
+        return spec
+
+    corpus = load_calls(calls)
+    return run_corpus(
+        endpoint(reference),
+        endpoint(candidate),
+        corpus,
+        comparison=comparison or ComparisonPolicy(rtol=0.0, atol=0.0),
+        artifact_dir=Path(artifact_dir).resolve(),
+        max_findings=max_findings,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+__all__ = ["CaseConfig", "check", "compare", "verify"]

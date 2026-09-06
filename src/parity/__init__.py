@@ -1,7 +1,7 @@
 """Parity: behavioural compatibility verification for software migrations."""
 
 from parity._version import __version__
-from parity.api import check, verify
+from parity.api import check, compare, verify
 from parity.compatibility import (
     BudgetCaptureResult,
     approve_compatibility_finding,
@@ -104,6 +104,7 @@ __all__ = [
     "capture_compatibility_budget",
     "check",
     "check_migration",
+    "compare",
     "distill_contract",
     "load_compatibility_budget",
     "retire_contract",

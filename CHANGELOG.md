@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.21.0
+
+### Direct comparison of existing calls
+
+- Add `parity compare old:callable new:callable --calls calls.jsonl`, the matching
+  `parity.compare` Python API and `parity.compare` pytest fixture method. Start with
+  actual example calls without creating a configuration, schema, generator or workspace.
+- Preserve each complete call and its original line number, including correlated arguments,
+  different call shapes and zero-argument calls. Validate the whole corpus before executing
+  targets; reject malformed, empty, ambiguous and oversized inputs with value-free diagnostics.
+- Reuse isolated workers, timeouts, stability checks, exception and mutation comparisons,
+  multiple findings, runtime provenance, JSON/JUnit reports and exact replay. Bind the corpus
+  bytes into the evidence fingerprint. Findings replay without the original calls file.
+- Default direct comparisons to exact numbers and no performance measurements. This command
+  checks supplied calls only; generated search and shrinking remain available through `check`
+  and `verify`. Existing configuration and artifact formats are unchanged.
+- Rebuild introductory documentation around a runnable standard-library example and add a
+  Pydantic order-validation study: one passing control, four real dependency changes from five
+  supplied calls, and verified replay of every finding. Record the usefulness assessment and
+  the boundary between engineering evidence and unproven external adoption.
+
 ## 0.20.1
 
 ### Managed environments by default

@@ -2,6 +2,17 @@
 
 Installing Parity registers the `parity` plugin through pytest's entry-point discovery.
 
+## Existing calls without configuration
+
+```python
+def test_upgrade(parity):
+    parity.compare("old_orders:quote", "new_orders:quote", calls="tests/orders.jsonl")
+```
+
+The targets run in separate processes. This checks every supplied call unless an
+execution error or finding limit stops the run. No random inputs or benchmarks are
+added. All keyword arguments are forwarded to [`parity.compare`](DIRECT_COMPARISON.md).
+
 ## Configured suite assertion
 
 ```python
