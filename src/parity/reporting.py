@@ -711,6 +711,10 @@ def render_terminal(
                 if failure.finding_signature is not None
                 else "execution error"
             )
+            if failure.source.startswith("calls:line:"):
+                line_number = failure.source.removeprefix("calls:line:")
+                if line_number.isascii() and line_number.isdecimal():
+                    label = f"calls line {line_number}: {label}"
             for mismatch in _mismatch_summaries(failure):
                 lines.append(f"             {label}: {mismatch['summary']} at {mismatch['path']}")
         for stability in _stability_summaries(case):

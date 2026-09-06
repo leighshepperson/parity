@@ -548,6 +548,87 @@ def inspect_fixture(
         console.print_json(rendered)
 
 
+@app.command("compare")
+def compare_command(
+    reference: Annotated[str, typer.Argument(help="Old module:callable")],
+    candidate: Annotated[str, typer.Argument(help="New module:callable")],
+    calls: Annotated[Path, typer.Option("--calls", help="JSONL file of complete calls")],
+    reference_python: Annotated[
+        Path | None, typer.Option("--reference-python", help="Old environment's Python")
+    ] = None,
+    candidate_python: Annotated[
+        Path | None, typer.Option("--candidate-python", help="New environment's Python")
+    ] = None,
+    reference_workdir: Annotated[
+        Path | None, typer.Option("--reference-workdir", help="Old checkout or module directory")
+    ] = None,
+    candidate_workdir: Annotated[
+        Path | None, typer.Option("--candidate-workdir", help="New checkout or module directory")
+    ] = None,
+    record_distribution: Annotated[
+        list[str] | None,
+        typer.Option("--record-distribution", help="Record a target package version; repeatable"),
+    ] = None,
+    artifact_dir: Annotated[Path, typer.Option("--artifact-dir")] = Path(".parity"),
+    max_findings: Annotated[int, typer.Option("--max-findings", min=1, max=20)] = 10,
+    timeout: Annotated[
+        float, typer.Option("--timeout", min=0.001, max=3600, help="Seconds per target operation")
+    ] = 30.0,
+    rtol: Annotated[float, typer.Option("--rtol", min=0, help="Relative numeric tolerance")] = 0.0,
+    atol: Annotated[float, typer.Option("--atol", min=0, help="Absolute numeric tolerance")] = 0.0,
+    json_output: Annotated[Path | None, typer.Option("--json")] = None,
+    junit_output: Annotated[Path | None, typer.Option("--junit")] = None,
+) -> None:
+    """Compare existing calls directly; no configuration file required."""
+
+    from parity.api import compare
+    from parity.corpus import CorpusError
+    from parity.models import CallableSpec, ComparisonPolicy
+    from parity.reporting import render_terminal, write_report
+
+    try:
+        result = compare(
+            CallableSpec(
+                target=reference,
+                python=reference_python,
+                workdir=reference_workdir,
+                record_distributions=record_distribution or [],
+            ),
+            CallableSpec(
+                target=candidate,
+                python=candidate_python,
+                workdir=candidate_workdir,
+                record_distributions=record_distribution or [],
+            ),
+            calls=calls,
+            comparison=ComparisonPolicy(rtol=rtol, atol=atol),
+            artifact_dir=artifact_dir,
+            max_findings=max_findings,
+            timeout_seconds=timeout,
+        )
+    except CorpusError as error:
+        _fail(str(error))
+    except (OSError, ValueError, TypeError) as error:
+        _fail(f"comparison could not run ({type(error).__name__}); check targets and options")
+
+    written: list[Path] = []
+    try:
+        if json_output is not None:
+            written.append(write_report(result, "json", json_output))
+        if junit_output is not None:
+            written.append(write_report(result, "junit", junit_output))
+    except (OSError, ValueError) as error:
+        _fail(f"comparison report could not be written ({type(error).__name__})")
+    render_terminal(result, console=console)
+    typer.echo("Scope: supplied calls only; no generated inputs or performance checks.")
+    for path in written:
+        _print_path_status("wrote", _written_path(path))
+    if result.status is Status.ERROR:
+        raise typer.Exit(2)
+    if result.status is Status.FAILED:
+        raise typer.Exit(1)
+
+
 @app.command()
 def check(
     config_path: Annotated[Path, typer.Option("--config", "-c", help="Path to parity.toml")] = Path(

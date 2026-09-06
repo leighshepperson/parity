@@ -26,6 +26,7 @@ from hypothesis.strategies import SearchStrategy
 from parity._version import __version__
 from parity.artifacts import ArtifactStore
 from parity.comparison import compare_observations, mismatch_signature
+from parity.corpus import CallCorpus
 from parity.custom_generation import CustomGenerator, load_custom_generator
 from parity.diagnostics import diagnose
 from parity.execution import (
@@ -904,13 +905,16 @@ def _configured_case(
     expected_provenance: CaseProvenance | None = None,
     config_sha256: str | None = None,
     compatibility_findings: Sequence[CompatibilityFinding] | None = None,
+    prepared_invocation: ResolvedInvocation | None = None,
 ) -> CaseResult:
     configured_started = time.perf_counter()
     custom_generator: CustomGenerator | None = None
-    resolved_invocation: ResolvedInvocation | None = None
+    resolved_invocation = prepared_invocation
     if exact_only:
         if exact_input is None:
             raise ReplayError("replay requires an exact invocation")
+    elif prepared_invocation is not None:
+        pass
     elif case.generation.generator is not None:
         custom_generator = load_custom_generator(
             case.generation.generator,
@@ -1221,6 +1225,60 @@ def run_suite(
     return SuiteResult(
         status=_suite_status(cases),
         cases=cases,
+        elapsed_seconds=time.perf_counter() - started,
+        parity_version=__version__,
+        provenance=SuiteProvenance(
+            orchestrator=collect_runtime_provenance(),
+            config_sha256=config_sha256,
+        ),
+    )
+
+
+def run_corpus(
+    reference: CallableSpec,
+    candidate: CallableSpec,
+    corpus: CallCorpus,
+    *,
+    comparison: ComparisonPolicy,
+    artifact_dir: Path,
+    max_findings: int,
+    timeout_seconds: float,
+) -> SuiteResult:
+    """Run existing calls through the same isolated engine and replay protocol.
+
+    Replay uses the saved exact invocation, so neither the corpus nor a generated
+    configuration file is needed after a finding has been retained.
+    """
+
+    started = time.perf_counter()
+    base = Path.cwd()
+    case = CaseConfig(
+        name="compare",
+        reference=reference,
+        candidate=candidate,
+        invocation=InvocationConfig(),
+        comparison=comparison,
+        generation=GenerationConfig(search=False, max_findings=max_findings),
+        performance=PerformanceConfig(enabled=False),
+        timeout_seconds=timeout_seconds,
+    )
+    config_sha256 = effective_config_sha256(
+        {
+            "version": 2,
+            "cases": [case.model_dump(mode="python")],
+            "calls_sha256": corpus.sha256,
+        },
+        base_directory=base,
+    )
+    result = _configured_case(
+        case,
+        ArtifactStore(artifact_dir, invocation_directory=base),
+        config_sha256=config_sha256,
+        prepared_invocation=corpus.invocation,
+    )
+    return SuiteResult(
+        status=result.status,
+        cases=[result],
         elapsed_seconds=time.perf_counter() - started,
         parity_version=__version__,
         provenance=SuiteProvenance(

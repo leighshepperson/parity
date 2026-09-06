@@ -4,6 +4,12 @@ This guide takes a real migration from one representative example to a repeatabl
 For every TOML field and validation rule, use the
 [configuration reference](CONFIG_REFERENCE.md).
 
+If you already have JSON-compatible example requests, start with
+`parity compare old:callable new:callable --calls calls.jsonl`. The
+[direct comparison guide](DIRECT_COMPARISON.md) covers the file format, separate
+environments, existing checkouts, pytest and replay. Use the configured workflow
+below when you need generated inputs, dataframe schemas or managed dependencies.
+
 The running example follows an orders backend change, making ordering, dtype and null policies
 concrete. The same workflow applies to complete JSON calls: `parity init` creates a positional and
 keyword JSON starter, and the maintained
